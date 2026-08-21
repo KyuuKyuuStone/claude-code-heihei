@@ -1,5 +1,9 @@
 # Claude Code Heihei
 
+<p align="center">
+  <img src="docs/images/logo-horizontal.png" alt="Claude Code Heihei" width="480">
+</p>
+
 <div align="center">
 
 [![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
