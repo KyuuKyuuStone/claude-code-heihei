@@ -409,7 +409,7 @@ export const jp: Record<TranslationKey, string> = {
   'settings.activity.title': 'トークン使用量',
   'settings.activity.profileTitle': 'プロフィール',
   'settings.activity.profilePrivacy': 'ローカルのみ',
-  'settings.activity.defaultHandle': 'github.com/cc-heihei/cc-heihei',
+  'settings.activity.defaultHandle': 'github.com/KyuuKyuuStone/claude-code-heihei',
   'settings.activity.editProfile': 'プロフィールを編集',
   'settings.activity.displayName': '表示名',
   'settings.activity.subtitle': '2 行目',

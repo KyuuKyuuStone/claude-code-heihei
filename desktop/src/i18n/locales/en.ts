@@ -407,7 +407,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'settings.activity.title': 'Token usage',
   'settings.activity.profileTitle': 'Profile',
   'settings.activity.profilePrivacy': 'Local only',
-  'settings.activity.defaultHandle': 'github.com/cc-heihei/cc-heihei',
+  'settings.activity.defaultHandle': 'github.com/KyuuKyuuStone/claude-code-heihei',
   'settings.activity.editProfile': 'Edit profile',
   'settings.activity.displayName': 'Display name',
   'settings.activity.subtitle': 'Second line',

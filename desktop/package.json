@@ -62,13 +62,13 @@
       ],
       "icon": "src-tauri/icons",
       "category": "Development",
-      "maintainer": "cc-heihei <support@cc-heihei.ai>"
+      "maintainer": "KyuuKyuuStone <511829667@qq.com>"
     },
     "publish": [
       {
         "provider": "github",
-        "owner": "cc-heihei",
-        "repo": "cc-heihei"
+        "owner": "KyuuKyuuStone",
+        "repo": "claude-code-heihei"
       }
     ]
   },

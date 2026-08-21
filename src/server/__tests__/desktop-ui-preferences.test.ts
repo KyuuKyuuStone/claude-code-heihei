@@ -69,7 +69,7 @@ describe('DesktopUiPreferencesService', () => {
       schemaVersion: 4,
       profile: {
         displayName: 'cc-heihei',
-        subtitle: 'github.com/cc-heihei/cc-heihei',
+        subtitle: 'github.com/KyuuKyuuStone/claude-code-heihei',
         avatarFile: null,
         avatarUpdatedAt: null,
       },
@@ -114,7 +114,7 @@ describe('DesktopUiPreferencesService', () => {
       futureField: { keep: true },
       profile: {
         displayName: 'cc-heihei',
-        subtitle: 'github.com/cc-heihei/cc-heihei',
+        subtitle: 'github.com/KyuuKyuuStone/claude-code-heihei',
         avatarFile: null,
         avatarUpdatedAt: null,
       },
@@ -132,7 +132,7 @@ describe('DesktopUiPreferencesService', () => {
       futureField: { keep: true },
       profile: {
         displayName: 'cc-heihei',
-        subtitle: 'github.com/cc-heihei/cc-heihei',
+        subtitle: 'github.com/KyuuKyuuStone/claude-code-heihei',
         avatarFile: null,
         avatarUpdatedAt: null,
       },
@@ -484,7 +484,7 @@ describe('desktop UI preferences API', () => {
         schemaVersion: 4,
         profile: {
           displayName: 'cc-heihei',
-          subtitle: 'github.com/cc-heihei/cc-heihei',
+          subtitle: 'github.com/KyuuKyuuStone/claude-code-heihei',
           avatarFile: null,
           avatarUpdatedAt: null,
         },
@@ -510,7 +510,7 @@ describe('desktop UI preferences API', () => {
         schemaVersion: 4,
         profile: {
           displayName: 'cc-heihei',
-          subtitle: 'github.com/cc-heihei/cc-heihei',
+          subtitle: 'github.com/KyuuKyuuStone/claude-code-heihei',
           avatarFile: null,
           avatarUpdatedAt: null,
         },

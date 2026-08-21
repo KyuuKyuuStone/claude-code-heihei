@@ -5,8 +5,8 @@ import { rememberLocale } from '../lib/locale'
 import { useTheme } from '../lib/theme'
 import SearchDialog from './SearchDialog'
 
-export const GITHUB_URL = 'https://github.com/cc-heihei/cc-heihei'
-export const DOWNLOAD_URL = 'https://github.com/cc-heihei/cc-heihei/releases/latest'
+export const GITHUB_URL = 'https://github.com/KyuuKyuuStone/claude-code-heihei'
+export const DOWNLOAD_URL = 'https://github.com/KyuuKyuuStone/claude-code-heihei/releases/latest'
 
 const copy = {
   zh: {

@@ -408,7 +408,7 @@ export const zh: Record<TranslationKey, string> = {
   'settings.activity.title': 'Token 用量',
   'settings.activity.profileTitle': '个人资料',
   'settings.activity.profilePrivacy': '仅本地',
-  'settings.activity.defaultHandle': 'github.com/cc-heihei/cc-heihei',
+  'settings.activity.defaultHandle': 'github.com/KyuuKyuuStone/claude-code-heihei',
   'settings.activity.editProfile': '编辑个人资料',
   'settings.activity.displayName': '显示名称',
   'settings.activity.subtitle': '第二行',

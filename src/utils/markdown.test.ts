@@ -106,9 +106,9 @@ describe('applyMarkdown bare-URL hyperlinks', () => {
   })
 
   test('still linkifies owner/repo#123 references', () => {
-    const rendered = applyMarkdown('见 cc-heihei/cc-heihei#1145 的讨论', 'dark')
+    const rendered = applyMarkdown('见 KyuuKyuuStone/claude-code-heihei#1145 的讨论', 'dark')
     expect(hyperlinkTargets(rendered)).toEqual([
-      'https://github.com/cc-heihei/cc-heihei/issues/1145',
+      'https://github.com/KyuuKyuuStone/claude-code-heihei/issues/1145',
     ])
   })
 })

@@ -129,11 +129,11 @@ describe('splitTextByFilePaths', () => {
 describe('matchGitHubRef', () => {
   it('reads the owner/repo#123 form the prompt asks for', () => {
     // src/constants/prompts.ts:438 — "so they render as clickable links".
-    expect(matchGitHubRef('cc-heihei/cc-heihei#1146')).toMatchObject({
+    expect(matchGitHubRef('KyuuKyuuStone/claude-code-heihei#1146')).toMatchObject({
       owner: 'cc-heihei',
       repo: 'cc-heihei',
       number: 1146,
-      url: 'https://github.com/cc-heihei/cc-heihei/issues/1146',
+      url: 'https://github.com/KyuuKyuuStone/claude-code-heihei/issues/1146',
     })
   })
 
@@ -148,8 +148,8 @@ describe('matchGitHubRef', () => {
   })
 
   it('is picked over the path matcher when splitting prose', () => {
-    const segments = splitTextByFilePaths('见 cc-heihei/cc-heihei#1146 和 src/app.ts:4')
-    expect(segments.filter((s) => s.type === 'github').map((s) => s.value)).toEqual(['cc-heihei/cc-heihei#1146'])
+    const segments = splitTextByFilePaths('见 KyuuKyuuStone/claude-code-heihei#1146 和 src/app.ts:4')
+    expect(segments.filter((s) => s.type === 'github').map((s) => s.value)).toEqual(['KyuuKyuuStone/claude-code-heihei#1146'])
     expect(segments.filter((s) => s.type === 'path').map((s) => s.value)).toEqual(['src/app.ts:4'])
   })
 })

@@ -6,7 +6,7 @@ const preferences = {
   schemaVersion: 3,
   profile: {
     displayName: 'cc-heihei',
-    subtitle: 'github.com/cc-heihei/cc-heihei',
+    subtitle: 'github.com/KyuuKyuuStone/claude-code-heihei',
     avatarFile: null,
     avatarUpdatedAt: null,
   },

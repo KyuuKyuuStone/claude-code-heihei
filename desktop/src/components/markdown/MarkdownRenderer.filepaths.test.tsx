@@ -98,7 +98,7 @@ describe('MarkdownRenderer file references', () => {
   })
 
   it('never re-links a path that is already inside a URL', () => {
-    const container = renderMarkdown('见 https://github.com/cc-heihei/cc-heihei/blob/main/src/app.ts')
+    const container = renderMarkdown('见 https://github.com/KyuuKyuuStone/claude-code-heihei/blob/main/src/app.ts')
     expect(fileLinks(container)).toHaveLength(0)
     expect(container.querySelector('a[href^="https://"]')).not.toBeNull()
   })
@@ -122,10 +122,10 @@ describe('MarkdownRenderer file references', () => {
   it('links owner/repo#123 to GitHub', () => {
     // The second half of the prompt contract (prompts.ts:438), which also had no
     // implementation. Unlike a file link this is a real URL, so it keeps its href.
-    const container = renderMarkdown('见 cc-heihei/cc-heihei#1146')
+    const container = renderMarkdown('见 KyuuKyuuStone/claude-code-heihei#1146')
     const link = container.querySelector<HTMLAnchorElement>('a[href^="https://github.com"]')
-    expect(link?.getAttribute('href')).toBe('https://github.com/cc-heihei/cc-heihei/issues/1146')
-    expect(link?.textContent).toBe('cc-heihei/cc-heihei#1146')
+    expect(link?.getAttribute('href')).toBe('https://github.com/KyuuKyuuStone/claude-code-heihei/issues/1146')
+    expect(link?.textContent).toBe('KyuuKyuuStone/claude-code-heihei#1146')
     expect(fileLinks(container)).toHaveLength(0)
   })
 

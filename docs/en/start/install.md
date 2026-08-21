@@ -11,7 +11,7 @@ Install and go. You don't need Node.js, Python, or Claude Code — the CLI engin
 
 ## Pick the right package
 
-Everything lives on [GitHub Releases](https://github.com/cc-heihei/cc-heihei/releases/latest). Choose by operating system and CPU architecture:
+Everything lives on [GitHub Releases](https://github.com/KyuuKyuuStone/claude-code-heihei/releases/latest). Choose by operating system and CPU architecture:
 
 | Your system | Download |
 |---|---|
@@ -91,7 +91,7 @@ On ARM64 machines, use the corresponding `linux-arm64` file.
 If you want to modify the code, debug the engine, or just use the CLI in a terminal:
 
 ```bash
-git clone https://github.com/cc-heihei/cc-heihei.git
+git clone https://github.com/KyuuKyuuStone/claude-code-heihei.git
 cd cc-heihei
 bun install
 cp .env.example .env

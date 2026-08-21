@@ -72,7 +72,7 @@ const DATE_LOCALES: Record<Locale, string> = {
 }
 const DEFAULT_PROFILE: DesktopProfilePreferences = {
   displayName: 'cc-heihei',
-  subtitle: 'github.com/cc-heihei/cc-heihei',
+  subtitle: 'github.com/KyuuKyuuStone/claude-code-heihei',
   avatarFile: null,
   avatarUpdatedAt: null,
 }

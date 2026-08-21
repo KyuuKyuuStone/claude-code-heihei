@@ -16,7 +16,7 @@ The CLI runs from source only. There is no separate installer for it.
 Install [Git](https://git-scm.com/downloads) and [Bun](https://bun.sh) first, then:
 
 ```bash
-git clone https://github.com/cc-heihei/cc-heihei.git
+git clone https://github.com/KyuuKyuuStone/claude-code-heihei.git
 cd cc-heihei
 bun install
 ```

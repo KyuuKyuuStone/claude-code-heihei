@@ -8,7 +8,7 @@ import { content, mascotAccents, mascots } from './content'
 import './home.css'
 
 const SOURCE_COMMANDS = [
-  'git clone https://github.com/cc-heihei/cc-heihei.git',
+  'git clone https://github.com/KyuuKyuuStone/claude-code-heihei.git',
   'cd cc-heihei && bun install',
   './bin/claude-heihei'
 ]

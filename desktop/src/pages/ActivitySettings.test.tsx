@@ -114,7 +114,7 @@ describe('ActivitySettings', () => {
         schemaVersion: 2,
         profile: {
           displayName: 'cc-heihei',
-          subtitle: 'github.com/cc-heihei/cc-heihei',
+          subtitle: 'github.com/KyuuKyuuStone/claude-code-heihei',
           avatarFile: null,
           avatarUpdatedAt: null,
         },
@@ -152,7 +152,7 @@ describe('ActivitySettings', () => {
         schemaVersion: 2,
         profile: {
           displayName: 'cc-heihei',
-          subtitle: 'github.com/cc-heihei/cc-heihei',
+          subtitle: 'github.com/KyuuKyuuStone/claude-code-heihei',
           avatarFile: 'profile/avatar.png',
           avatarUpdatedAt: '2026-05-09T12:00:00.000Z',
         },
@@ -171,7 +171,7 @@ describe('ActivitySettings', () => {
         schemaVersion: 2,
         profile: {
           displayName: 'cc-heihei',
-          subtitle: 'github.com/cc-heihei/cc-heihei',
+          subtitle: 'github.com/KyuuKyuuStone/claude-code-heihei',
           avatarFile: null,
           avatarUpdatedAt: null,
         },
@@ -201,9 +201,9 @@ describe('ActivitySettings', () => {
     expect(screen.getByText('cc-heihei')).toBeInTheDocument()
     expect(screen.getByAltText('cc-heihei avatar')).toHaveAttribute('src', '/app-icon.png')
     expect(screen.getByAltText('cc-heihei avatar')).toHaveClass('scale-[1.28]')
-    expect(screen.getByRole('link', { name: 'github.com/cc-heihei/cc-heihei' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'github.com/KyuuKyuuStone/claude-code-heihei' })).toHaveAttribute(
       'href',
-      'https://github.com/cc-heihei/cc-heihei',
+      'https://github.com/KyuuKyuuStone/claude-code-heihei',
     )
     expect(screen.getByText('Token Activity')).toBeInTheDocument()
     expect(screen.getByText('Total tokens')).toBeInTheDocument()
