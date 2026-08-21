@@ -1,12 +1,5 @@
 # Claude Code Heihei
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-horizontal-dark.png">
-    <img src="docs/images/logo-horizontal.png" alt="Claude Code Heihei" width="480">
-  </picture>
-</p>
-
 <div align="center">
 
 [![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
@@ -15,26 +8,44 @@
 
 </div>
 
-Claude Code Heihei 是一个 **macOS / Windows / Linux 桌面端 Claude Code 工作台**。它在经典会话工作台之上新增了 **会话级上下级协作** 能力：任命主管、向员工会话派活、回收汇报，同时把多会话、多项目、Diff 审阅、权限审批、模型配置、Computer Use 和定时任务集中到一个应用里。
+Claude Code Heihei 是一个 **macOS / Windows / Linux 桌面端 Claude Code 工作台**。它在经典会话工作台之上新增了 **会话级上下级协作** 能力，同时保留多会话、多项目、Diff 审阅、权限审批、模型配置、Computer Use、技能市场、定时任务等完整能力。
 
-## 亮点
+## 下载
 
-- **会话级上下级协作**：每个项目任命一名「主管」，把任意会话登记为「员工」（角色与特性自由定义，如后端 / 前端 / 写作 / 绘画师）。主管向员工会话派活，员工会话无人值守自动执行并汇报，主管验收后继续派活或交付。
+[![下载 Windows 安装包](https://img.shields.io/badge/⬇%20下载-Windows%20exe-FF7A00?style=for-the-badge)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases/latest/download/Claude-Code-Heihei-1.0.0-win-x64.exe)
+
+> 更多平台与版本见 [Releases](https://github.com/KyuuKyuuStone/claude-code-heihei/releases)。
+
+## 功能特性
+
+### 会话级上下级协作（本项目新增）
+
+- **主管 / 员工**：每个项目任命一名「主管」，把任意会话登记为「员工」，角色与特性自由定义（后端 / 前端 / 写作 / 绘画师…）。
+- **自动派活**：主管向员工会话派活，员工会话无人值守自动执行（自动放行权限），完工后自动汇报。
+- **验收交付**：主管收到汇报后验收，继续派活或向用户交付。
 - **项目隔离**：花名册与派活都按工作目录隔离，跨项目派活会被服务端直接拒绝。
-- **多会话工作台**：标签页、项目切换、终端入口和会话历史集中管理。
-- **逐文件审阅改动**：列出本轮改动，任意文件一键打开带语法高亮的 Diff，支持整轮撤销。
-- **权限模式**：从「每次都问」到「跳过权限」，危险命令、工具调用和 AI 反问都在桌面端审批。
+
+### 会话工作台
+
+- **多会话**：标签页、项目切换、终端入口、会话历史集中管理。
+- **分支 / Worktree**：新建会话可选仓库分支，决定用当前工作树还是隔离 Worktree。
+- **逐文件 Diff 审阅**：列出本轮改动，任意文件一键打开带语法高亮的 Diff，支持整轮撤销。
+
+### AI 能力
+
+- **多 Agent**：SubAgent / Agent Teams，子代理继承上下文协同工作。
+- **技能市场**：发现、预览、安装来自 ClawHub / SkillHub 的第三方技能，来源与安全状态摆在明处。
+- **Skills 系统**：把流程固化成技能，随会话自动加载。
+- **记忆系统**：自动记忆 + AutoDream 提炼长期记忆。
+- **Computer Use**：授权后让 Agent 截图、点击、输入并控制桌面应用。
+- **MCP 支持**：接入 MCP 工具与外部能力。
+
+### 其他
+
+- **权限模式**：五档权限，从「每次都问」到「跳过权限」，危险命令、工具调用和 AI 反问都在桌面端审批。
 - **自带模型**：通过 API Key 添加服务商，DeepSeek、Kimi、智谱 GLM 等第三方有现成预设，也支持 LM Studio、Ollama 本地模型。
 - **三套配色主题**：纯白、纸墨、墨夜蓝，可跟随系统深浅色自动切换。
-- **技能市场**：发现、预览、安装来自 ClawHub / SkillHub 的第三方技能，来源与安全状态摆在明处。
-- **Computer Use**：让 Agent 在授权后截图、点击、输入并控制桌面应用。
-- **定时任务与用量统计**：在独立会话里执行计划任务，查看本机 Token 使用趋势。
-
-## 安装桌面端
-
-1. 在你的仓库 Releases 页面下载对应 macOS / Windows / Linux 的安装包。
-2. 首次启动后，在设置里配置模型服务商、API Key 和默认模型。
-3. macOS 正式版需要签名与公证；draft / 未签名临时包首次打开可能仍需手动放行。Windows 未签名安装包可能出现 SmartScreen 提示，点「更多信息」→「仍要运行」。
+- **定时任务与用量统计**：计划任务在独立会话里执行，查看本机 Token 使用趋势。
 
 ## 从源码启动 CLI
 

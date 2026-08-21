@@ -1,12 +1,5 @@
 # Claude Code Heihei
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-horizontal-dark.png">
-    <img src="docs/images/logo-horizontal.png" alt="Claude Code Heihei" width="480">
-  </picture>
-</p>
-
 <div align="center">
 
 [![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
@@ -15,26 +8,44 @@
 
 </div>
 
-Claude Code Heihei is a **desktop Claude Code workspace** for macOS, Windows, and Linux. On top of the classic session workspace it adds a **session-level supervisor–worker collaboration** layer: appoint a supervisor, dispatch work to worker sessions, and collect their reports — all while keeping multi-session, project, diff review, permission approval, model setup, Computer Use, and scheduled tasks in one app.
+Claude Code Heihei is a **desktop Claude Code workspace** for macOS, Windows, and Linux. It adds a **session-level supervisor–worker collaboration** layer on top of the classic session workspace, while keeping multi-session, multi-project, diff review, permission approval, model setup, Computer Use, skill marketplace, and scheduled tasks in one app.
 
-## Highlights
+## Download
 
-- **Supervisor–worker collaboration**: appoint one supervisor per project and register worker sessions with free-form roles and traits (backend / frontend / writing / painter …). The supervisor dispatches tasks to workers, who run unattended and report back; the supervisor reviews the result and keeps going or delivers.
-- **Project isolation**: the roster and dispatch are scoped by working directory — cross-project dispatch is rejected by the server.
-- **Multi-session workspace**: tabs, project switching, terminal entry, and session history in one place.
-- **Review edits file by file**: the workspace lists this turn's changes and opens any file as a syntax-highlighted diff, with per-turn undo.
-- **Permission modes**: from "ask every time" to "skip permissions" — risky commands, tool calls, and follow-up questions are approved in the GUI.
+[![Download Windows installer](https://img.shields.io/badge/⬇%20Download-Windows%20exe-FF7A00?style=for-the-badge)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases/latest/download/Claude-Code-Heihei-1.0.0-win-x64.exe)
+
+> For other platforms and versions, see [Releases](https://github.com/KyuuKyuuStone/claude-code-heihei/releases).
+
+## Features
+
+### Supervisor–worker collaboration (new in this project)
+
+- **Supervisor / workers**: appoint one supervisor per project and register any session as a worker, with free-form roles and traits (backend / frontend / writing / painter …).
+- **Automatic dispatch**: the supervisor dispatches tasks to worker sessions, which run unattended (permissions auto-approved) and report back when done.
+- **Review & deliver**: the supervisor reviews each report, then keeps going or delivers to the user.
+- **Project isolation**: roster and dispatch are scoped by working directory — cross-project dispatch is rejected by the server.
+
+### Session workspace
+
+- **Multi-session**: tabs, project switching, terminal entry, and session history in one place.
+- **Branch / Worktree**: start a session on any branch, using the current working tree or an isolated Worktree.
+- **File-by-file diff review**: see this turn's changes, open any file as a syntax-highlighted diff, and undo the whole turn.
+
+### AI capabilities
+
+- **Multi-agent**: SubAgents / Agent Teams — subagents share context and collaborate.
+- **Skill marketplace**: discover, preview, and install third-party skills from ClawHub / SkillHub, with source and safety status up front.
+- **Skills system**: turn workflows into skills that load automatically with sessions.
+- **Memory system**: automatic memory plus AutoDream for long-term memory distillation.
+- **Computer Use**: let the agent screenshot, click, type, and control desktop apps after authorization.
+- **MCP support**: connect MCP tools and external capabilities.
+
+### More
+
+- **Permission modes**: five levels, from "ask every time" to "skip permissions" — risky commands and tool calls are approved in the GUI.
 - **Bring your own model**: add providers via API key with presets for DeepSeek, Kimi, Zhipu GLM and others, or point at LM Studio and Ollama running locally.
 - **Three colour themes**: Pure White, Paper, and Ink Blue — optionally following the system light/dark setting.
-- **Skill marketplace**: discover, preview, and install third-party skills from ClawHub / SkillHub, with source and safety status shown up front.
-- **Computer Use**: let the agent take screenshots, click, type, and control desktop apps after authorization.
-- **Scheduled tasks and usage stats**: run planned tasks in their own sessions and track local token usage trends.
-
-## Install the Desktop App
-
-1. Download the macOS / Windows / Linux desktop installer from your repository's Releases page.
-2. On first launch, configure your model provider, API key, and default model in Settings.
-3. macOS releases require signing and notarization. Draft or unsigned temporary builds may still need one-time manual approval. Unsigned Windows installers may show SmartScreen; click "More info" -> "Run anyway".
+- **Scheduled tasks & usage stats**: run planned tasks in their own sessions and track local token usage trends.
 
 ## Run the CLI from Source
 
