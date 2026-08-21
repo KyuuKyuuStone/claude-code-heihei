@@ -1,0 +1,4194 @@
+/**
+ * Session Service — 会话文件的读写操作封装
+ *
+ * 读写 CLI 持久化在 ~/.claude/projects/{sanitized_path}/{sessionId}.jsonl 的会话数据，
+ * 确保 Desktop App 与 CLI 的数据完全互通。
+ */
+
+import { createReadStream, type Stats } from 'node:fs'
+import { createHash } from 'node:crypto'
+import * as fs from 'node:fs/promises'
+import * as path from 'node:path'
+import * as os from 'node:os'
+import { createInterface } from 'node:readline'
+import { ApiError } from '../middleware/errorHandler.js'
+import { sanitizePath as sanitizePortablePath } from '../../utils/sessionStoragePortable.js'
+import type { FileHistorySnapshot } from '../../utils/fileHistory.js'
+import { findCanonicalGitRoot } from '../../utils/git.js'
+import { calculateUSDCost, MODEL_COSTS } from '../../utils/modelCost.js'
+import {
+  MODEL_CONTEXT_WINDOW_DEFAULT,
+  getContextWindowForModel,
+  getModelMaxOutputTokens,
+  is1mContextDisabled,
+} from '../../utils/context.js'
+import {
+  MODEL_CONTEXT_WINDOWS_ENV_KEY,
+  getModelContextWindowFromEnvValue,
+} from '../../utils/model/modelContextWindows.js'
+import {
+  calculateContextBudget,
+  getProviderUsageTrust,
+  hasMediaInput,
+} from '../../utils/contextBudget.js'
+import { getCanonicalName } from '../../utils/model/model.js'
+import { isFirstPartyAnthropicBaseUrl } from '../../utils/model/providers.js'
+import {
+  resolveSessionWorkspaceLaunch,
+  type CreateSessionRepositoryOptions,
+  type PreparedSessionWorkspace,
+} from './repositoryLaunchService.js'
+import { registerFilesystemAccessRoot } from './filesystemAccessRoots.js'
+import { normalizeDriveRootPathForPlatform } from './windowsDrivePath.js'
+import { cleanSessionTitleSource } from '../../utils/sessionTitleText.js'
+import {
+  roughTokenCountEstimationForMessage,
+} from '../../services/tokenEstimation.js'
+import { ProviderService } from './providerService.js'
+import { shouldHideCommandMetadataContent } from '../../utils/commandMetadata.js'
+import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
+import {
+  extractGoalCreationTitle,
+  extractTranscriptUserTitle,
+  reduceTranscript,
+} from './localIndex/transcriptReducer.js'
+import type {
+  PersistedWorktreeSession,
+  SessionListSummary,
+  TranscriptChunk,
+  TranscriptProjection,
+} from './localIndex/types.js'
+import { localIndexCoordinator } from './localIndex/coordinator.js'
+import { readSessionEntriesByLocator } from './localIndex/sessionEntries.js'
+import type {
+  IndexedSessionRow,
+  IndexedSessionSearchCandidate,
+  LocalIndexGateway,
+  SessionFileMatch,
+} from './localIndex/sessionIndex.js'
+import type { LocalIndexStatus } from './localIndex/types.js'
+import { diagnosticsService } from './diagnosticsService.js'
+
+// ============================================================================
+// Types
+// ============================================================================
+
+export type SessionListItem = {
+  id: string
+  title: string
+  createdAt: string
+  modifiedAt: string
+  messageCount: number
+  projectPath: string
+  projectRoot: string | null
+  workDir: string | null
+  workDirExists: boolean
+  workspaceState: SessionWorkspaceState
+  permissionMode?: string
+  runtimeProviderId?: string | null
+  runtimeModelId?: string
+  effortLevel?: string
+}
+
+export type SessionWorkspaceState = 'available' | 'worktree_removed' | 'missing'
+
+export type SessionListShadowComparison = {
+  matched: boolean
+  fileTotal: number
+  indexedTotal: number
+  fileCount: number
+  indexedCount: number
+  differenceCount: number
+  fieldHashes: Array<{
+    field: string
+    fileHash: string
+    indexedHash: string
+  }>
+}
+
+export type SessionServiceLocalIndexOptions = {
+  now?: () => number
+  indexFailureCooldownMs?: number
+  shadowComparisonMinIntervalMs?: number
+  recordShadowComparison?: (comparison: SessionListShadowComparison) => void
+  targetedEntryReader?: typeof readSessionEntriesByLocator
+  sessionListCacheMaxEntries?: number
+  sessionListSummaryCacheMaxEntries?: number
+}
+
+export type SessionEntriesAtLinesResult = {
+  entries: Array<{ entry: Record<string, unknown>; lineNumber: number }>
+  bytesRead: number
+  rangesRead: number
+}
+
+export type IndexedSessionSearchMetadata = {
+  title: string
+  modifiedAt: string
+  workDir: string | null
+  projectPath: string
+  sourceSnapshot?: {
+    dev: number
+    ino: number
+    size: number
+    mtimeMs: number
+    ctimeMs: number
+  }
+}
+
+export type DeleteSessionFailure = {
+  sessionId: string
+  message: string
+  code?: string
+}
+
+export type DeleteSessionsResult = {
+  successes: string[]
+  failures: DeleteSessionFailure[]
+}
+
+export type SessionDetail = SessionListItem & {
+  messages: MessageEntry[]
+}
+
+export type SessionLaunchInfo = {
+  filePath: string
+  projectDir: string
+  workDir: string
+  repository?: PreparedSessionWorkspace['repository']
+  worktreeSession?: PersistedWorktreeSession | null
+  transcriptMessageCount: number
+  customTitle: string | null
+  permissionMode?: string
+  runtimeProviderId?: string | null
+  runtimeModelId?: string
+  effortLevel?: string
+}
+
+type ProviderContextWindowHint = Pick<SessionLaunchInfo, 'runtimeProviderId' | 'runtimeModelId'>
+
+export type SessionInspectionTranscriptSnapshot = {
+  launchInfo: SessionLaunchInfo
+  metadata: TranscriptMetadataSnapshot
+  usage: TranscriptUsageSnapshot | null
+  contextEstimate: TranscriptContextEstimate | null
+}
+
+export type TrimSessionResult = {
+  removedCount: number
+  removedMessageIds: string[]
+}
+
+export type MessageUsage = {
+  input_tokens?: number
+  output_tokens?: number
+  cache_read_input_tokens?: number
+  cache_creation_input_tokens?: number
+}
+
+export type MessageEntry = {
+  id: string
+  type: 'user' | 'assistant' | 'system' | 'tool_use' | 'tool_result'
+  content: unknown
+  toolUseResult?: unknown
+  timestamp: string
+  model?: string
+  usage?: MessageUsage
+  parentUuid?: string
+  parentToolUseId?: string
+  isSidechain?: boolean
+}
+
+export type SessionTaskNotification = {
+  taskId: string
+  toolUseId: string
+  status: 'completed' | 'failed' | 'stopped'
+  summary?: string
+  result?: string
+  outputFile?: string
+  timestamp?: string
+}
+
+export type TranscriptUsageSnapshot = {
+  source: 'transcript'
+  totalCostUSD: number
+  costDisplay: string
+  hasUnknownModelCost: boolean
+  totalAPIDuration: number
+  totalDuration: number
+  totalLinesAdded: number
+  totalLinesRemoved: number
+  totalInputTokens: number
+  totalOutputTokens: number
+  totalCacheReadInputTokens: number
+  totalCacheCreationInputTokens: number
+  totalWebSearchRequests: number
+  models: Array<{
+    model: string
+    displayName: string
+    inputTokens: number
+    outputTokens: number
+    cacheReadInputTokens: number
+    cacheCreationInputTokens: number
+    webSearchRequests: number
+    costUSD: number
+    costDisplay: string
+    contextWindow: number
+    maxOutputTokens: number
+  }>
+}
+
+export type TranscriptMetadataSnapshot = {
+  model?: string
+  cwd?: string
+  version?: string
+}
+
+export type TranscriptContextEstimate = {
+  categories: Array<{
+    name: string
+    tokens: number
+    color: string
+    isDeferred?: boolean
+  }>
+  totalTokens: number
+  maxTokens: number
+  rawMaxTokens: number
+  percentage: number
+  gridRows: Array<Array<{
+    color: string
+    isFilled: boolean
+    categoryName: string
+    tokens: number
+    percentage: number
+    squareFullness: number
+  }>>
+  model: string
+  memoryFiles: Array<{ path: string; type: string; tokens: number }>
+  mcpTools: Array<{ name: string; serverName: string; tokens: number; isLoaded?: boolean }>
+  agents: Array<{ agentType: string; source: string; tokens: number }>
+  apiUsage: {
+    input_tokens: number
+    output_tokens: number
+    cache_creation_input_tokens: number
+    cache_read_input_tokens: number
+  }
+}
+
+/** Raw entry parsed from a single JSONL line */
+type RawEntry = {
+  type?: string
+  subtype?: string
+  content?: unknown
+  uuid?: string
+  messageId?: string
+  parentUuid?: string | null
+  parent_tool_use_id?: string | null
+  isSidechain?: boolean
+  isMeta?: boolean
+  cwd?: string
+  message?: {
+    role?: string
+    content?: unknown
+    model?: string
+    id?: string
+    type?: string
+    usage?: {
+      input_tokens?: number
+      output_tokens?: number
+      cache_read_input_tokens?: number
+      cache_creation_input_tokens?: number
+      server_tool_use?: {
+        web_search_requests?: number
+      }
+      speed?: string
+    }
+  }
+  timestamp?: string
+  version?: string
+  snapshot?: {
+    messageId?: string
+    trackedFileBackups?: Record<string, unknown>
+    timestamp?: string
+  }
+  customTitle?: string
+  permissionMode?: string
+  worktreeSession?: PersistedWorktreeSession | null
+  title?: string
+  [key: string]: unknown
+}
+
+type RawMessageUsage = NonNullable<RawEntry['message']>['usage']
+
+function normalizeMessageUsage(usage: RawMessageUsage): MessageUsage | undefined {
+  if (!usage) return undefined
+
+  const normalized: MessageUsage = {}
+  if (typeof usage.input_tokens === 'number' && Number.isFinite(usage.input_tokens)) {
+    normalized.input_tokens = usage.input_tokens
+  }
+  if (typeof usage.output_tokens === 'number' && Number.isFinite(usage.output_tokens)) {
+    normalized.output_tokens = usage.output_tokens
+  }
+  if (
+    typeof usage.cache_read_input_tokens === 'number' &&
+    Number.isFinite(usage.cache_read_input_tokens)
+  ) {
+    normalized.cache_read_input_tokens = usage.cache_read_input_tokens
+  }
+  if (
+    typeof usage.cache_creation_input_tokens === 'number' &&
+    Number.isFinite(usage.cache_creation_input_tokens)
+  ) {
+    normalized.cache_creation_input_tokens = usage.cache_creation_input_tokens
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined
+}
+
+type SessionListSummaryCacheEntry = {
+  mtimeMs: number
+  size: number
+  summary: SessionListSummary
+}
+
+const DEFAULT_SESSION_LIST_CACHE_MAX_ENTRIES = 16
+const DEFAULT_SESSION_LIST_SUMMARY_CACHE_MAX_ENTRIES = 20_000
+
+const VALID_SESSION_PERMISSION_MODES = new Set([
+  'default',
+  'acceptEdits',
+  'plan',
+  'bypassPermissions',
+  'dontAsk',
+  'auto',
+])
+const VALID_SESSION_EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'xhigh', 'max'])
+
+type ContentBlock = Record<string, unknown>
+
+const USER_INTERRUPTION_TEXTS = new Set([
+  '[Request interrupted by user]',
+  '[Request interrupted by user for tool use]',
+])
+
+const NO_RESPONSE_REQUESTED_TEXT = 'No response requested.'
+const TASK_NOTIFICATION_RE = /^<task-notification>\s*[\s\S]*<\/task-notification>$/i
+const TASK_NOTIFICATION_BLOCK_RE = /<task-notification>\s*[\s\S]*?<\/task-notification>/i
+const PERSISTED_TASK_NOTIFICATION_ENTRY_TYPE = 'cc-heihei-task-notification'
+const PROVIDER_MODEL_ALIAS_SEPARATORS = ['-', '_', ':', '/', '.', ' ']
+
+function normalizeProviderModelAlias(model: string): string {
+  return model
+    .trim()
+    .toLowerCase()
+    .replace(/\[1m\]$/i, '')
+    .replace(/:1m$/i, '')
+    .trim()
+}
+
+function providerModelLooksRelated(
+  transcriptModel: string,
+  configuredModel: string,
+): boolean {
+  const transcript = normalizeProviderModelAlias(transcriptModel)
+  const configured = normalizeProviderModelAlias(configuredModel)
+  if (!transcript || !configured) return false
+  if (transcript === configured) return true
+
+  const shorter = Math.min(transcript.length, configured.length)
+  if (shorter < 6) return false
+
+  return PROVIDER_MODEL_ALIAS_SEPARATORS.some((separator) => (
+    transcript.startsWith(`${configured}${separator}`) ||
+    configured.startsWith(`${transcript}${separator}`)
+  ))
+}
+
+function safeJsonLength(value: unknown): number {
+  if (value === undefined) return 0
+  try {
+    return JSON.stringify(value)?.length ?? 0
+  } catch {
+    return 0
+  }
+}
+
+// ============================================================================
+// Service
+// ============================================================================
+
+type SharedSessionMutationState = {
+  epoch: number
+  bypass: {
+    completionMarker: string | null
+    requiresAdditionalCompletion: boolean
+  } | null
+}
+
+const sharedSessionMutationStates = new WeakMap<LocalIndexGateway, SharedSessionMutationState>()
+
+function getSharedSessionMutationState(
+  gateway: LocalIndexGateway,
+): SharedSessionMutationState {
+  const existing = sharedSessionMutationStates.get(gateway)
+  if (existing) return existing
+  const created: SharedSessionMutationState = { epoch: 0, bypass: null }
+  sharedSessionMutationStates.set(gateway, created)
+  return created
+}
+
+export class SessionService {
+  private providerService = new ProviderService()
+
+  private readonly localIndexGateway: LocalIndexGateway
+  private readonly now: () => number
+  private readonly indexFailureCooldownMs: number
+  private readonly shadowComparisonMinIntervalMs: number
+  private readonly recordShadowComparison: (comparison: SessionListShadowComparison) => void
+  private readonly targetedEntryReader: typeof readSessionEntriesByLocator
+  private indexFailureCooldownUntil = 0
+  private observedSharedMutationEpoch: number
+  private lastShadowComparisonSignature: string | null = null
+  private lastShadowComparisonRecordedAt = Number.NEGATIVE_INFINITY
+
+  private readonly sessionListCacheTtlMs = 5_000
+  private readonly sessionListCacheMaxEntries: number
+  private readonly sessionListSummaryCacheMaxEntries: number
+  private readonly sessionListCache = new Map<string, {
+    expiresAt: number
+    result: { sessions: SessionListItem[]; total: number }
+  }>()
+  private readonly sessionListRequests = new Map<
+    string,
+    Promise<{ sessions: SessionListItem[]; total: number }>
+  >()
+  private sessionListCacheGeneration = 0
+  private readonly sessionListSummaryCache = new Map<string, SessionListSummaryCacheEntry>()
+  private readonly sessionListSummaryRequests = new Map<string, Promise<SessionListSummary>>()
+  private activeSessionListCacheScope: string | null = null
+
+  constructor(
+    localIndexGateway: LocalIndexGateway = localIndexCoordinator,
+    options: SessionServiceLocalIndexOptions = {},
+  ) {
+    this.localIndexGateway = localIndexGateway
+    this.observedSharedMutationEpoch = getSharedSessionMutationState(localIndexGateway).epoch
+    this.now = options.now ?? Date.now
+    this.indexFailureCooldownMs = options.indexFailureCooldownMs ?? 5_000
+    this.shadowComparisonMinIntervalMs = options.shadowComparisonMinIntervalMs ?? 30_000
+    this.sessionListCacheMaxEntries = this.normalizeCacheCapacity(
+      options.sessionListCacheMaxEntries,
+      DEFAULT_SESSION_LIST_CACHE_MAX_ENTRIES,
+    )
+    this.sessionListSummaryCacheMaxEntries = this.normalizeCacheCapacity(
+      options.sessionListSummaryCacheMaxEntries,
+      DEFAULT_SESSION_LIST_SUMMARY_CACHE_MAX_ENTRIES,
+    )
+    this.recordShadowComparison = options.recordShadowComparison ?? ((comparison) => {
+      void diagnosticsService.recordEvent({
+        type: 'local_index_session_shadow_comparison',
+        severity: comparison.matched ? 'info' : 'warn',
+        summary: comparison.matched
+          ? 'Local session index shadow comparison matched'
+          : 'Local session index shadow comparison differed',
+        details: comparison,
+      })
+    })
+    this.targetedEntryReader = options.targetedEntryReader ?? readSessionEntriesByLocator
+  }
+
+  private normalizeCacheCapacity(value: number | undefined, fallback: number): number {
+    return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+      ? value
+      : fallback
+  }
+
+  private sessionListCacheKey(options: {
+    project?: string
+    limit?: number
+    offset?: number
+  } | undefined, scope = this.getConfigDir()): string {
+    return JSON.stringify({
+      scope,
+      project: options?.project ?? null,
+      limit: options?.limit ?? 50,
+      offset: options?.offset ?? 0,
+    })
+  }
+
+  private cloneSessionListResult(result: { sessions: SessionListItem[]; total: number }): { sessions: SessionListItem[]; total: number } {
+    return {
+      total: result.total,
+      sessions: result.sessions.map((session) => ({ ...session })),
+    }
+  }
+
+  private invalidateSessionListCache(): void {
+    this.sessionListCache.clear()
+    this.sessionListCacheGeneration += 1
+    const sharedState = getSharedSessionMutationState(this.localIndexGateway)
+    sharedState.epoch += 1
+    sharedState.bypass = this.readIndexMutationBypass()
+    this.observedSharedMutationEpoch = sharedState.epoch
+  }
+
+  private prepareSessionListCaches(scope: string): void {
+    if (this.activeSessionListCacheScope !== scope) {
+      this.sessionListCache.clear()
+      this.sessionListSummaryCache.clear()
+      this.sessionListCacheGeneration += 1
+      this.activeSessionListCacheScope = scope
+    }
+
+    const now = this.now()
+    for (const [key, entry] of this.sessionListCache) {
+      if (entry.expiresAt <= now) this.sessionListCache.delete(key)
+    }
+  }
+
+  private touchSessionListCacheEntry(
+    key: string,
+    entry: { expiresAt: number; result: { sessions: SessionListItem[]; total: number } },
+  ): void {
+    this.sessionListCache.delete(key)
+    this.sessionListCache.set(key, entry)
+  }
+
+  private enforceSessionListCacheCapacity(): void {
+    while (this.sessionListCache.size > this.sessionListCacheMaxEntries) {
+      const oldestKey = this.sessionListCache.keys().next().value
+      if (oldestKey === undefined) break
+      this.sessionListCache.delete(oldestKey)
+    }
+  }
+
+  private enforceSessionListSummaryCacheCapacity(): void {
+    while (this.sessionListSummaryCache.size > this.sessionListSummaryCacheMaxEntries) {
+      const oldestKey = this.sessionListSummaryCache.keys().next().value
+      if (oldestKey === undefined) break
+      this.sessionListSummaryCache.delete(oldestKey)
+    }
+  }
+
+  private syncSharedMutationEpoch(): void {
+    const sharedState = getSharedSessionMutationState(this.localIndexGateway)
+    if (sharedState.epoch === this.observedSharedMutationEpoch) return
+    this.sessionListCache.clear()
+    this.sessionListCacheGeneration += 1
+    this.observedSharedMutationEpoch = sharedState.epoch
+  }
+
+  private readIndexMutationBypass(): NonNullable<SharedSessionMutationState['bypass']> {
+    try {
+      const status = this.localIndexGateway.getPublicStatus()
+      return {
+        completionMarker: status.lastUpdatedAt,
+        requiresAdditionalCompletion: status.state === 'building',
+      }
+    } catch {
+      return {
+        completionMarker: 'unavailable',
+        requiresAdditionalCompletion: true,
+      }
+    }
+  }
+
+  private markIndexReadFailure(): void {
+    this.indexFailureCooldownUntil = Math.max(
+      this.indexFailureCooldownUntil,
+      this.now() + this.indexFailureCooldownMs,
+    )
+  }
+
+  private getUsableIndexMode(): 'shadow' | 'on' | null {
+    let mode: 'off' | 'shadow' | 'on'
+    try {
+      mode = this.localIndexGateway.getMode()
+    } catch {
+      this.markIndexReadFailure()
+      return null
+    }
+    if (mode === 'off' || this.now() < this.indexFailureCooldownUntil) return null
+
+    let status: LocalIndexStatus
+    try {
+      status = this.localIndexGateway.getPublicStatus()
+    } catch {
+      this.markIndexReadFailure()
+      return null
+    }
+
+    const sharedState = getSharedSessionMutationState(this.localIndexGateway)
+    if (sharedState.bypass !== null) {
+      if (
+        status.state !== 'ready' ||
+        status.lastUpdatedAt === sharedState.bypass.completionMarker
+      ) {
+        return null
+      }
+      if (sharedState.bypass.requiresAdditionalCompletion) {
+        sharedState.bypass = {
+          completionMarker: status.lastUpdatedAt,
+          requiresAdditionalCompletion: false,
+        }
+        return null
+      }
+      sharedState.bypass = null
+    }
+
+    if (status.state === 'off' || status.state === 'degraded') return null
+    try {
+      if (!this.localIndexGateway.isSessionScopeReady()) return null
+    } catch {
+      this.markIndexReadFailure()
+      return null
+    }
+    return mode
+  }
+
+  private indexStatusRemainsUsable(): boolean {
+    try {
+      const status = this.localIndexGateway.getPublicStatus()
+      return status.state !== 'off' && status.state !== 'degraded'
+    } catch {
+      return false
+    }
+  }
+
+  private cloneSessionListSummary(summary: SessionListSummary): SessionListSummary {
+    return {
+      ...summary,
+      repository: summary.repository ? { ...summary.repository } : undefined,
+      worktreeSession: summary.worktreeSession
+        ? { ...summary.worktreeSession }
+        : summary.worktreeSession,
+    }
+  }
+
+  private latestTimestamp(current: string | null, candidate: unknown): string | null {
+    if (typeof candidate !== 'string') return current
+    const candidateTime = Date.parse(candidate)
+    if (!Number.isFinite(candidateTime)) return current
+    if (!current) return candidate
+    const currentTime = Date.parse(current)
+    return !Number.isFinite(currentTime) || candidateTime > currentTime
+      ? candidate
+      : current
+  }
+
+  private metadataMatchesLaunchInfo(
+    launchInfo: SessionLaunchInfo | null,
+    metadata: {
+      workDir: string
+      repository?: PreparedSessionWorkspace['repository']
+      permissionMode?: string
+      runtimeProviderId?: string | null
+      runtimeModelId?: string
+      effortLevel?: string
+    },
+  ): boolean {
+    if (!launchInfo) return false
+    if (normalizeDriveRootPathForPlatform(launchInfo.workDir) !== metadata.workDir) {
+      return false
+    }
+    if (
+      JSON.stringify(launchInfo.repository ?? null) !==
+      JSON.stringify(metadata.repository ?? null)
+    ) {
+      return false
+    }
+    if (
+      metadata.permissionMode &&
+      VALID_SESSION_PERMISSION_MODES.has(metadata.permissionMode) &&
+      launchInfo.permissionMode !== metadata.permissionMode
+    ) {
+      return false
+    }
+    if (
+      metadata.runtimeProviderId !== undefined &&
+      launchInfo.runtimeProviderId !== metadata.runtimeProviderId
+    ) {
+      return false
+    }
+    if (metadata.runtimeModelId && launchInfo.runtimeModelId !== metadata.runtimeModelId) {
+      return false
+    }
+    if (
+      metadata.effortLevel &&
+      VALID_SESSION_EFFORT_LEVELS.has(metadata.effortLevel) &&
+      launchInfo.effortLevel !== metadata.effortLevel
+    ) {
+      return false
+    }
+    return true
+  }
+
+  private async getCachedSessionListSummary(
+    filePath: string,
+    projectDir: string,
+    stat: Stats,
+    scope: string,
+  ): Promise<SessionListSummary> {
+    const cached = this.sessionListSummaryCache.get(filePath)
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      this.sessionListSummaryCache.delete(filePath)
+      this.sessionListSummaryCache.set(filePath, cached)
+      return this.cloneSessionListSummary(cached.summary)
+    }
+
+    const requestKey = `${filePath}:${stat.mtimeMs}:${stat.size}`
+    const inFlight = this.sessionListSummaryRequests.get(requestKey)
+    if (inFlight) {
+      return this.cloneSessionListSummary(await inFlight)
+    }
+
+    const request = this.scanSessionListSummary(filePath, projectDir, stat)
+    this.sessionListSummaryRequests.set(requestKey, request)
+    try {
+      const summary = await request
+      if (this.activeSessionListCacheScope === scope) {
+        this.sessionListSummaryCache.set(filePath, {
+          mtimeMs: stat.mtimeMs,
+          size: stat.size,
+          summary: this.cloneSessionListSummary(summary),
+        })
+        this.enforceSessionListSummaryCacheCapacity()
+      }
+      return this.cloneSessionListSummary(summary)
+    } finally {
+      if (this.sessionListSummaryRequests.get(requestKey) === request) {
+        this.sessionListSummaryRequests.delete(requestKey)
+      }
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Config helpers
+  // --------------------------------------------------------------------------
+
+  private getConfigDir(): string {
+    return path.resolve(getClaudeConfigHomeDir())
+  }
+
+  private getProjectsDir(): string {
+    return path.join(this.getConfigDir(), 'projects')
+  }
+
+  /**
+   * Sanitize a path the same way the shared session storage does.
+   * This must remain Windows-safe, so reserved characters such as ':' are normalized too.
+   */
+  private sanitizePath(dirPath: string): string {
+    return sanitizePortablePath(dirPath)
+  }
+
+  // --------------------------------------------------------------------------
+  // JSONL parsing
+  // --------------------------------------------------------------------------
+
+  private async readJsonlFile(filePath: string): Promise<RawEntry[]> {
+    let content: string
+    try {
+      content = await fs.readFile(filePath, 'utf-8')
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return []
+      }
+      throw err
+    }
+
+    const entries: RawEntry[] = []
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      try {
+        entries.push(JSON.parse(trimmed) as RawEntry)
+      } catch {
+        // skip malformed lines
+      }
+    }
+    return entries
+  }
+
+  private async readTargetedJsonlEntries(
+    found: { filePath: string; projectDir: string },
+    entryTypes: string[],
+  ): Promise<RawEntry[] | null> {
+    if (
+      this.getUsableIndexMode() !== 'on' ||
+      !this.localIndexGateway.getSessionEntryLocators
+    ) {
+      return null
+    }
+
+    const mutationEpoch = getSharedSessionMutationState(this.localIndexGateway).epoch
+    try {
+      const page = this.localIndexGateway.getSessionEntryLocators(
+        found.filePath,
+        entryTypes,
+      )
+      if (!page) {
+        this.markIndexReadFailure()
+        return null
+      }
+      const result = await this.targetedEntryReader({
+        transcriptPath: found.filePath,
+        projectsRoot: this.getProjectsDir(),
+        expectedProjectDir: found.projectDir,
+        page,
+      })
+      if (!result) {
+        this.markIndexReadFailure()
+        return null
+      }
+      if (
+        mutationEpoch !== getSharedSessionMutationState(this.localIndexGateway).epoch ||
+        !this.indexStatusRemainsUsable()
+      ) {
+        return null
+      }
+      return result.entries as RawEntry[]
+    } catch {
+      this.markIndexReadFailure()
+      return null
+    }
+  }
+
+  /**
+   * Resolve physical JSONL line numbers through verified byte locators.
+   * Returns null whenever the index cannot prove an exact, current mapping so
+   * callers can preserve their canonical-file behavior.
+   */
+  async readSessionEntriesAtLines(
+    filePath: string,
+    lineNumbers: Set<number>,
+    entryTypes: string[],
+  ): Promise<SessionEntriesAtLinesResult | null> {
+    if (
+      this.getUsableIndexMode() !== 'on' ||
+      !this.localIndexGateway.getSessionEntryLocators
+    ) return null
+
+    const projectDir = path.basename(path.dirname(filePath))
+    const mutationEpoch = getSharedSessionMutationState(this.localIndexGateway).epoch
+    try {
+      // Fetch all scalar locators so a ripgrep hit on a non-message entry is
+      // distinguishable from an uncovered partial/stale physical line.
+      const page = this.localIndexGateway.getSessionEntryLocators(filePath)
+      if (!page) return null
+      const byLine = new Map(page.entries.map(locator => [locator.jsonlLine, locator]))
+      if ([...lineNumbers].some(lineNumber => !byLine.has(lineNumber))) return null
+
+      const allowedTypes = new Set(entryTypes)
+      const selected = [...lineNumbers]
+        .sort((a, b) => a - b)
+        .map(lineNumber => byLine.get(lineNumber)!)
+        .filter(locator => allowedTypes.has(locator.entryType))
+      const result = await this.targetedEntryReader({
+        transcriptPath: filePath,
+        projectsRoot: this.getProjectsDir(),
+        expectedProjectDir: projectDir,
+        page: { source: page.source, entries: selected },
+      })
+      if (
+        !result ||
+        mutationEpoch !== getSharedSessionMutationState(this.localIndexGateway).epoch ||
+        !this.indexStatusRemainsUsable()
+      ) return null
+
+      return {
+        entries: result.entries.map((entry, index) => ({
+          entry,
+          lineNumber: selected[index]!.jsonlLine,
+        })),
+        bytesRead: result.bytesRead,
+        rangesRead: result.rangesRead,
+      }
+    } catch {
+      this.markIndexReadFailure()
+      return null
+    }
+  }
+
+  private async streamJsonlFile(
+    filePath: string,
+    onEntry: (entry: RawEntry) => void,
+  ): Promise<void> {
+    const stream = createReadStream(filePath, { encoding: 'utf8' })
+    const lines = createInterface({
+      input: stream,
+      crlfDelay: Infinity,
+    })
+
+    try {
+      for await (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        try {
+          onEntry(JSON.parse(trimmed) as RawEntry)
+        } catch {
+          // skip malformed lines
+        }
+      }
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err
+      }
+    } finally {
+      lines.close()
+      stream.destroy()
+    }
+  }
+
+  private async scanSessionListSummary(
+    filePath: string,
+    projectDir: string,
+    stat: { birthtime: Date; mtime: Date },
+  ): Promise<SessionListSummary> {
+    let projection: TranscriptProjection = {
+      summary: {
+        title: 'Untitled Session',
+        createdAt: stat.birthtime.toISOString(),
+        modifiedAt: stat.mtime.toISOString(),
+        messageCount: 0,
+        workDir: this.desanitizePath(projectDir),
+      },
+      indexedBytes: 0,
+      pendingTailBytes: 0,
+      malformedLineCount: 0,
+    }
+    const stream = createReadStream(filePath)
+    let lineSegments: Buffer[] = []
+    let lineSegmentsLength = 0
+    let lineByteStart = 0
+    let bytesRead = 0
+    let chunks: TranscriptChunk[] = []
+
+    const flushChunks = () => {
+      if (chunks.length === 0) return
+      projection = reduceTranscript(chunks, projection)
+      chunks = []
+    }
+
+    try {
+      for await (const data of stream) {
+        const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data)
+        const bufferStart = bytesRead
+        bytesRead += buffer.length
+        let segmentStart = 0
+
+        while (segmentStart < buffer.length) {
+          const newlineIndex = buffer.indexOf(0x0a, segmentStart)
+          if (newlineIndex === -1) {
+            if (lineSegments.length === 0) {
+              lineByteStart = bufferStart + segmentStart
+            }
+            const segment = buffer.subarray(segmentStart)
+            lineSegments.push(segment)
+            lineSegmentsLength += segment.length
+            break
+          }
+
+          const finalSegment = buffer.subarray(segmentStart, newlineIndex + 1)
+          let line: Buffer
+          if (lineSegments.length === 0) {
+            line = finalSegment
+          } else {
+            lineSegments.push(finalSegment)
+            lineSegmentsLength += finalSegment.length
+            line = Buffer.concat(lineSegments, lineSegmentsLength)
+          }
+          chunks.push({
+            text: line.toString('utf8'),
+            byteStart: lineByteStart,
+            completeLine: true,
+          })
+          if (chunks.length >= 256) flushChunks()
+
+          lineSegments = []
+          lineSegmentsLength = 0
+          segmentStart = newlineIndex + 1
+          lineByteStart = bufferStart + segmentStart
+        }
+      }
+
+      flushChunks()
+      if (lineSegmentsLength > 0) {
+        const pending = lineSegments.length === 1
+          ? lineSegments[0]!
+          : Buffer.concat(lineSegments, lineSegmentsLength)
+        projection = reduceTranscript([{
+          text: pending.toString('utf8'),
+          byteStart: lineByteStart,
+          completeLine: false,
+        }], projection)
+      }
+    } finally {
+      stream.destroy()
+    }
+
+    return projection.summary
+  }
+
+  /**
+   * Resolve a session's display title + lightweight metadata from its JSONL file.
+   *
+   * Reuses the same title precedence as the session list (custom-title > goal >
+   * ai-title > first user message), so global session search shows real titles
+   * instead of the raw UUID file name.
+   */
+  async getSessionTitleAndMeta(filePath: string): Promise<{
+    title: string
+    modifiedAt: string
+    workDir: string | null
+    projectPath: string
+  }> {
+    const stat = await fs.stat(filePath)
+    const projectPath = path.basename(path.dirname(filePath))
+    const summary = await this.scanSessionListSummary(filePath, projectPath, stat)
+    return {
+      title: summary.title,
+      modifiedAt: summary.modifiedAt,
+      workDir: summary.workDir ?? null,
+      projectPath,
+    }
+  }
+
+  async getIndexedSessionSearchMetadata(
+    filePaths: string[],
+  ): Promise<Map<string, IndexedSessionSearchMetadata> | null> {
+    if (this.getUsableIndexMode() !== 'on') return null
+    const wanted = new Set(filePaths.map(filePath => path.resolve(filePath)))
+    const projects = new Set(filePaths.map(filePath => path.basename(path.dirname(filePath))))
+    const mutationEpoch = getSharedSessionMutationState(this.localIndexGateway).epoch
+    const result = new Map<string, IndexedSessionSearchMetadata>()
+    try {
+      for (const project of projects) {
+        const page = this.localIndexGateway.listSessions({
+          project,
+          limit: 2_147_483_647,
+          offset: 0,
+        })
+        for (const session of page.sessions) {
+          const transcriptPath = path.resolve(session.transcriptPath)
+          if (!wanted.has(transcriptPath)) continue
+          result.set(transcriptPath, {
+            title: session.title,
+            modifiedAt: session.modifiedAt,
+            workDir: session.workDir,
+            projectPath: session.projectPath,
+          })
+        }
+      }
+      if (
+        mutationEpoch !== getSharedSessionMutationState(this.localIndexGateway).epoch ||
+        !this.indexStatusRemainsUsable()
+      ) return null
+      return result
+    } catch {
+      this.markIndexReadFailure()
+      return null
+    }
+  }
+
+  /**
+   * Return a complete, filterable session path set for search phase A.
+   * Null means the index cannot currently prove completeness, so callers must
+   * preserve canonical filesystem scanning.
+   */
+  async getIndexedSessionSearchCandidates(filters: {
+    project?: string
+    modifiedAfter?: string
+    modifiedBefore?: string
+  }): Promise<Map<string, IndexedSessionSearchMetadata> | null> {
+    // A date-only canonical search recursively includes nested subagent JSONL
+    // files, which are not rows in the main-session table. Project-filtered
+    // search already excludes those paths by parent directory, so only that
+    // shape can be narrowed without changing historical results.
+    if (
+      !filters.project ||
+      filters.project === '.' ||
+      filters.project === '..' ||
+      filters.project.includes('/') ||
+      filters.project.includes('\\') ||
+      path.basename(filters.project) !== filters.project
+    ) return null
+    if (this.getUsableIndexMode() !== 'on') return null
+    const mutationEpoch = getSharedSessionMutationState(this.localIndexGateway).epoch
+    try {
+      const statusBefore = this.localIndexGateway.getPublicStatus()
+      if (
+        statusBefore.state !== 'ready' ||
+        statusBefore.degradedSources !== 0 ||
+        statusBefore.discovered !== statusBefore.indexed
+      ) return null
+
+      const modifiedAfterMs = filters.modifiedAfter
+        ? Date.parse(filters.modifiedAfter)
+        : Number.NEGATIVE_INFINITY
+      const modifiedBeforeMs = filters.modifiedBefore
+        ? Date.parse(filters.modifiedBefore)
+        : Number.POSITIVE_INFINITY
+      if (Number.isNaN(modifiedAfterMs) || Number.isNaN(modifiedBeforeMs)) {
+        return new Map()
+      }
+
+      const findCandidates = this.localIndexGateway.findSearchCandidates
+      if (!findCandidates) return null
+      const allCandidates = findCandidates.call(this.localIndexGateway, {
+        project: filters.project,
+      })
+      if (!allCandidates) return null
+      const candidates = Number.isFinite(modifiedAfterMs) || Number.isFinite(modifiedBeforeMs)
+        ? findCandidates.call(this.localIndexGateway, {
+            project: filters.project,
+            ...(Number.isFinite(modifiedAfterMs) ? { modifiedAfterMs } : {}),
+            ...(Number.isFinite(modifiedBeforeMs) ? { modifiedBeforeMs } : {}),
+          })
+        : allCandidates
+      if (!candidates) return null
+
+      const projectsRoot = path.resolve(this.getProjectsDir())
+      const projectRoot = path.resolve(projectsRoot, filters.project)
+      const projectRelative = path.relative(projectsRoot, projectRoot)
+      if (
+        projectRelative !== filters.project ||
+        projectRelative.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(projectRelative)
+      ) return null
+
+      const directoryBefore = await fs.stat(projectRoot)
+      if (!directoryBefore.isDirectory()) return null
+      const directoryEntries = await fs.readdir(projectRoot, { withFileTypes: true })
+      const canonicalPaths = new Set(directoryEntries
+        .filter(entry => entry.isFile() && entry.name.endsWith('.jsonl'))
+        .map(entry => path.resolve(projectRoot, entry.name)))
+
+      const validateCandidates = (
+        values: IndexedSessionSearchCandidate[],
+      ): Map<string, IndexedSessionSearchMetadata> | null => {
+        const validated = new Map<string, IndexedSessionSearchMetadata>()
+        for (const session of values) {
+          const transcriptPath = path.resolve(session.transcriptPath)
+          const expectedPath = path.resolve(
+            projectsRoot,
+            session.projectPath,
+            `${session.id}.jsonl`,
+          )
+          if (
+            !session.projectPath ||
+            path.basename(session.projectPath) !== session.projectPath ||
+            transcriptPath !== expectedPath ||
+            session.projectPath !== filters.project ||
+            !Number.isFinite(Date.parse(session.modifiedAt))
+          ) return null
+          validated.set(transcriptPath, {
+            title: session.title,
+            modifiedAt: session.modifiedAt,
+            workDir: session.workDir,
+            projectPath: session.projectPath,
+          })
+        }
+        return validated
+      }
+
+      const allValidated = validateCandidates(allCandidates)
+      const result = validateCandidates(candidates)
+      if (!allValidated || !result) return null
+      if (
+        canonicalPaths.size !== allValidated.size ||
+        [...canonicalPaths].some(transcriptPath => !allValidated.has(transcriptPath))
+      ) return null
+
+      const currentFilteredPaths = new Set<string>()
+      for (const [transcriptPath, metadata] of allValidated) {
+        const snapshot = await fs.stat(transcriptPath)
+        if (!snapshot.isFile()) return null
+        const sourceSnapshot = {
+          dev: snapshot.dev,
+          ino: snapshot.ino,
+          size: snapshot.size,
+          mtimeMs: snapshot.mtimeMs,
+          ctimeMs: snapshot.ctimeMs,
+        }
+        metadata.sourceSnapshot = sourceSnapshot
+        const selectedMetadata = result.get(transcriptPath)
+        if (selectedMetadata) selectedMetadata.sourceSnapshot = sourceSnapshot
+        if (Number.isFinite(modifiedAfterMs) || Number.isFinite(modifiedBeforeMs)) {
+          if (
+            snapshot.mtimeMs >= modifiedAfterMs &&
+            snapshot.mtimeMs <= modifiedBeforeMs
+          ) currentFilteredPaths.add(transcriptPath)
+        }
+      }
+      if (Number.isFinite(modifiedAfterMs) || Number.isFinite(modifiedBeforeMs)) {
+        if (
+          currentFilteredPaths.size !== result.size ||
+          [...currentFilteredPaths].some(transcriptPath => !result.has(transcriptPath))
+        ) return null
+      }
+
+      const directoryAfter = await fs.stat(projectRoot)
+      if (
+        directoryBefore.dev !== directoryAfter.dev ||
+        directoryBefore.ino !== directoryAfter.ino ||
+        directoryBefore.size !== directoryAfter.size ||
+        directoryBefore.mtimeMs !== directoryAfter.mtimeMs ||
+        directoryBefore.ctimeMs !== directoryAfter.ctimeMs
+      ) return null
+
+      const statusAfter = this.localIndexGateway.getPublicStatus()
+      if (
+        mutationEpoch !== getSharedSessionMutationState(this.localIndexGateway).epoch ||
+        statusAfter.state !== 'ready' ||
+        statusAfter.degradedSources !== 0 ||
+        statusAfter.discovered !== statusAfter.indexed ||
+        statusAfter.indexed !== statusBefore.indexed ||
+        statusAfter.lastUpdatedAt !== statusBefore.lastUpdatedAt
+      ) return null
+      return result
+    } catch {
+      this.markIndexReadFailure()
+      return null
+    }
+  }
+
+  private async appendJsonlEntry(filePath: string, entry: Record<string, unknown>): Promise<void> {
+    const line = JSON.stringify(entry) + '\n'
+    await fs.appendFile(filePath, line, 'utf-8')
+  }
+
+  private resolveWorkDirFromEntries(
+    entries: RawEntry[],
+    fallbackProjectDir?: string,
+  ): string | null {
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i]
+      if (entry.type === 'session-meta' && typeof (entry as Record<string, unknown>).workDir === 'string') {
+        return normalizeDriveRootPathForPlatform((entry as Record<string, unknown>).workDir as string)
+      }
+    }
+
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const cwd = entries[i]?.cwd
+      if (typeof cwd === 'string' && cwd.trim()) {
+        return normalizeDriveRootPathForPlatform(cwd)
+      }
+    }
+
+    return fallbackProjectDir ? this.desanitizePath(fallbackProjectDir) : null
+  }
+
+  private resolveRepositoryFromEntries(entries: RawEntry[]): PreparedSessionWorkspace['repository'] | undefined {
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const repository = (entries[i] as Record<string, unknown>)?.repository
+      if (repository && typeof repository === 'object') {
+        return repository as PreparedSessionWorkspace['repository']
+      }
+    }
+    return undefined
+  }
+
+  private resolvePermissionModeFromEntries(entries: RawEntry[]): string | undefined {
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i]
+      if (entry?.type !== 'session-meta') continue
+      const permissionMode = entry.permissionMode
+      if (
+        typeof permissionMode === 'string' &&
+        VALID_SESSION_PERMISSION_MODES.has(permissionMode)
+      ) {
+        return permissionMode
+      }
+    }
+    return undefined
+  }
+
+  private resolveTranscriptModifiedAtFromEntries(entries: RawEntry[]): string | null {
+    let modifiedAt: string | null = null
+    for (const entry of entries) {
+      if (
+        !entry.isMeta &&
+        (entry.type === 'user' || entry.type === 'assistant') &&
+        entry.message?.role
+      ) {
+        modifiedAt = this.latestTimestamp(modifiedAt, entry.timestamp)
+      }
+    }
+    return modifiedAt
+  }
+
+  private resolveRuntimeContextMetadataFromEntries(entries: RawEntry[]): ProviderContextWindowHint {
+    let runtimeProviderId: string | null | undefined
+    let runtimeModelId: string | undefined
+
+    for (const entry of entries) {
+      if (entry.type !== 'session-meta') continue
+      const record = entry as Record<string, unknown>
+      if (record.runtimeProviderId === null || typeof record.runtimeProviderId === 'string') {
+        runtimeProviderId = record.runtimeProviderId as string | null
+      }
+      if (typeof record.runtimeModelId === 'string') {
+        runtimeModelId = record.runtimeModelId
+      }
+    }
+
+    return {
+      ...(runtimeProviderId !== undefined ? { runtimeProviderId } : {}),
+      ...(runtimeModelId ? { runtimeModelId } : {}),
+    }
+  }
+
+  private applyRuntimeContextMetadata(
+    hint: ProviderContextWindowHint,
+    entry: RawEntry,
+  ): ProviderContextWindowHint {
+    if (entry.type !== 'session-meta') return hint
+
+    const record = entry as Record<string, unknown>
+    const nextHint: ProviderContextWindowHint = { ...hint }
+    if (record.runtimeProviderId === null || typeof record.runtimeProviderId === 'string') {
+      nextHint.runtimeProviderId = record.runtimeProviderId as string | null
+    }
+    if (typeof record.runtimeModelId === 'string') {
+      nextHint.runtimeModelId = record.runtimeModelId
+    }
+    return nextHint
+  }
+
+  private resolveWorktreeSessionFromEntries(entries: RawEntry[]): PersistedWorktreeSession | null | undefined {
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i]
+      if (entry?.type !== 'worktree-state') continue
+
+      const worktreeSession = entry.worktreeSession
+      if (worktreeSession === null) return null
+      if (
+        worktreeSession &&
+        typeof worktreeSession === 'object' &&
+        typeof worktreeSession.worktreePath === 'string' &&
+        typeof worktreeSession.worktreeName === 'string'
+      ) {
+        return worktreeSession
+      }
+    }
+    return undefined
+  }
+
+  private async resolveProjectRootFromEntries(
+    entries: RawEntry[],
+    workDir: string | null,
+    fallbackProjectDir?: string,
+  ): Promise<string | null> {
+    const worktreeSession = this.resolveWorktreeSessionFromEntries(entries)
+    const repository = this.resolveRepositoryFromEntries(entries)
+    return this.resolveProjectRootFromSessionMetadata({
+      worktreeSession,
+      repository,
+      workDir,
+      fallbackProjectDir,
+    })
+  }
+
+  private async resolveProjectRootFromSessionMetadata({
+    worktreeSession,
+    repository,
+    workDir,
+    fallbackProjectDir,
+  }: {
+    worktreeSession?: PersistedWorktreeSession | null
+    repository?: PreparedSessionWorkspace['repository']
+    workDir: string | null
+    fallbackProjectDir?: string
+  }): Promise<string | null> {
+    const candidate = worktreeSession?.originalCwd ||
+      repository?.repoRoot ||
+      workDir ||
+      (fallbackProjectDir ? this.desanitizePath(fallbackProjectDir) : null)
+
+    if (!candidate) return null
+
+    const canonicalCandidate = await this.canonicalizeProjectPath(candidate)
+    const gitRoot = findCanonicalGitRoot(canonicalCandidate)
+    if (gitRoot) return gitRoot
+
+    if (workDir) {
+      const marker = `${path.sep}.claude${path.sep}worktrees${path.sep}`
+      const markerIndex = canonicalCandidate.indexOf(marker)
+      if (markerIndex > 0) return canonicalCandidate.slice(0, markerIndex)
+    }
+
+    return canonicalCandidate
+  }
+
+  private async canonicalizeProjectPath(projectPath: string): Promise<string> {
+    try {
+      return normalizeDriveRootPathForPlatform(await fs.realpath(projectPath)).normalize('NFC')
+    } catch {
+      return projectPath.normalize('NFC')
+    }
+  }
+
+  private countTranscriptMessages(entries: RawEntry[]): number {
+    return entries.filter((entry) =>
+      !entry.isMeta &&
+      !!entry.message?.role &&
+      (entry.type === 'user' || entry.type === 'assistant' || entry.type === 'system')
+    ).length
+  }
+
+  // --------------------------------------------------------------------------
+  // Entry → MessageEntry conversion
+  // --------------------------------------------------------------------------
+
+  private entryToMessage(
+    entry: RawEntry,
+    parentToolUseId?: string,
+  ): MessageEntry | null {
+    const msg = entry.message
+    if (!msg || !msg.role) return null
+
+    // Determine our normalized type
+    let type: MessageEntry['type']
+    const role = msg.role
+
+    if (role === 'user') {
+      // Check if the content is a tool_result array
+      if (Array.isArray(msg.content)) {
+        const hasToolResult = msg.content.some(
+          (block: Record<string, unknown>) => block.type === 'tool_result'
+        )
+        if (hasToolResult) {
+          type = 'tool_result'
+        } else {
+          type = 'user'
+        }
+      } else {
+        type = 'user'
+      }
+    } else if (role === 'assistant') {
+      // Check if the content contains tool_use blocks
+      if (Array.isArray(msg.content)) {
+        const hasToolUse = msg.content.some(
+          (block: Record<string, unknown>) => block.type === 'tool_use'
+        )
+        type = hasToolUse ? 'tool_use' : 'assistant'
+      } else {
+        type = 'assistant'
+      }
+    } else {
+      type = 'system'
+    }
+
+    const usage = normalizeMessageUsage(msg.usage)
+
+    return {
+      id: entry.uuid || crypto.randomUUID(),
+      type,
+      content: msg.content,
+      ...(entry.toolUseResult !== undefined ? { toolUseResult: entry.toolUseResult } : {}),
+      timestamp: entry.timestamp || new Date().toISOString(),
+      model: msg.model,
+      ...(usage ? { usage } : {}),
+      parentUuid: entry.parentUuid ?? undefined,
+      parentToolUseId,
+      isSidechain: entry.isSidechain,
+    }
+  }
+
+  private extractTextBlocks(content: unknown): string[] {
+    if (typeof content === 'string') return [content]
+    if (!Array.isArray(content)) return []
+
+    return content
+      .flatMap((block) => {
+        if (!block || typeof block !== 'object') return []
+        const record = block as Record<string, unknown>
+        return record.type === 'text' && typeof record.text === 'string'
+          ? [record.text]
+          : []
+      })
+      .map((text) => text.trim())
+      .filter(Boolean)
+  }
+
+  private isSyntheticUserInterruption(content: unknown): boolean {
+    const textBlocks = this.extractTextBlocks(content)
+    return (
+      textBlocks.length > 0 &&
+      textBlocks.every((text) => USER_INTERRUPTION_TEXTS.has(text))
+    )
+  }
+
+  private isSyntheticNoResponseAssistant(content: unknown): boolean {
+    const textBlocks = this.extractTextBlocks(content)
+    return (
+      textBlocks.length > 0 &&
+      textBlocks.every((text) => text === NO_RESPONSE_REQUESTED_TEXT)
+    )
+  }
+
+  private isToolResultContent(content: unknown): boolean {
+    return (
+      Array.isArray(content) &&
+      content.some((block) =>
+        block &&
+        typeof block === 'object' &&
+        (block as Record<string, unknown>).type === 'tool_result'
+      )
+    )
+  }
+
+  private isTaskNotificationContent(content: unknown): boolean {
+    const textBlocks = this.extractTextBlocks(content)
+    return (
+      textBlocks.length > 0 &&
+      textBlocks.every((text) => this.extractTaskNotificationXml(text) !== null)
+    )
+  }
+
+  private extractTaskNotificationXml(text: string): string | null {
+    const trimmed = text.trim()
+    if (TASK_NOTIFICATION_RE.test(trimmed)) return trimmed
+    return trimmed.match(TASK_NOTIFICATION_BLOCK_RE)?.[0] ?? null
+  }
+
+  private decodeXmlText(text: string): string {
+    return text
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&amp;/g, '&')
+  }
+
+  private readXmlTag(xml: string, tag: string): string | undefined {
+    const match = xml.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i'))
+    return match?.[1] ? this.decodeXmlText(match[1].trim()) : undefined
+  }
+
+  private parseTaskNotificationContent(
+    content: unknown,
+    timestamp?: string,
+  ): SessionTaskNotification | null {
+    const xml = this.extractTextBlocks(content)
+      .map((text) => this.extractTaskNotificationXml(text))
+      .find((value): value is string => value !== null)
+    if (!xml) return null
+
+    const toolUseId = this.readXmlTag(xml, 'tool-use-id')
+    const status = this.readXmlTag(xml, 'status')
+    if (
+      !toolUseId ||
+      (status !== 'completed' && status !== 'failed' && status !== 'stopped')
+    ) {
+      return null
+    }
+
+    const taskId = this.readXmlTag(xml, 'task-id') || toolUseId
+    const summary = this.readXmlTag(xml, 'summary')
+    const result = this.readXmlTag(xml, 'result')
+    const outputFile = this.readXmlTag(xml, 'output-file')
+    return {
+      taskId,
+      toolUseId,
+      status,
+      ...(summary ? { summary } : {}),
+      ...(result ? { result } : {}),
+      ...(outputFile ? { outputFile } : {}),
+      ...(timestamp ? { timestamp } : {}),
+    }
+  }
+
+  private parsePersistedTaskNotification(
+    value: unknown,
+    timestamp?: string,
+  ): SessionTaskNotification | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    const notification = value as Record<string, unknown>
+    const toolUseId = typeof notification.toolUseId === 'string'
+      ? notification.toolUseId
+      : null
+    const status = notification.status
+    if (
+      !toolUseId ||
+      (status !== 'completed' && status !== 'failed' && status !== 'stopped')
+    ) {
+      return null
+    }
+
+    const optionalString = (key: string) =>
+      typeof notification[key] === 'string' && notification[key]
+        ? notification[key] as string
+        : undefined
+    return {
+      taskId: optionalString('taskId') ?? toolUseId,
+      toolUseId,
+      status,
+      ...(optionalString('summary') ? { summary: optionalString('summary') } : {}),
+      ...(optionalString('result') ? { result: optionalString('result') } : {}),
+      ...(optionalString('outputFile') ? { outputFile: optionalString('outputFile') } : {}),
+      ...(timestamp ? { timestamp } : {}),
+    }
+  }
+
+  private shouldHideTranscriptEntry(entry: RawEntry): boolean {
+    const role = entry.message?.role
+    const content = entry.message?.content
+
+    if (role === 'user') {
+      return (
+        shouldHideCommandMetadataContent(content) ||
+        this.isSyntheticUserInterruption(content) ||
+        this.isTaskNotificationContent(content)
+      )
+    }
+
+    if (role === 'assistant') {
+      return this.isSyntheticNoResponseAssistant(content)
+    }
+
+    return false
+  }
+
+  private isVisibleTranscriptMessageEntry(entry: RawEntry): boolean {
+    if (!entry.message?.role || entry.isMeta) return false
+    if (
+      entry.type !== 'user' &&
+      entry.type !== 'assistant' &&
+      entry.type !== 'system'
+    ) {
+      return false
+    }
+    return !this.shouldHideTranscriptEntry(entry)
+  }
+
+  private isGoalLocalCommandOutput(output: string): boolean {
+    const trimmed = output.trim()
+    return (
+      trimmed.startsWith('Goal set:') ||
+      trimmed.startsWith('Goal continuing:') ||
+      trimmed.startsWith('Goal cleared:') ||
+      trimmed === 'Goal cleared.' ||
+      trimmed === 'Goal marked complete.' ||
+      trimmed === 'No active goal.'
+    )
+  }
+
+  private isGoalLocalCommandEntry(entry: RawEntry): boolean {
+    if (
+      entry.type !== 'system' ||
+      entry.subtype !== 'local_command' ||
+      typeof entry.content !== 'string'
+    ) {
+      return false
+    }
+
+    const commandName = this.readXmlTag(entry.content, 'command-name')?.replace(/^\//, '')
+    if (commandName) return commandName === 'goal'
+
+    const output =
+      this.readXmlTag(entry.content, 'local-command-stdout') ??
+      this.readXmlTag(entry.content, 'local-command-stderr')
+    return output ? this.isGoalLocalCommandOutput(output) : false
+  }
+
+  private goalLocalCommandEntryToMessage(entry: RawEntry): MessageEntry | null {
+    if (!this.isGoalLocalCommandEntry(entry)) return null
+    return {
+      id: entry.uuid || crypto.randomUUID(),
+      type: 'system',
+      content: entry.content,
+      timestamp: entry.timestamp || new Date().toISOString(),
+      parentUuid: entry.parentUuid ?? undefined,
+      isSidechain: entry.isSidechain,
+    }
+  }
+
+  private extractAgentToolUseId(entry: RawEntry): string | undefined {
+    const content = entry.message?.content
+    if (!Array.isArray(content)) return undefined
+
+    for (const block of content as Array<Record<string, unknown>>) {
+      if (
+        block.type === 'tool_use' &&
+        block.name === 'Agent' &&
+        typeof block.id === 'string'
+      ) {
+        return block.id
+      }
+    }
+
+    return undefined
+  }
+
+  private extractAgentToolUseIdsFromMessage(message: MessageEntry): string[] {
+    if (message.type !== 'tool_use' || !Array.isArray(message.content)) {
+      return []
+    }
+
+    return (message.content as ContentBlock[])
+      .filter((block) => block.type === 'tool_use' && block.name === 'Agent')
+      .flatMap((block) => (typeof block.id === 'string' ? [block.id] : []))
+  }
+
+  private extractTextFromContent(content: unknown): string {
+    if (typeof content === 'string') return content
+    if (!Array.isArray(content)) return ''
+
+    return (content as ContentBlock[])
+      .flatMap((block) => (typeof block.text === 'string' ? [block.text] : []))
+      .join('\n')
+  }
+
+  private extractAgentIdFromResultText(text: string): string | undefined {
+    const match = text.match(/(?:^|\n)\s*agentId:\s*([A-Za-z0-9_-]+)/)
+    return match?.[1]
+  }
+
+  private extractAgentResultLinks(messages: MessageEntry[]): Map<string, string> {
+    const agentToolUseIds = new Set(
+      messages.flatMap((message) => this.extractAgentToolUseIdsFromMessage(message)),
+    )
+    const resultLinks = new Map<string, string>()
+
+    for (const message of messages) {
+      if (message.type !== 'tool_result' || !Array.isArray(message.content)) {
+        continue
+      }
+
+      for (const block of message.content as ContentBlock[]) {
+        if (block.type !== 'tool_result' || typeof block.tool_use_id !== 'string') {
+          continue
+        }
+        if (!agentToolUseIds.has(block.tool_use_id)) {
+          continue
+        }
+
+        const agentId = this.extractAgentIdFromResultText(
+          this.extractTextFromContent(block.content),
+        )
+        if (agentId) {
+          resultLinks.set(block.tool_use_id, agentId)
+        }
+      }
+    }
+
+    return resultLinks
+  }
+
+  private namespaceSubagentContentIds(content: unknown, namespace: string): unknown {
+    if (!Array.isArray(content)) return content
+
+    return (content as ContentBlock[]).map((block) => {
+      if (!block || typeof block !== 'object') return block
+      if (block.type === 'tool_use' && typeof block.id === 'string') {
+        return { ...block, id: `${namespace}/${block.id}` }
+      }
+      if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+        return { ...block, tool_use_id: `${namespace}/${block.tool_use_id}` }
+      }
+      return block
+    })
+  }
+
+  private subagentTranscriptPath(
+    projectDir: string,
+    sessionId: string,
+    agentId: string,
+  ): string {
+    const normalizedAgentId = agentId.startsWith('agent-') ? agentId : `agent-${agentId}`
+    return path.join(
+      this.getProjectsDir(),
+      projectDir,
+      sessionId,
+      'subagents',
+      `${normalizedAgentId}.jsonl`,
+    )
+  }
+
+  private async loadSubagentToolMessages(
+    projectDir: string,
+    sessionId: string,
+    parentToolUseId: string,
+    agentId: string,
+  ): Promise<MessageEntry[]> {
+    const filePath = this.subagentTranscriptPath(projectDir, sessionId, agentId)
+    const entries = await this.readJsonlFile(filePath)
+    const namespace = `${parentToolUseId}/${agentId}`
+    const messages: MessageEntry[] = []
+
+    for (const entry of entries) {
+      if (!entry.message?.role || entry.isMeta) continue
+      if (this.shouldHideTranscriptEntry(entry)) continue
+      if (entry.type !== 'user' && entry.type !== 'assistant' && entry.type !== 'system') {
+        continue
+      }
+
+      const message = this.entryToMessage(
+        {
+          ...entry,
+          message: {
+            ...entry.message,
+            content: this.namespaceSubagentContentIds(entry.message.content, namespace),
+          },
+        },
+        parentToolUseId,
+      )
+      if (message && (message.type === 'tool_use' || message.type === 'tool_result')) {
+        messages.push(message)
+      }
+    }
+
+    return messages
+  }
+
+  private async appendSubagentToolMessages(
+    projectDir: string,
+    sessionId: string,
+    messages: MessageEntry[],
+  ): Promise<MessageEntry[]> {
+    const resultLinks = this.extractAgentResultLinks(messages)
+    if (resultLinks.size === 0) {
+      return messages
+    }
+
+    const childMessages = await Promise.all(
+      [...resultLinks.entries()].map(([parentToolUseId, agentId]) =>
+        this.loadSubagentToolMessages(projectDir, sessionId, parentToolUseId, agentId),
+      ),
+    )
+    return [...messages, ...childMessages.flat()]
+  }
+
+  private resolveParentToolUseId(
+    entry: RawEntry,
+    entriesByUuid: Map<string, RawEntry>,
+    cache: Map<string, string | undefined>,
+  ): string | undefined {
+    if (
+      typeof entry.parent_tool_use_id === 'string' &&
+      entry.parent_tool_use_id.length > 0
+    ) {
+      return entry.parent_tool_use_id
+    }
+
+    if (entry.isSidechain !== true) {
+      return undefined
+    }
+
+    const cacheKey = entry.uuid
+    if (cacheKey && cache.has(cacheKey)) {
+      return cache.get(cacheKey)
+    }
+
+    let resolved: string | undefined
+    let currentParentUuid =
+      typeof entry.parentUuid === 'string' ? entry.parentUuid : undefined
+    const visited = new Set<string>()
+
+    while (currentParentUuid && !visited.has(currentParentUuid)) {
+      visited.add(currentParentUuid)
+      const parentEntry = entriesByUuid.get(currentParentUuid)
+      if (!parentEntry) break
+
+      const directAgentToolUseId = this.extractAgentToolUseId(parentEntry)
+      if (directAgentToolUseId) {
+        resolved = directAgentToolUseId
+        break
+      }
+
+      if (parentEntry.uuid && cache.has(parentEntry.uuid)) {
+        resolved = cache.get(parentEntry.uuid)
+        break
+      }
+
+      currentParentUuid =
+        typeof parentEntry.parentUuid === 'string'
+          ? parentEntry.parentUuid
+          : undefined
+    }
+
+    if (cacheKey) {
+      cache.set(cacheKey, resolved)
+    }
+
+    return resolved
+  }
+
+  // --------------------------------------------------------------------------
+  // Title extraction
+  // --------------------------------------------------------------------------
+
+  private extractTitle(entries: RawEntry[]): string {
+    // 1. Look for custom title entry (appended by renameSession) — highest priority
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const e = entries[i]!
+      if (e.type === 'custom-title' && e.customTitle) {
+        return e.customTitle
+      }
+    }
+
+    // 2. Goal sessions should keep the original objective as the stable title.
+    for (const e of entries) {
+      const goalTitle = extractGoalCreationTitle(e)
+      if (goalTitle) return goalTitle
+    }
+
+    // 3. Look for AI-generated title (written by titleService)
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const e = entries[i]!
+      if (e.type === 'ai-title' && e.aiTitle) {
+        const title = cleanSessionTitleSource(String(e.aiTitle))
+        if (title) return title
+      }
+    }
+
+    // 4. Look for first non-meta user message as title
+    for (const e of entries) {
+      if (e.type === 'user' && !e.isMeta && e.message?.role === 'user') {
+        const title = extractTranscriptUserTitle(e.message.content)
+        if (title) return title
+      }
+    }
+
+    return 'Untitled Session'
+  }
+
+  // --------------------------------------------------------------------------
+  // Session file discovery
+  // --------------------------------------------------------------------------
+
+  /**
+   * Find all .jsonl session files across all project directories.
+   * Returns an array of { filePath, projectDir, sessionId }.
+   */
+  private async discoverSessionFiles(projectFilter?: string, scope = this.getConfigDir()): Promise<
+    Array<{ filePath: string; projectDir: string; sessionId: string }>
+  > {
+    const projectsDir = path.join(scope, 'projects')
+    let projectDirs: string[]
+
+    try {
+      projectDirs = await fs.readdir(projectsDir)
+    } catch {
+      return []
+    }
+
+    // Optionally filter to a specific project
+    if (projectFilter) {
+      const sanitized = this.sanitizePath(normalizeDriveRootPathForPlatform(projectFilter))
+      projectDirs = projectDirs.filter((d) => d === sanitized)
+    }
+
+    const results: Array<{ filePath: string; projectDir: string; sessionId: string }> = []
+
+    for (const dir of projectDirs) {
+      const dirPath = path.join(projectsDir, dir)
+
+      // Ensure it's a directory
+      try {
+        const stat = await fs.stat(dirPath)
+        if (!stat.isDirectory()) continue
+      } catch {
+        continue
+      }
+
+      let files: string[]
+      try {
+        files = await fs.readdir(dirPath)
+      } catch {
+        continue
+      }
+
+      for (const file of files) {
+        if (!file.endsWith('.jsonl')) continue
+        const sessionId = file.replace('.jsonl', '')
+        results.push({
+          filePath: path.join(dirPath, file),
+          projectDir: dir,
+          sessionId,
+        })
+      }
+    }
+
+    return results
+  }
+
+  /**
+   * Convert a sanitized directory name back to the original absolute path.
+   * Reverses sanitizePath(): `-Users-nanmi-workspace` → `/Users/nanmi/workspace`.
+   */
+  desanitizePath(sanitized: string): string {
+    // The sanitized form replaces all non-alphanumeric characters with '-'.
+    // This fallback is necessarily lossy, but old Windows transcripts without
+    // session-meta still need the drive separator restored well enough to resume.
+    const windowsDrivePath = sanitized.match(/^([a-zA-Z])--(.+)$/)
+    if (windowsDrivePath) {
+      return `${windowsDrivePath[1]}:${path.win32.sep}${windowsDrivePath[2].replace(/-/g, path.win32.sep)}`
+    }
+
+    const windowsDriveRoot = sanitized.match(/^([a-zA-Z])--$/)
+    if (windowsDriveRoot) {
+      return `${windowsDriveRoot[1]}:${path.win32.sep}`
+    }
+
+    // On POSIX the original path starts with '/', so the sanitized form starts with '-'.
+    // UNC-style Windows paths also recover to a leading double separator on Windows.
+    return sanitized.replace(/-/g, path.sep)
+  }
+
+  /**
+   * Find the .jsonl file for a given session ID.
+   * Searches across all project directories since sessions may belong to any project.
+   */
+  private async validateIndexedTranscriptPath(
+    filePath: string,
+    projectDir: string,
+    sessionId: string,
+    projectsRoot: string,
+  ): Promise<Stats> {
+    const invalid = (): Error & { code: string } => Object.assign(
+      new Error('Indexed transcript path failed scope validation'),
+      { code: 'LOCAL_INDEX_PATH_INVALID' },
+    )
+    if (
+      !this.isValidSessionId(sessionId) ||
+      !projectDir ||
+      path.basename(projectDir) !== projectDir ||
+      path.basename(filePath) !== `${sessionId}.jsonl` ||
+      path.basename(path.dirname(filePath)) !== projectDir
+    ) {
+      throw invalid()
+    }
+
+    const projectsDir = this.getProjectsDir()
+    const expectedPath = path.join(projectsDir, projectDir, `${sessionId}.jsonl`)
+    const indexedRealPath = await fs.realpath(filePath)
+    const expectedRealPath = path.resolve(expectedPath) === path.resolve(filePath)
+      ? indexedRealPath
+      : await fs.realpath(expectedPath)
+    const relativePath = path.relative(projectsRoot, indexedRealPath)
+    if (
+      expectedRealPath !== indexedRealPath ||
+      relativePath === '..' ||
+      relativePath.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relativePath)
+    ) {
+      throw invalid()
+    }
+
+    const stat = await fs.stat(indexedRealPath)
+    if (!stat.isFile()) throw invalid()
+    return stat
+  }
+
+  private async findSessionFiles(
+    sessionId: string
+  ): Promise<Array<{ filePath: string; projectDir: string }>> {
+    this.syncSharedMutationEpoch()
+    if (!this.isValidSessionId(sessionId)) {
+      return []
+    }
+
+    const indexMode = this.getUsableIndexMode()
+    if (indexMode === 'on') {
+      const indexedMutationEpoch = getSharedSessionMutationState(this.localIndexGateway).epoch
+      try {
+        const indexedMatches = this.localIndexGateway.findSessionFiles(sessionId)
+        if (!this.indexStatusRemainsUsable()) {
+          this.markIndexReadFailure()
+        } else {
+          const projectsRoot = indexedMatches.length > 0
+            ? await fs.realpath(this.getProjectsDir())
+            : null
+          const hydratedMatches: Array<SessionFileMatch & { mtimeMs: number }> = []
+          let hydrationFailed = false
+          for (const match of indexedMatches) {
+            try {
+              const stat = await this.validateIndexedTranscriptPath(
+                match.filePath,
+                match.projectDir,
+                sessionId,
+                projectsRoot!,
+              )
+              hydratedMatches.push({ ...match, mtimeMs: stat.mtimeMs })
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+                hydrationFailed = true
+                break
+              }
+            }
+          }
+          if (
+            !hydrationFailed &&
+            hydratedMatches.length > 0 &&
+            indexedMutationEpoch === getSharedSessionMutationState(this.localIndexGateway).epoch
+          ) {
+            return hydratedMatches
+              .sort((a, b) => b.mtimeMs - a.mtimeMs || a.filePath.localeCompare(b.filePath))
+              .map(({ filePath, projectDir }) => ({ filePath, projectDir }))
+          }
+          if (hydrationFailed) this.markIndexReadFailure()
+        }
+      } catch {
+        this.markIndexReadFailure()
+      }
+    }
+
+    this.syncSharedMutationEpoch()
+    return this.findSessionFilesFromFiles(sessionId)
+  }
+
+  private async findSessionFilesFromFiles(
+    sessionId: string,
+  ): Promise<Array<{ filePath: string; projectDir: string }>> {
+
+    const projectsDir = this.getProjectsDir()
+    let projectDirs: string[]
+
+    try {
+      projectDirs = await fs.readdir(projectsDir)
+    } catch {
+      return []
+    }
+
+    const matches: Array<{ filePath: string; projectDir: string; mtimeMs: number }> = []
+    for (const dir of projectDirs) {
+      const filePath = path.join(projectsDir, dir, `${sessionId}.jsonl`)
+      try {
+        const stat = await fs.stat(filePath)
+        matches.push({ filePath, projectDir: dir, mtimeMs: stat.mtimeMs })
+      } catch {
+        continue
+      }
+    }
+
+    return matches
+      .sort((a, b) => b.mtimeMs - a.mtimeMs || a.filePath.localeCompare(b.filePath))
+      .map(({ filePath, projectDir }) => ({ filePath, projectDir }))
+  }
+
+  async findSessionFile(
+    sessionId: string
+  ): Promise<{ filePath: string; projectDir: string } | null> {
+    return (await this.findSessionFiles(sessionId))[0] ?? null
+  }
+
+  private isValidSessionId(id: string): boolean {
+    // UUID v4 format
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+  }
+
+  private formatCost(cost: number): string {
+    return `$${cost > 0.5 ? (Math.round(cost * 100) / 100).toFixed(2) : cost.toFixed(4)}`
+  }
+
+  private async getProviderContextWindowForSession(
+    sessionId: string,
+    model: string,
+    launchInfoOverride?: ProviderContextWindowHint | null,
+  ): Promise<number | undefined> {
+    const launchInfo = launchInfoOverride ?? await this.getSessionLaunchInfo(sessionId).catch(() => null)
+    const providerIds: string[] = []
+    const allowSavedProviderInference = launchInfo?.runtimeProviderId === undefined
+
+    if (typeof launchInfo?.runtimeProviderId === 'string') {
+      providerIds.push(launchInfo.runtimeProviderId)
+    } else if (launchInfo?.runtimeProviderId !== null) {
+      const { activeId } = await this.providerService.listProviders().catch(() => ({ activeId: null }))
+      if (activeId) providerIds.push(activeId)
+    }
+
+    // Provider env model keys — these are the configured model names that
+    // should be used as fallback matching keys when the transcript model name
+    // (from the API response) doesn't match the modelContextWindows keys.
+    // Third-party APIs may return model names with provider-specific suffixes
+    // (e.g. "LongCat-2.0-Preview-LongCatAI" instead of "LongCat-2.0-Preview").
+    const providerEnvModelKeys = [
+      'ANTHROPIC_MODEL',
+      'ANTHROPIC_DEFAULT_FABLE_MODEL',
+      'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+      'ANTHROPIC_DEFAULT_SONNET_MODEL',
+      'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    ] as const
+
+    for (const providerId of providerIds) {
+      const env = await this.providerService.getProviderRuntimeEnv(providerId).catch(() => null)
+      const rawContextWindows = env?.[MODEL_CONTEXT_WINDOWS_ENV_KEY] ?? null
+      // Step 1: Try matching the transcript model name directly (current behavior)
+      const contextWindow = getModelContextWindowFromEnvValue(
+        model,
+        rawContextWindows,
+      )
+      if (contextWindow !== undefined) {
+        if (contextWindow > MODEL_CONTEXT_WINDOW_DEFAULT && is1mContextDisabled()) {
+          return MODEL_CONTEXT_WINDOW_DEFAULT
+        }
+        return contextWindow
+      }
+
+      // Step 2: Prefer the model this session actually launched with. Some
+      // third-party APIs return provider-specific aliases, but Desktop persists
+      // the requested runtime model in session metadata.
+      if (launchInfo?.runtimeModelId) {
+        const runtimeModelWindow = getModelContextWindowFromEnvValue(
+          launchInfo.runtimeModelId,
+          rawContextWindows,
+        )
+        if (runtimeModelWindow !== undefined) {
+          if (runtimeModelWindow > MODEL_CONTEXT_WINDOW_DEFAULT && is1mContextDisabled()) {
+            return MODEL_CONTEXT_WINDOW_DEFAULT
+          }
+          return runtimeModelWindow
+        }
+      }
+
+      // Step 3: If transcript model name didn't match, try matching with
+      // the provider's configured model names as fallback keys.
+      // This handles the case where the API response returns a model name
+      // that differs from the user-configured model name (e.g. provider
+      // appends its own suffix like "-LongCatAI").
+      if (env && rawContextWindows) {
+        for (const envKey of providerEnvModelKeys) {
+          const configuredModel = env[envKey]
+          if (!configuredModel) continue
+          if (!providerModelLooksRelated(model, configuredModel)) continue
+          const fallbackWindow = getModelContextWindowFromEnvValue(
+            configuredModel,
+            rawContextWindows,
+          )
+          if (fallbackWindow !== undefined) {
+            if (fallbackWindow > MODEL_CONTEXT_WINDOW_DEFAULT && is1mContextDisabled()) {
+              return MODEL_CONTEXT_WINDOW_DEFAULT
+            }
+            return fallbackWindow
+          }
+        }
+      }
+    }
+
+    if (allowSavedProviderInference) {
+      return this.getUniqueSavedProviderContextWindow(model)
+    }
+
+    return undefined
+  }
+
+  private async getUniqueSavedProviderContextWindow(model: string): Promise<number | undefined> {
+    const { providers } = await this.providerService.listProviders().catch(() => ({ providers: [] }))
+    const matches: number[] = []
+    const providerEnvModelKeys = [
+      'ANTHROPIC_MODEL',
+      'ANTHROPIC_DEFAULT_FABLE_MODEL',
+      'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+      'ANTHROPIC_DEFAULT_SONNET_MODEL',
+      'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    ] as const
+
+    for (const provider of providers) {
+      const env = await this.providerService.getProviderRuntimeEnv(provider.id).catch(() => null)
+      const rawContextWindows = env?.[MODEL_CONTEXT_WINDOWS_ENV_KEY] ?? null
+      // Step 1: Try matching the transcript model name directly
+      const contextWindow = getModelContextWindowFromEnvValue(
+        model,
+        rawContextWindows,
+      )
+      if (contextWindow !== undefined) {
+        matches.push(contextWindow)
+        continue
+      }
+
+      // Step 2: Fallback to provider configured model names.
+      if (env && rawContextWindows) {
+        for (const envKey of providerEnvModelKeys) {
+          const configuredModel = env[envKey]
+          if (!configuredModel) continue
+          if (!providerModelLooksRelated(model, configuredModel)) continue
+          const fallbackWindow = getModelContextWindowFromEnvValue(
+            configuredModel,
+            rawContextWindows,
+          )
+          if (fallbackWindow !== undefined) {
+            matches.push(fallbackWindow)
+            break // One match per provider is enough
+          }
+        }
+      }
+    }
+
+    if (matches.length === 0) {
+      return undefined
+    }
+
+    const uniqueWindows = new Set(matches)
+    if (uniqueWindows.size !== 1) {
+      return undefined
+    }
+
+    const contextWindow = [...uniqueWindows][0]!
+    if (
+      contextWindow > MODEL_CONTEXT_WINDOW_DEFAULT &&
+      is1mContextDisabled()
+    ) {
+      return MODEL_CONTEXT_WINDOW_DEFAULT
+    }
+    return contextWindow
+  }
+
+  private async getTranscriptContextWindow(
+    sessionId: string,
+    model: string,
+    launchInfo?: ProviderContextWindowHint | null,
+  ): Promise<number> {
+    const providerContextWindow = await this.getProviderContextWindowForSession(
+      sessionId,
+      model,
+      launchInfo,
+    )
+    if (providerContextWindow !== undefined) {
+      return providerContextWindow
+    }
+
+    try {
+      return getContextWindowForModel(model)
+    } catch (err) {
+      if (
+        err instanceof Error &&
+        err.message.includes('Config accessed before allowed')
+      ) {
+        return MODEL_CONTEXT_WINDOW_DEFAULT
+      }
+      throw err
+    }
+  }
+
+  async getTranscriptMetadata(sessionId: string): Promise<TranscriptMetadataSnapshot | null> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) return null
+
+    const entries = await this.readJsonlFile(found.filePath)
+    const metadata: TranscriptMetadataSnapshot = {}
+
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i]!
+      if (!metadata.model && typeof entry.message?.model === 'string') {
+        metadata.model = entry.message.model
+      }
+      if (!metadata.cwd && typeof entry.cwd === 'string') {
+        metadata.cwd = entry.cwd
+      }
+      if (!metadata.version && typeof entry.version === 'string') {
+        metadata.version = entry.version
+      }
+      if (metadata.model && metadata.cwd && metadata.version) break
+    }
+
+    return metadata
+  }
+
+  private async buildTranscriptContextEstimate(
+    sessionId: string,
+    latest: {
+      model: string
+      inputTokens: number
+      outputTokens: number
+      cacheReadInputTokens: number
+      cacheCreationInputTokens: number
+    },
+    estimatedTokensFromMessages: number,
+    transcriptHasMediaInput: boolean,
+    launchInfo?: ProviderContextWindowHint | null,
+  ): Promise<TranscriptContextEstimate> {
+    const rawMaxTokens = await this.getTranscriptContextWindow(sessionId, latest.model, launchInfo)
+    const promptTokens = latest.inputTokens + latest.cacheReadInputTokens + latest.cacheCreationInputTokens
+    const estimatedTokens = estimatedTokensFromMessages || promptTokens
+    const contextBudget = calculateContextBudget({
+      estimatedTokens,
+      contextWindow: rawMaxTokens,
+      currentUsage: {
+        input_tokens: latest.inputTokens,
+        output_tokens: latest.outputTokens,
+        cache_read_input_tokens: latest.cacheReadInputTokens,
+        cache_creation_input_tokens: latest.cacheCreationInputTokens,
+      },
+      usageTrust: getProviderUsageTrust({
+        isFirstPartyAnthropic: isFirstPartyAnthropicBaseUrl(),
+      }),
+      hasMediaInput: transcriptHasMediaInput,
+    })
+    const totalTokens = contextBudget.usedTokens
+    const percentage = rawMaxTokens > 0 ? Math.round((totalTokens / rawMaxTokens) * 100) : 0
+    const usageCategories: TranscriptContextEstimate['categories'] = [
+      { name: 'Input tokens', tokens: latest.inputTokens, color: '#8f3217' },
+      { name: 'Cache read', tokens: latest.cacheReadInputTokens, color: '#0f5c8f' },
+      { name: 'Cache write', tokens: latest.cacheCreationInputTokens, color: '#7c3aed' },
+      { name: 'Output tokens', tokens: latest.outputTokens, color: '#2f7d32' },
+    ]
+    const contextCategories: TranscriptContextEstimate['categories'] =
+      contextBudget.ignoredUsageReason === 'low_trust_media_usage'
+        ? [{ name: 'Estimated context', tokens: totalTokens, color: '#8f3217' }]
+        : usageCategories
+    const categories: TranscriptContextEstimate['categories'] = [
+      ...contextCategories,
+      { name: 'Free space', tokens: Math.max(0, rawMaxTokens - totalTokens), color: '#a1a1aa', isDeferred: true },
+    ].filter((category) => category.tokens > 0)
+
+    const filledSquares = Math.max(0, Math.min(100, Math.round((totalTokens / Math.max(1, rawMaxTokens)) * 100)))
+    const gridRows = Array.from({ length: 10 }, (_, row) =>
+      Array.from({ length: 10 }, (_, col) => {
+        const index = row * 10 + col
+        const isFilled = index < filledSquares
+        return {
+          color: isFilled ? '#8f3217' : '#a1a1aa',
+          isFilled,
+          categoryName: isFilled ? 'Input context' : 'Free space',
+          tokens: Math.round(rawMaxTokens / 100),
+          percentage: 1,
+          squareFullness: isFilled ? 1 : 0,
+        }
+      }),
+    )
+
+    return {
+      categories,
+      totalTokens,
+      maxTokens: rawMaxTokens,
+      rawMaxTokens,
+      percentage,
+      gridRows,
+      model: latest.model,
+      memoryFiles: [],
+      mcpTools: [],
+      agents: [],
+      apiUsage: {
+        input_tokens: latest.inputTokens,
+        output_tokens: latest.outputTokens,
+        cache_creation_input_tokens: latest.cacheCreationInputTokens,
+        cache_read_input_tokens: latest.cacheReadInputTokens,
+      },
+    }
+  }
+
+  async getTranscriptContextEstimate(sessionId: string): Promise<TranscriptContextEstimate | null> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) return null
+
+    const entries = await this.readJsonlFile(found.filePath)
+    let latest: {
+      model: string
+      inputTokens: number
+      outputTokens: number
+      cacheReadInputTokens: number
+      cacheCreationInputTokens: number
+    } | null = null
+    let estimatedTokensFromMessages = 0
+    let transcriptHasMediaInput = false
+
+    for (const entry of entries) {
+      if (
+        entry.type === 'user' ||
+        entry.type === 'assistant' ||
+        entry.type === 'attachment'
+      ) {
+        estimatedTokensFromMessages += roughTokenCountEstimationForMessage(entry)
+        if (!transcriptHasMediaInput && hasMediaInput([entry])) {
+          transcriptHasMediaInput = true
+        }
+      }
+
+      const usage = entry.message?.usage
+      const model = entry.message?.model
+      if (!usage || typeof model !== 'string') continue
+
+      const inputTokens = typeof usage.input_tokens === 'number' ? usage.input_tokens : 0
+      const outputTokens = typeof usage.output_tokens === 'number' ? usage.output_tokens : 0
+      const cacheReadInputTokens = typeof usage.cache_read_input_tokens === 'number' ? usage.cache_read_input_tokens : 0
+      const cacheCreationInputTokens = typeof usage.cache_creation_input_tokens === 'number' ? usage.cache_creation_input_tokens : 0
+
+      latest = {
+        model,
+        inputTokens,
+        outputTokens,
+        cacheReadInputTokens,
+        cacheCreationInputTokens,
+      }
+    }
+
+    if (!latest) return null
+
+    return await this.buildTranscriptContextEstimate(
+      sessionId,
+      latest,
+      estimatedTokensFromMessages,
+      transcriptHasMediaInput,
+      this.resolveRuntimeContextMetadataFromEntries(entries),
+    )
+  }
+
+  async getTranscriptUsage(sessionId: string): Promise<TranscriptUsageSnapshot | null> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) return null
+
+    const entries = await this.readJsonlFile(found.filePath)
+    let currentRuntimeHint: ProviderContextWindowHint = {}
+    const models = new Map<string, TranscriptUsageSnapshot['models'][number]>()
+    let totalCostUSD = 0
+    let totalInputTokens = 0
+    let totalOutputTokens = 0
+    let totalCacheReadInputTokens = 0
+    let totalCacheCreationInputTokens = 0
+    let totalWebSearchRequests = 0
+    let hasUnknownModelCost = false
+    let firstUsageAt: number | null = null
+    let lastUsageAt: number | null = null
+
+    for (const entry of entries) {
+      currentRuntimeHint = this.applyRuntimeContextMetadata(currentRuntimeHint, entry)
+      const usage = entry.message?.usage
+      const model = entry.message?.model
+      if (!usage || typeof model !== 'string') continue
+
+      const inputTokens = typeof usage.input_tokens === 'number' ? usage.input_tokens : 0
+      const outputTokens = typeof usage.output_tokens === 'number' ? usage.output_tokens : 0
+      const cacheReadInputTokens = typeof usage.cache_read_input_tokens === 'number' ? usage.cache_read_input_tokens : 0
+      const cacheCreationInputTokens = typeof usage.cache_creation_input_tokens === 'number' ? usage.cache_creation_input_tokens : 0
+      const webSearchRequests = typeof usage.server_tool_use?.web_search_requests === 'number'
+        ? usage.server_tool_use.web_search_requests
+        : 0
+
+      if (
+        inputTokens === 0 &&
+        outputTokens === 0 &&
+        cacheReadInputTokens === 0 &&
+        cacheCreationInputTokens === 0 &&
+        webSearchRequests === 0
+      ) {
+        continue
+      }
+
+      const canonical = getCanonicalName(model)
+      if (!Object.prototype.hasOwnProperty.call(MODEL_COSTS, canonical)) {
+        hasUnknownModelCost = true
+      }
+
+      const costUsage = {
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        cache_read_input_tokens: cacheReadInputTokens,
+        cache_creation_input_tokens: cacheCreationInputTokens,
+        server_tool_use: { web_search_requests: webSearchRequests },
+        speed: usage.speed,
+      } as Parameters<typeof calculateUSDCost>[1]
+      const costUSD = calculateUSDCost(model, costUsage)
+
+      let modelUsage = models.get(model)
+      if (!modelUsage) {
+        modelUsage = {
+          model,
+          displayName: canonical,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadInputTokens: 0,
+          cacheCreationInputTokens: 0,
+          webSearchRequests: 0,
+          costUSD: 0,
+          costDisplay: '$0.0000',
+          contextWindow: await this.getTranscriptContextWindow(sessionId, model, currentRuntimeHint),
+          maxOutputTokens: getModelMaxOutputTokens(model).default,
+        }
+        models.set(model, modelUsage)
+      }
+
+      modelUsage.inputTokens += inputTokens
+      modelUsage.outputTokens += outputTokens
+      modelUsage.cacheReadInputTokens += cacheReadInputTokens
+      modelUsage.cacheCreationInputTokens += cacheCreationInputTokens
+      modelUsage.webSearchRequests += webSearchRequests
+      modelUsage.costUSD += costUSD
+      modelUsage.costDisplay = this.formatCost(modelUsage.costUSD)
+
+      totalCostUSD += costUSD
+      totalInputTokens += inputTokens
+      totalOutputTokens += outputTokens
+      totalCacheReadInputTokens += cacheReadInputTokens
+      totalCacheCreationInputTokens += cacheCreationInputTokens
+      totalWebSearchRequests += webSearchRequests
+
+      if (entry.timestamp) {
+        const time = Date.parse(entry.timestamp)
+        if (!Number.isNaN(time)) {
+          firstUsageAt = firstUsageAt === null ? time : Math.min(firstUsageAt, time)
+          lastUsageAt = lastUsageAt === null ? time : Math.max(lastUsageAt, time)
+        }
+      }
+    }
+
+    if (models.size === 0) return null
+
+    return {
+      source: 'transcript',
+      totalCostUSD,
+      costDisplay: this.formatCost(totalCostUSD),
+      hasUnknownModelCost,
+      totalAPIDuration: 0,
+      totalDuration:
+        firstUsageAt !== null && lastUsageAt !== null
+          ? Math.max(0, Math.round((lastUsageAt - firstUsageAt) / 1000))
+          : 0,
+      totalLinesAdded: 0,
+      totalLinesRemoved: 0,
+      totalInputTokens,
+      totalOutputTokens,
+      totalCacheReadInputTokens,
+      totalCacheCreationInputTokens,
+      totalWebSearchRequests,
+      models: Array.from(models.values()),
+    }
+  }
+
+  async getInspectionTranscriptSnapshot(sessionId: string): Promise<SessionInspectionTranscriptSnapshot | null> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) return null
+
+    let latestWorkDir: string | null = null
+    let latestCwd: string | null = null
+    let repository: PreparedSessionWorkspace['repository'] | undefined
+    let worktreeSession: PersistedWorktreeSession | null | undefined
+    let permissionMode: string | undefined
+    let runtimeProviderId: string | null | undefined
+    let runtimeModelId: string | undefined
+    let effortLevel: string | undefined
+    let customTitle: string | null = null
+    let transcriptMessageCount = 0
+    const metadata: TranscriptMetadataSnapshot = {}
+
+    const models = new Map<string, TranscriptUsageSnapshot['models'][number]>()
+    let totalCostUSD = 0
+    let totalInputTokens = 0
+    let totalOutputTokens = 0
+    let totalCacheReadInputTokens = 0
+    let totalCacheCreationInputTokens = 0
+    let totalWebSearchRequests = 0
+    let hasUnknownModelCost = false
+    let firstUsageAt: number | null = null
+    let lastUsageAt: number | null = null
+
+    let latestContextUsage: {
+      model: string
+      inputTokens: number
+      outputTokens: number
+      cacheReadInputTokens: number
+      cacheCreationInputTokens: number
+    } | null = null
+    let estimatedTokensFromMessages = 0
+    let transcriptHasMediaInput = false
+
+    await this.streamJsonlFile(found.filePath, (entry) => {
+      if (typeof entry.message?.model === 'string') {
+        metadata.model = entry.message.model
+      }
+      if (typeof entry.cwd === 'string') {
+        metadata.cwd = entry.cwd
+        latestCwd = normalizeDriveRootPathForPlatform(entry.cwd)
+      }
+      if (typeof entry.version === 'string') {
+        metadata.version = entry.version
+      }
+
+      if (entry.type === 'session-meta') {
+        const record = entry as Record<string, unknown>
+        if (typeof record.workDir === 'string') {
+          latestWorkDir = normalizeDriveRootPathForPlatform(record.workDir)
+        }
+        if (
+          typeof entry.permissionMode === 'string' &&
+          VALID_SESSION_PERMISSION_MODES.has(entry.permissionMode)
+        ) {
+          permissionMode = entry.permissionMode
+        }
+        if (record.runtimeProviderId === null || typeof record.runtimeProviderId === 'string') {
+          runtimeProviderId = record.runtimeProviderId as string | null
+        }
+        if (typeof record.runtimeModelId === 'string') {
+          runtimeModelId = record.runtimeModelId
+        }
+        if (
+          typeof record.effortLevel === 'string' &&
+          VALID_SESSION_EFFORT_LEVELS.has(record.effortLevel)
+        ) {
+          effortLevel = record.effortLevel
+        }
+      }
+
+      const candidateRepository = (entry as Record<string, unknown>)?.repository
+      if (candidateRepository && typeof candidateRepository === 'object') {
+        repository = candidateRepository as PreparedSessionWorkspace['repository']
+      }
+
+      if (entry.type === 'worktree-state') {
+        if (entry.worktreeSession === null) {
+          worktreeSession = null
+        } else if (
+          entry.worktreeSession &&
+          typeof entry.worktreeSession === 'object' &&
+          typeof entry.worktreeSession.worktreePath === 'string' &&
+          typeof entry.worktreeSession.worktreeName === 'string'
+        ) {
+          worktreeSession = entry.worktreeSession
+        }
+      }
+
+      if (entry.type === 'custom-title' && typeof entry.customTitle === 'string') {
+        customTitle = entry.customTitle
+      }
+
+      if (
+        !entry.isMeta &&
+        !!entry.message?.role &&
+        (entry.type === 'user' || entry.type === 'assistant' || entry.type === 'system')
+      ) {
+        transcriptMessageCount += 1
+      }
+
+      if (
+        entry.type === 'user' ||
+        entry.type === 'assistant' ||
+        entry.type === 'attachment'
+      ) {
+        estimatedTokensFromMessages += roughTokenCountEstimationForMessage(entry)
+        if (!transcriptHasMediaInput && hasMediaInput([entry])) {
+          transcriptHasMediaInput = true
+        }
+      }
+
+      const usage = entry.message?.usage
+      const model = entry.message?.model
+      if (!usage || typeof model !== 'string') return
+
+      const inputTokens = typeof usage.input_tokens === 'number' ? usage.input_tokens : 0
+      const outputTokens = typeof usage.output_tokens === 'number' ? usage.output_tokens : 0
+      const cacheReadInputTokens = typeof usage.cache_read_input_tokens === 'number' ? usage.cache_read_input_tokens : 0
+      const cacheCreationInputTokens = typeof usage.cache_creation_input_tokens === 'number' ? usage.cache_creation_input_tokens : 0
+      const webSearchRequests = typeof usage.server_tool_use?.web_search_requests === 'number'
+        ? usage.server_tool_use.web_search_requests
+        : 0
+
+      latestContextUsage = {
+        model,
+        inputTokens,
+        outputTokens,
+        cacheReadInputTokens,
+        cacheCreationInputTokens,
+      }
+
+      if (
+        inputTokens === 0 &&
+        outputTokens === 0 &&
+        cacheReadInputTokens === 0 &&
+        cacheCreationInputTokens === 0 &&
+        webSearchRequests === 0
+      ) {
+        return
+      }
+
+      const canonical = getCanonicalName(model)
+      if (!Object.prototype.hasOwnProperty.call(MODEL_COSTS, canonical)) {
+        hasUnknownModelCost = true
+      }
+
+      const costUsage = {
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        cache_read_input_tokens: cacheReadInputTokens,
+        cache_creation_input_tokens: cacheCreationInputTokens,
+        server_tool_use: { web_search_requests: webSearchRequests },
+        speed: usage.speed,
+      } as Parameters<typeof calculateUSDCost>[1]
+      const costUSD = calculateUSDCost(model, costUsage)
+
+      let modelUsage = models.get(model)
+      if (!modelUsage) {
+        modelUsage = {
+          model,
+          displayName: canonical,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadInputTokens: 0,
+          cacheCreationInputTokens: 0,
+          webSearchRequests: 0,
+          costUSD: 0,
+          costDisplay: '$0.0000',
+          contextWindow: 0,
+          maxOutputTokens: getModelMaxOutputTokens(model).default,
+        }
+        models.set(model, modelUsage)
+      }
+
+      modelUsage.inputTokens += inputTokens
+      modelUsage.outputTokens += outputTokens
+      modelUsage.cacheReadInputTokens += cacheReadInputTokens
+      modelUsage.cacheCreationInputTokens += cacheCreationInputTokens
+      modelUsage.webSearchRequests += webSearchRequests
+      modelUsage.costUSD += costUSD
+      modelUsage.costDisplay = this.formatCost(modelUsage.costUSD)
+
+      totalCostUSD += costUSD
+      totalInputTokens += inputTokens
+      totalOutputTokens += outputTokens
+      totalCacheReadInputTokens += cacheReadInputTokens
+      totalCacheCreationInputTokens += cacheCreationInputTokens
+      totalWebSearchRequests += webSearchRequests
+
+      if (entry.timestamp) {
+        const time = Date.parse(entry.timestamp)
+        if (!Number.isNaN(time)) {
+          firstUsageAt = firstUsageAt === null ? time : Math.min(firstUsageAt, time)
+          lastUsageAt = lastUsageAt === null ? time : Math.max(lastUsageAt, time)
+        }
+      }
+    })
+
+    const workDir = latestWorkDir || latestCwd || this.desanitizePath(found.projectDir) || process.cwd()
+    const launchInfo: SessionLaunchInfo = {
+      filePath: found.filePath,
+      projectDir: found.projectDir,
+      workDir,
+      repository,
+      worktreeSession,
+      transcriptMessageCount,
+      customTitle,
+      permissionMode,
+      ...(runtimeProviderId !== undefined ? { runtimeProviderId } : {}),
+      ...(runtimeModelId ? { runtimeModelId } : {}),
+      ...(effortLevel ? { effortLevel } : {}),
+    }
+
+    for (const modelUsage of models.values()) {
+      modelUsage.contextWindow = await this.getTranscriptContextWindow(
+        sessionId,
+        modelUsage.model,
+        launchInfo,
+      )
+    }
+
+    const usage = models.size === 0
+      ? null
+      : {
+          source: 'transcript' as const,
+          totalCostUSD,
+          costDisplay: this.formatCost(totalCostUSD),
+          hasUnknownModelCost,
+          totalAPIDuration: 0,
+          totalDuration:
+            firstUsageAt !== null && lastUsageAt !== null
+              ? Math.max(0, Math.round((lastUsageAt - firstUsageAt) / 1000))
+              : 0,
+          totalLinesAdded: 0,
+          totalLinesRemoved: 0,
+          totalInputTokens,
+          totalOutputTokens,
+          totalCacheReadInputTokens,
+          totalCacheCreationInputTokens,
+          totalWebSearchRequests,
+          models: Array.from(models.values()),
+        }
+    const contextEstimate = latestContextUsage
+      ? await this.buildTranscriptContextEstimate(
+          sessionId,
+          latestContextUsage,
+          estimatedTokensFromMessages,
+          transcriptHasMediaInput,
+          launchInfo,
+        )
+      : null
+
+    return {
+      launchInfo,
+      metadata,
+      usage,
+      contextEstimate,
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Public API
+  // --------------------------------------------------------------------------
+
+  /**
+   * List all sessions, optionally filtered by project path.
+   */
+  async listSessions(options?: {
+    project?: string
+    limit?: number
+    offset?: number
+  }): Promise<{ sessions: SessionListItem[]; total: number }> {
+    this.syncSharedMutationEpoch()
+    const routingMutationEpoch = getSharedSessionMutationState(this.localIndexGateway).epoch
+    const hasInvalidPagination = [options?.limit, options?.offset]
+      .some(value => value !== undefined && (!Number.isSafeInteger(value) || value < 0))
+    if (hasInvalidPagination) return this.listSessionsFromFiles(options)
+
+    const indexMode = this.getUsableIndexMode()
+    if (indexMode === null) {
+      return this.listSessionsFromFiles(options)
+    }
+
+    if (indexMode === 'shadow') {
+      const fileResult = await this.listSessionsFromFiles(options)
+      if (
+        routingMutationEpoch !== getSharedSessionMutationState(this.localIndexGateway).epoch
+      ) {
+        return this.listSessionsFromFiles(options)
+      }
+      let status: LocalIndexStatus
+      try {
+        status = this.localIndexGateway.getPublicStatus()
+      } catch {
+        this.markIndexReadFailure()
+        return fileResult
+      }
+      if (status.state !== 'ready') return fileResult
+      const indexedResult = await this.tryListSessionsFromIndex(options, true)
+      if (
+        routingMutationEpoch !== getSharedSessionMutationState(this.localIndexGateway).epoch
+      ) {
+        return this.listSessionsFromFiles(options)
+      }
+      if (indexedResult) {
+        this.recordShadowComparisonIfNeeded(
+          this.compareSessionLists(fileResult, indexedResult),
+        )
+      }
+      return fileResult
+    }
+
+    return await this.tryListSessionsFromIndex(options) ?? this.listSessionsFromFiles(options)
+  }
+
+  private async listSessionsFromFiles(options?: {
+    project?: string
+    limit?: number
+    offset?: number
+  }): Promise<{ sessions: SessionListItem[]; total: number }> {
+    this.syncSharedMutationEpoch()
+    const scope = this.getConfigDir()
+    this.prepareSessionListCaches(scope)
+    const cacheKey = this.sessionListCacheKey(options, scope)
+    const cached = this.sessionListCache.get(cacheKey)
+    if (cached) {
+      this.touchSessionListCacheEntry(cacheKey, cached)
+      return this.cloneSessionListResult(cached.result)
+    }
+
+    const cacheGeneration = this.sessionListCacheGeneration
+    const sharedMutationEpoch = getSharedSessionMutationState(this.localIndexGateway).epoch
+    const requestKey = `${cacheGeneration}:${sharedMutationEpoch}:${cacheKey}`
+    const inFlight = this.sessionListRequests.get(requestKey)
+    if (inFlight) {
+      return this.cloneSessionListResult(await inFlight)
+    }
+
+    const request = this.loadSessionList(
+      options,
+      cacheKey,
+      cacheGeneration,
+      sharedMutationEpoch,
+      scope,
+    )
+    this.sessionListRequests.set(requestKey, request)
+    try {
+      return this.cloneSessionListResult(await request)
+    } finally {
+      if (this.sessionListRequests.get(requestKey) === request) {
+        this.sessionListRequests.delete(requestKey)
+      }
+    }
+  }
+
+  private async tryListSessionsFromIndex(options?: {
+    project?: string
+    limit?: number
+    offset?: number
+  }, requireReady = false): Promise<{ sessions: SessionListItem[]; total: number } | null> {
+    const indexedMutationEpoch = getSharedSessionMutationState(this.localIndexGateway).epoch
+    try {
+      const indexedPage = this.localIndexGateway.listSessions({
+        ...(options?.project
+          ? {
+              project: this.sanitizePath(
+                normalizeDriveRootPathForPlatform(options.project),
+              ),
+            }
+          : {}),
+        ...(options?.limit !== undefined ? { limit: options.limit } : {}),
+        ...(options?.offset !== undefined ? { offset: options.offset } : {}),
+      })
+      if (!this.indexStatusRemainsUsable()) {
+        this.markIndexReadFailure()
+        return null
+      }
+
+      const status = this.localIndexGateway.getPublicStatus()
+      if (requireReady && status.state !== 'ready') return null
+      if (status.state === 'building' && indexedPage.sessions.length === 0) {
+        return null
+      }
+
+      const sessions: SessionListItem[] = []
+      const pathExists = this.createCachedPathExists()
+      const projectsRoot = indexedPage.sessions.length > 0
+        ? await fs.realpath(this.getProjectsDir())
+        : null
+      for (const row of indexedPage.sessions) {
+        await this.validateIndexedTranscriptPath(
+          row.transcriptPath,
+          row.projectPath,
+          row.id,
+          projectsRoot!,
+        )
+        sessions.push(await this.hydrateIndexedSession(row, pathExists))
+      }
+      if (sessions.length !== indexedPage.sessions.length) return null
+      if (
+        indexedMutationEpoch !== getSharedSessionMutationState(this.localIndexGateway).epoch
+      ) {
+        return null
+      }
+      return { sessions, total: indexedPage.total }
+    } catch {
+      this.markIndexReadFailure()
+      return null
+    }
+  }
+
+  private async hydrateIndexedSession(
+    row: IndexedSessionRow,
+    pathExists = (targetPath: string | null) => this.pathExists(targetPath),
+  ): Promise<SessionListItem> {
+    const workDir = row.workDir
+    const projectRoot = await this.resolveProjectRootFromSessionMetadata({
+      worktreeSession: row.worktreeSession,
+      repository: row.repository,
+      workDir,
+      fallbackProjectDir: row.projectPath,
+    })
+    const { workDirExists, workspaceState } = await this.resolveWorkspaceAvailability({
+      workDir,
+      projectRoot,
+      worktreeSession: row.worktreeSession,
+      repository: row.repository,
+      pathExists,
+    })
+    return {
+      id: row.id,
+      title: row.title,
+      createdAt: row.createdAt,
+      modifiedAt: row.modifiedAt,
+      messageCount: row.messageCount,
+      projectPath: row.projectPath,
+      projectRoot,
+      workDir,
+      workDirExists,
+      workspaceState,
+      permissionMode: row.permissionMode,
+      ...(row.runtimeProviderId !== undefined
+        ? { runtimeProviderId: row.runtimeProviderId }
+        : {}),
+      ...(row.runtimeModelId ? { runtimeModelId: row.runtimeModelId } : {}),
+      ...(row.effortLevel ? { effortLevel: row.effortLevel } : {}),
+    }
+  }
+
+  private compareSessionLists(
+    fileResult: { sessions: SessionListItem[]; total: number },
+    indexedResult: { sessions: SessionListItem[]; total: number },
+  ): SessionListShadowComparison {
+    const fieldHashes: SessionListShadowComparison['fieldHashes'] = []
+    const fields: Array<keyof SessionListItem> = [
+      'id',
+      'title',
+      'createdAt',
+      'modifiedAt',
+      'messageCount',
+      'projectPath',
+      'projectRoot',
+      'workDir',
+      'workDirExists',
+      'workspaceState',
+      'permissionMode',
+      'runtimeProviderId',
+      'runtimeModelId',
+      'effortLevel',
+    ]
+    const hash = (value: unknown): string => createHash('sha256')
+      .update(JSON.stringify(value) ?? 'undefined')
+      .digest('hex')
+    const rowCount = Math.max(fileResult.sessions.length, indexedResult.sessions.length)
+    let differenceCount = fileResult.total === indexedResult.total ? 0 : 1
+    for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+      for (const field of fields) {
+        const fileSession = fileResult.sessions[rowIndex]
+        const indexedSession = indexedResult.sessions[rowIndex]
+        const fileField = {
+          present: fileSession !== undefined && Object.hasOwn(fileSession, field),
+          value: fileSession?.[field],
+        }
+        const indexedField = {
+          present: indexedSession !== undefined && Object.hasOwn(indexedSession, field),
+          value: indexedSession?.[field],
+        }
+        if (JSON.stringify(fileField) === JSON.stringify(indexedField)) continue
+        differenceCount += 1
+        if (fieldHashes.length < 16) {
+          fieldHashes.push({
+            field: `session_${rowIndex}.${field}`,
+            fileHash: hash(fileField),
+            indexedHash: hash(indexedField),
+          })
+        }
+      }
+    }
+    return {
+      matched: differenceCount === 0,
+      fileTotal: fileResult.total,
+      indexedTotal: indexedResult.total,
+      fileCount: fileResult.sessions.length,
+      indexedCount: indexedResult.sessions.length,
+      differenceCount,
+      fieldHashes,
+    }
+  }
+
+  private recordShadowComparisonIfNeeded(comparison: SessionListShadowComparison): void {
+    const signature = createHash('sha256')
+      .update(JSON.stringify(comparison))
+      .digest('hex')
+    if (signature === this.lastShadowComparisonSignature) return
+    const now = this.now()
+    if (now - this.lastShadowComparisonRecordedAt < this.shadowComparisonMinIntervalMs) return
+    this.lastShadowComparisonSignature = signature
+    this.lastShadowComparisonRecordedAt = now
+    this.recordShadowComparison(comparison)
+  }
+
+  private async loadSessionList(
+    options: {
+      project?: string
+      limit?: number
+      offset?: number
+    } | undefined,
+    cacheKey: string,
+    cacheGeneration: number,
+    sharedMutationEpoch: number,
+    scope: string,
+  ): Promise<{ sessions: SessionListItem[]; total: number }> {
+    const sessionFiles = await this.discoverSessionFiles(options?.project, scope)
+    if (!options?.project && this.activeSessionListCacheScope === scope) {
+      const discoveredPaths = new Set(sessionFiles.map(file => file.filePath))
+      for (const filePath of this.sessionListSummaryCache.keys()) {
+        if (!discoveredPaths.has(filePath)) this.sessionListSummaryCache.delete(filePath)
+      }
+    }
+    const filesWithStats = (await Promise.all(sessionFiles.map(async (sessionFile) => {
+      try {
+        return {
+          ...sessionFile,
+          stat: await fs.stat(sessionFile.filePath),
+        }
+      } catch {
+        return null
+      }
+    }))).filter((item): item is NonNullable<typeof item> => item !== null)
+
+    const summarizedFiles: Array<{
+      filePath: string
+      projectDir: string
+      sessionId: string
+      stat: Stats
+      summary: SessionListSummary
+    }> = []
+    for (const item of filesWithStats) {
+      try {
+        summarizedFiles.push({
+          ...item,
+          summary: await this.getCachedSessionListSummary(
+            item.filePath,
+            item.projectDir,
+            item.stat,
+            scope,
+          ),
+        })
+      } catch {
+        // Skip unreadable files
+      }
+    }
+
+    summarizedFiles.sort((a, b) => {
+      const modifiedAtDifference =
+        Date.parse(b.summary.modifiedAt) - Date.parse(a.summary.modifiedAt)
+      if (modifiedAtDifference !== 0) return modifiedAtDifference
+      const sessionIdDifference = a.sessionId.localeCompare(b.sessionId)
+      return sessionIdDifference || a.filePath.localeCompare(b.filePath)
+    })
+
+    const total = summarizedFiles.length
+    const offset = options?.offset ?? 0
+    const limit = options?.limit ?? 50
+    const paginatedFiles = summarizedFiles.slice(offset, offset + limit)
+
+    // Build session list items with metadata from file stats & a streaming
+    // transcript summary. Keep this sequential so large JSONL files are not
+    // loaded into memory concurrently by the sidebar's frequent refresh.
+    const items: SessionListItem[] = []
+    const pathExists = this.createCachedPathExists()
+    for (const { projectDir, sessionId, summary } of paginatedFiles) {
+      try {
+        const workDir = summary.workDir
+        const projectRoot = await this.resolveProjectRootFromSessionMetadata({
+          worktreeSession: summary.worktreeSession,
+          repository: summary.repository,
+          workDir,
+          fallbackProjectDir: projectDir,
+        })
+        const { workDirExists, workspaceState } = await this.resolveWorkspaceAvailability({
+          workDir,
+          projectRoot,
+          worktreeSession: summary.worktreeSession,
+          repository: summary.repository,
+          pathExists,
+        })
+
+        items.push({
+          id: sessionId,
+          title: summary.title,
+          createdAt: summary.createdAt,
+          modifiedAt: summary.modifiedAt,
+          messageCount: summary.messageCount,
+          projectPath: projectDir,
+          projectRoot,
+          workDir,
+          workDirExists,
+          workspaceState,
+          permissionMode: summary.permissionMode,
+          ...(summary.runtimeProviderId !== undefined
+            ? { runtimeProviderId: summary.runtimeProviderId }
+            : {}),
+          ...(summary.runtimeModelId ? { runtimeModelId: summary.runtimeModelId } : {}),
+          ...(summary.effortLevel ? { effortLevel: summary.effortLevel } : {}),
+        })
+      } catch {
+        // Skip unreadable files
+      }
+    }
+
+    const result = { sessions: items, total }
+    if (
+      cacheGeneration === this.sessionListCacheGeneration &&
+      sharedMutationEpoch === getSharedSessionMutationState(this.localIndexGateway).epoch &&
+      this.activeSessionListCacheScope === scope
+    ) {
+      this.sessionListCache.set(cacheKey, {
+        expiresAt: this.now() + this.sessionListCacheTtlMs,
+        result: this.cloneSessionListResult(result),
+      })
+      this.enforceSessionListCacheCapacity()
+    }
+    return result
+  }
+
+  /**
+   * Get full session detail including all messages.
+   */
+  async getSession(sessionId: string): Promise<SessionDetail | null> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) return null
+
+    const { filePath, projectDir } = found
+    const stat = await fs.stat(filePath)
+    const entries = await this.readJsonlFile(filePath)
+
+    const messages = await this.appendSubagentToolMessages(
+      projectDir,
+      sessionId,
+      this.entriesToMessages(entries),
+    )
+    const title = this.extractTitle(entries)
+    const workDir = this.resolveWorkDirFromEntries(entries, projectDir)
+    const permissionMode = this.resolvePermissionModeFromEntries(entries)
+    const projectRoot = await this.resolveProjectRootFromEntries(entries, workDir, projectDir)
+    const worktreeSession = this.resolveWorktreeSessionFromEntries(entries)
+    const repository = this.resolveRepositoryFromEntries(entries)
+    const { workDirExists, workspaceState } = await this.resolveWorkspaceAvailability({
+      workDir,
+      projectRoot,
+      worktreeSession,
+      repository,
+    })
+
+    let createdAt = stat.birthtime.toISOString()
+    for (const e of entries) {
+      if (e.timestamp) {
+        createdAt = e.timestamp
+        break
+      }
+    }
+
+    return {
+      id: sessionId,
+      title,
+      createdAt,
+      modifiedAt: this.resolveTranscriptModifiedAtFromEntries(entries) ?? stat.mtime.toISOString(),
+      messageCount: messages.length,
+      projectPath: projectDir,
+      projectRoot,
+      workDir,
+      workDirExists,
+      workspaceState,
+      permissionMode,
+      messages,
+    }
+  }
+
+  /**
+   * Get only the messages for a session (lighter than full detail).
+   */
+  async getSessionMessages(sessionId: string): Promise<MessageEntry[]> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) {
+      throw ApiError.notFound(`Session not found: ${sessionId}`)
+    }
+
+    const entries = await this.readJsonlFile(found.filePath)
+    return await this.appendSubagentToolMessages(
+      found.projectDir,
+      sessionId,
+      this.entriesToMessages(entries),
+    )
+  }
+
+  async getSubagentTranscriptMessages(
+    sessionId: string,
+    agentId: string,
+  ): Promise<MessageEntry[]> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) {
+      throw ApiError.notFound(`Session not found: ${sessionId}`)
+    }
+
+    const entries = await this.readJsonlFile(
+      this.subagentTranscriptPath(found.projectDir, sessionId, agentId),
+    )
+    return this.entriesToMessages(entries)
+  }
+
+  async getSessionMessagesSignature(sessionId: string): Promise<string | null> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) return null
+
+    let count = 0
+    let last = ''
+    const agentToolUseIds = new Set<string>()
+    const resultLinks = new Map<string, string>()
+    await this.streamJsonlFile(found.filePath, (entry) => {
+      const agentToolUseId = this.extractAgentToolUseId(entry)
+      if (agentToolUseId) {
+        agentToolUseIds.add(agentToolUseId)
+      }
+      if (entry.message?.role === 'user' && Array.isArray(entry.message.content)) {
+        for (const block of entry.message.content as ContentBlock[]) {
+          if (
+            block.type !== 'tool_result' ||
+            typeof block.tool_use_id !== 'string' ||
+            !agentToolUseIds.has(block.tool_use_id)
+          ) {
+            continue
+          }
+          const agentId = this.extractAgentIdFromResultText(
+            this.extractTextFromContent(block.content),
+          )
+          if (agentId) {
+            resultLinks.set(block.tool_use_id, agentId)
+          }
+        }
+      }
+      if (!this.isVisibleTranscriptMessageEntry(entry)) return
+      count += 1
+      const contentLength = safeJsonLength(entry.content) + safeJsonLength(entry.message?.content)
+      last = [
+        entry.uuid ?? entry.messageId ?? '',
+        entry.type ?? '',
+        entry.timestamp ?? '',
+        entry.parentUuid ?? '',
+        entry.parent_tool_use_id ?? '',
+        contentLength,
+      ].join(':')
+    })
+
+    const subagentSignatures = await Promise.all(
+      [...resultLinks.entries()].map(async ([parentToolUseId, agentId]) => {
+        let childCount = 0
+        let childLast = ''
+        await this.streamJsonlFile(this.subagentTranscriptPath(found.projectDir, sessionId, agentId), (entry) => {
+          if (!this.isVisibleTranscriptMessageEntry(entry)) return
+          childCount += 1
+          const contentLength = safeJsonLength(entry.content) + safeJsonLength(entry.message?.content)
+          childLast = [
+            parentToolUseId,
+            agentId,
+            entry.uuid ?? entry.messageId ?? '',
+            entry.type ?? '',
+            entry.timestamp ?? '',
+            entry.parentUuid ?? '',
+            entry.parent_tool_use_id ?? '',
+            contentLength,
+          ].join(':')
+        })
+        return `${parentToolUseId}:${agentId}:${childCount}:${childLast}`
+      }),
+    )
+
+    return `${count}:${last}:${subagentSignatures.join('|')}`
+  }
+
+  /**
+   * Create a new session file for the given working directory.
+   */
+  async createSession(
+    workDir?: string,
+    repositoryOptions?: CreateSessionRepositoryOptions,
+    permissionMode?: string,
+  ): Promise<{ sessionId: string; workDir: string }> {
+    // Default to user home directory when no workDir specified
+    const resolvedWorkDir = workDir || os.homedir()
+    const sessionId = crypto.randomUUID()
+
+    // Resolve to absolute path. NOTE: path.resolve() uses process.cwd() to
+    // expand relative paths — in bundled sidecar mode the server's cwd is
+    // typically '/'. Callers (IM adapters) already send absolute realPath,
+    // but we log here so cwd regressions are caught early.
+    const preparedWorkspace = await resolveSessionWorkspaceLaunch(
+      resolvedWorkDir,
+      repositoryOptions,
+      sessionId,
+    )
+    const absWorkDir = preparedWorkspace.workDir
+    registerFilesystemAccessRoot(absWorkDir)
+    console.log(
+      `[SessionService] createSession: requested workDir=${JSON.stringify(
+        workDir,
+      )}, resolved=${absWorkDir}, repository=${JSON.stringify(
+        preparedWorkspace.repository ?? null,
+      )} (process.cwd()=${process.cwd()})`,
+    )
+
+    const sanitized = this.sanitizePath(absWorkDir)
+    const dirPath = path.join(this.getProjectsDir(), sanitized)
+
+    // Ensure the project directory exists
+    await fs.mkdir(dirPath, { recursive: true })
+
+    const filePath = path.join(dirPath, `${sessionId}.jsonl`)
+    const now = new Date().toISOString()
+
+    // Write an initial file-history-snapshot entry (matches CLI behavior)
+    const initialEntry = {
+      type: 'file-history-snapshot',
+      messageId: crypto.randomUUID(),
+      snapshot: {
+        messageId: crypto.randomUUID(),
+        trackedFileBackups: {},
+        timestamp: now,
+      },
+      isSnapshotUpdate: false,
+    }
+
+    // Store actual workDir for later retrieval
+    const metaEntry = {
+      type: 'session-meta',
+      isMeta: true,
+      workDir: absWorkDir,
+      repository: preparedWorkspace.repository,
+      ...(permissionMode && VALID_SESSION_PERMISSION_MODES.has(permissionMode)
+        ? { permissionMode }
+        : {}),
+      timestamp: now,
+    }
+
+    await fs.writeFile(filePath, JSON.stringify(initialEntry) + '\n' + JSON.stringify(metaEntry) + '\n', 'utf-8')
+    this.invalidateSessionListCache()
+
+    return { sessionId, workDir: absWorkDir }
+  }
+
+  /**
+   * Delete a session's JSONL file.
+   */
+  async deleteSession(sessionId: string): Promise<void> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) {
+      throw ApiError.notFound(`Session not found: ${sessionId}`)
+    }
+
+    await fs.unlink(found.filePath)
+    this.sessionListSummaryCache.delete(found.filePath)
+    this.invalidateSessionListCache()
+  }
+
+  async deleteSessions(sessionIds: string[]): Promise<DeleteSessionsResult> {
+    const successes: string[] = []
+    const failures: DeleteSessionFailure[] = []
+
+    const results = await Promise.all(sessionIds.map(async (sessionId) => {
+      try {
+        await this.deleteSession(sessionId)
+        return { type: 'success' as const, sessionId }
+      } catch (error) {
+        return {
+          type: 'failure' as const,
+          sessionId,
+          message: error instanceof Error ? error.message : 'Unknown delete failure',
+          code: error instanceof ApiError ? error.code : undefined,
+        }
+      }
+    }))
+
+    for (const result of results) {
+      if (result.type === 'success') {
+        successes.push(result.sessionId)
+      } else {
+        failures.push({
+          sessionId: result.sessionId,
+          message: result.message,
+          code: result.code,
+        })
+      }
+    }
+
+    return { successes, failures }
+  }
+
+  /**
+   * Rename a session by appending a custom-title entry to its JSONL file.
+   */
+  async renameSession(sessionId: string, title: string): Promise<void> {
+    if (!title || typeof title !== 'string') {
+      throw ApiError.badRequest('title is required')
+    }
+
+    const found = await this.findSessionFile(sessionId)
+    if (!found) {
+      throw ApiError.notFound(`Session not found: ${sessionId}`)
+    }
+
+    const entry = {
+      type: 'custom-title',
+      customTitle: title,
+      timestamp: new Date().toISOString(),
+    }
+
+    await this.appendJsonlEntry(found.filePath, entry)
+    this.invalidateSessionListCache()
+  }
+
+  /**
+   * Append an AI-generated title entry to a session's JSONL file.
+   */
+  async appendAiTitle(sessionId: string, title: string): Promise<void> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) return
+
+    await this.appendJsonlEntry(found.filePath, {
+      type: 'ai-title',
+      aiTitle: title,
+      timestamp: new Date().toISOString(),
+    })
+    this.invalidateSessionListCache()
+  }
+
+  async getCustomTitle(sessionId: string): Promise<string | null> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) return null
+
+    const entries = await this.readJsonlFile(found.filePath)
+    let customTitle: string | null = null
+    for (const entry of entries) {
+      if (entry.type === 'custom-title' && typeof entry.customTitle === 'string' && entry.customTitle.trim()) {
+        customTitle = entry.customTitle
+      }
+    }
+    return customTitle
+  }
+
+  /**
+   * Get the actual working directory for a session.
+   * First checks for stored session-meta entry, then falls back to desanitizePath.
+   */
+  async getSessionWorkDir(sessionId: string): Promise<string | null> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) return null
+
+    const entries = await this.readJsonlFile(found.filePath)
+    return this.resolveWorkDirFromEntries(entries, found.projectDir)
+  }
+
+  async getSessionMessageCwd(
+    sessionId: string,
+    messageId: string,
+  ): Promise<string | null> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) return null
+
+    const entries = await this.readJsonlFile(found.filePath)
+    const entry = entries.find((candidate) => candidate.uuid === messageId)
+    return typeof entry?.cwd === 'string' && entry.cwd.trim() ? entry.cwd : null
+  }
+
+  /**
+   * Inspect how a session should be launched.
+   * Placeholder desktop-created sessions have zero transcript messages.
+   */
+  async getSessionLaunchInfo(sessionId: string): Promise<SessionLaunchInfo | null> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) return null
+
+    const entries = await this.readJsonlFile(found.filePath)
+    const workDir = this.resolveWorkDirFromEntries(entries, found.projectDir) || process.cwd()
+    const repository = this.resolveRepositoryFromEntries(entries)
+    const worktreeSession = this.resolveWorktreeSessionFromEntries(entries)
+    const permissionMode = this.resolvePermissionModeFromEntries(entries)
+    let customTitle: string | null = null
+    let runtimeProviderId: string | null | undefined
+    let runtimeModelId: string | undefined
+    let effortLevel: string | undefined
+
+    for (const entry of entries) {
+      if (entry.type === 'custom-title' && typeof entry.customTitle === 'string') {
+        customTitle = entry.customTitle
+      }
+      if (entry.type === 'session-meta') {
+        const record = entry as Record<string, unknown>
+        if (record.runtimeProviderId === null || typeof record.runtimeProviderId === 'string') {
+          runtimeProviderId = record.runtimeProviderId as string | null
+        }
+        if (typeof record.runtimeModelId === 'string') {
+          runtimeModelId = record.runtimeModelId
+        }
+        if (
+          typeof record.effortLevel === 'string' &&
+          VALID_SESSION_EFFORT_LEVELS.has(record.effortLevel)
+        ) {
+          effortLevel = record.effortLevel
+        }
+      }
+    }
+    const transcriptMessageCount = this.countTranscriptMessages(entries)
+
+    return {
+      filePath: found.filePath,
+      projectDir: found.projectDir,
+      workDir,
+      repository,
+      worktreeSession,
+      transcriptMessageCount,
+      customTitle,
+      permissionMode,
+      ...(runtimeProviderId !== undefined ? { runtimeProviderId } : {}),
+      ...(runtimeModelId ? { runtimeModelId } : {}),
+      ...(effortLevel ? { effortLevel } : {}),
+    }
+  }
+
+  async deleteSessionFile(sessionId: string): Promise<void> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) return
+    await fs.unlink(found.filePath)
+    this.invalidateSessionListCache()
+  }
+
+  async clearSessionTranscript(
+    sessionId: string,
+    fallbackWorkDir?: string,
+    preservedPermissionMode?: string,
+  ): Promise<void> {
+    let found = await this.findSessionFile(sessionId)
+    if (!found && fallbackWorkDir) {
+      const resolvedPath = path.resolve(normalizeDriveRootPathForPlatform(fallbackWorkDir))
+      const absWorkDir = await fs.realpath(resolvedPath).catch(() => resolvedPath)
+      const dirPath = path.join(this.getProjectsDir(), this.sanitizePath(absWorkDir))
+      await fs.mkdir(dirPath, { recursive: true })
+      found = {
+        filePath: path.join(dirPath, `${sessionId}.jsonl`),
+        projectDir: this.sanitizePath(absWorkDir),
+      }
+    }
+    if (!found) {
+      throw ApiError.notFound(`Session not found: ${sessionId}`)
+    }
+
+    const entries = await this.readJsonlFile(found.filePath)
+    const workDir = this.resolveWorkDirFromEntries(entries, found.projectDir) || fallbackWorkDir || process.cwd()
+    const repository = this.resolveRepositoryFromEntries(entries)
+    const permissionMode = (
+      preservedPermissionMode &&
+      VALID_SESSION_PERMISSION_MODES.has(preservedPermissionMode)
+    )
+      ? preservedPermissionMode
+      : this.resolvePermissionModeFromEntries(entries)
+    const now = new Date().toISOString()
+
+    const initialEntry = {
+      type: 'file-history-snapshot',
+      messageId: crypto.randomUUID(),
+      snapshot: {
+        messageId: crypto.randomUUID(),
+        trackedFileBackups: {},
+        timestamp: now,
+      },
+      isSnapshotUpdate: false,
+    }
+
+    const metaEntry = {
+      type: 'session-meta',
+      isMeta: true,
+      workDir,
+      repository,
+      ...(permissionMode ? { permissionMode } : {}),
+      timestamp: now,
+    }
+
+    await fs.writeFile(
+      found.filePath,
+      `${JSON.stringify(initialEntry)}\n${JSON.stringify(metaEntry)}\n`,
+      'utf-8',
+    )
+    this.invalidateSessionListCache()
+  }
+
+  async appendSessionMetadata(
+    sessionId: string,
+    metadata: {
+      workDir: string
+      customTitle?: string | null
+      repository?: PreparedSessionWorkspace['repository']
+      permissionMode?: string
+      runtimeProviderId?: string | null
+      runtimeModelId?: string
+      effortLevel?: string
+    }
+  ): Promise<void> {
+    const matches = await this.findSessionFiles(sessionId)
+    if (matches.length === 0) return
+
+    let repository = metadata.repository
+    if (!repository) {
+      for (const match of matches) {
+        const candidate = this.resolveRepositoryFromEntries(await this.readJsonlFile(match.filePath))
+        if (candidate) {
+          repository = candidate
+          break
+        }
+      }
+    }
+
+    const normalizedWorkDir = normalizeDriveRootPathForPlatform(metadata.workDir)
+    const targetProjectDir = this.sanitizePath(normalizedWorkDir)
+    const targetFilePath = path.join(this.getProjectsDir(), targetProjectDir, `${sessionId}.jsonl`)
+
+    if (!metadata.customTitle) {
+      const launchInfo = await this.getSessionLaunchInfo(sessionId)
+      if (this.metadataMatchesLaunchInfo(launchInfo, {
+        ...metadata,
+        workDir: normalizedWorkDir,
+        repository,
+      })) {
+        return
+      }
+    }
+
+    await fs.mkdir(path.dirname(targetFilePath), { recursive: true })
+
+    await this.appendJsonlEntry(targetFilePath, {
+      type: 'session-meta',
+      isMeta: true,
+      workDir: normalizedWorkDir,
+      repository,
+      ...(metadata.permissionMode && VALID_SESSION_PERMISSION_MODES.has(metadata.permissionMode)
+        ? { permissionMode: metadata.permissionMode }
+        : {}),
+      ...(metadata.runtimeProviderId !== undefined
+        ? { runtimeProviderId: metadata.runtimeProviderId }
+        : {}),
+      ...(metadata.runtimeModelId ? { runtimeModelId: metadata.runtimeModelId } : {}),
+      ...(metadata.effortLevel && VALID_SESSION_EFFORT_LEVELS.has(metadata.effortLevel)
+        ? { effortLevel: metadata.effortLevel }
+        : {}),
+      timestamp: new Date().toISOString(),
+    })
+
+    if (metadata.customTitle) {
+      await this.appendJsonlEntry(targetFilePath, {
+        type: 'custom-title',
+        customTitle: metadata.customTitle,
+        timestamp: new Date().toISOString(),
+      })
+    }
+    this.invalidateSessionListCache()
+  }
+
+  async deletePlaceholderSessionFiles(
+    sessionId: string,
+    keepWorkDir: string,
+  ): Promise<number> {
+    if (!this.isValidSessionId(sessionId)) return 0
+
+    const projectsDir = this.getProjectsDir()
+    let projectDirs: import('node:fs').Dirent[]
+    try {
+      projectDirs = await fs.readdir(projectsDir, { withFileTypes: true })
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 0
+      throw err
+    }
+
+    const keepProjectDir = this.sanitizePath(normalizeDriveRootPathForPlatform(keepWorkDir))
+    let removed = 0
+    for (const projectDir of projectDirs) {
+      if (!projectDir.isDirectory()) continue
+      if (projectDir.name === keepProjectDir) continue
+      const filePath = path.join(projectsDir, projectDir.name, `${sessionId}.jsonl`)
+      const entries = await this.readJsonlFile(filePath)
+      if (entries.length === 0) continue
+
+      if (this.countTranscriptMessages(entries) > 0) continue
+
+      await fs.rm(filePath, { force: true })
+      removed += 1
+    }
+    if (removed > 0) this.invalidateSessionListCache()
+    return removed
+  }
+
+  async trimSessionMessagesFrom(
+    sessionId: string,
+    startMessageId: string,
+  ): Promise<TrimSessionResult> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) {
+      throw ApiError.notFound(`Session not found: ${sessionId}`)
+    }
+
+    const entries = await this.readJsonlFile(found.filePath)
+    const activeMessages = this.entriesToMessages(entries)
+    const startIndex = activeMessages.findIndex((message) => message.id === startMessageId)
+
+    if (startIndex < 0) {
+      throw ApiError.badRequest(`Message not found in active session chain: ${startMessageId}`)
+    }
+
+    const removedMessageIds = activeMessages
+      .slice(startIndex)
+      .map((message) => message.id)
+    const remainingMessageIds = new Set(
+      activeMessages
+        .slice(0, startIndex)
+        .map((message) => message.id),
+    )
+
+    if (removedMessageIds.length === 0) {
+      return { removedCount: 0, removedMessageIds: [] }
+    }
+
+    const removedIds = new Set(removedMessageIds)
+    const filteredEntries = entries.filter(
+      (entry) => {
+        if (typeof entry.uuid !== 'string') return true
+        if (removedIds.has(entry.uuid)) return false
+        if (
+          entry.message?.role &&
+          (entry.type === 'user' || entry.type === 'assistant' || entry.type === 'system')
+        ) {
+          return remainingMessageIds.has(entry.uuid)
+        }
+        return true
+      },
+    )
+
+    const content =
+      filteredEntries.length > 0
+        ? filteredEntries.map((entry) => JSON.stringify(entry)).join('\n') + '\n'
+        : ''
+    await fs.writeFile(found.filePath, content, 'utf-8')
+    this.invalidateSessionListCache()
+
+    return {
+      removedCount: removedMessageIds.length,
+      removedMessageIds,
+    }
+  }
+
+  async getSessionFileHistorySnapshots(
+    sessionId: string,
+  ): Promise<FileHistorySnapshot[]> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) {
+      throw ApiError.notFound(`Session not found: ${sessionId}`)
+    }
+
+    const entries = await this.readTargetedJsonlEntries(
+      found,
+      ['file-history-snapshot'],
+    ) ?? await this.readJsonlFile(found.filePath)
+    const snapshotsByMessageId = new Map<string, FileHistorySnapshot>()
+
+    for (const entry of entries) {
+      if (entry.type !== 'file-history-snapshot' || !entry.snapshot) continue
+
+      const snapshotMessageId =
+        typeof entry.snapshot.messageId === 'string'
+          ? entry.snapshot.messageId
+          : typeof entry.messageId === 'string'
+            ? entry.messageId
+            : null
+
+      if (!snapshotMessageId) continue
+
+      snapshotsByMessageId.set(snapshotMessageId, {
+        messageId: snapshotMessageId as FileHistorySnapshot['messageId'],
+        trackedFileBackups:
+          entry.snapshot.trackedFileBackups &&
+          typeof entry.snapshot.trackedFileBackups === 'object'
+            ? (entry.snapshot.trackedFileBackups as FileHistorySnapshot['trackedFileBackups'])
+            : {},
+        timestamp: new Date(
+          entry.snapshot.timestamp || entry.timestamp || new Date().toISOString(),
+        ),
+      })
+    }
+
+    return [...snapshotsByMessageId.values()]
+  }
+
+  async appendSessionTaskNotification(
+    sessionId: string,
+    notification: SessionTaskNotification,
+  ): Promise<void> {
+    const normalized = this.parsePersistedTaskNotification(
+      notification,
+      notification.timestamp ?? new Date(this.now()).toISOString(),
+    )
+    if (!normalized) return
+
+    const found = await this.findSessionFile(sessionId)
+    if (!found) return
+
+    await this.appendJsonlEntry(found.filePath, {
+      type: PERSISTED_TASK_NOTIFICATION_ENTRY_TYPE,
+      isMeta: true,
+      taskNotification: normalized,
+      timestamp: normalized.timestamp,
+    })
+    this.invalidateSessionListCache()
+  }
+
+  async getSessionTaskNotifications(
+    sessionId: string,
+  ): Promise<SessionTaskNotification[]> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) {
+      throw ApiError.notFound(`Session not found: ${sessionId}`)
+    }
+
+    const entries = await this.readTargetedJsonlEntries(
+      found,
+      ['user', PERSISTED_TASK_NOTIFICATION_ENTRY_TYPE],
+    ) ?? await this.readJsonlFile(found.filePath)
+    const notifications = new Map<string, SessionTaskNotification>()
+    for (const entry of entries) {
+      const notification = entry.type === PERSISTED_TASK_NOTIFICATION_ENTRY_TYPE
+        ? this.parsePersistedTaskNotification(entry.taskNotification, entry.timestamp)
+        : entry.message?.role === 'user'
+          ? this.parseTaskNotificationContent(entry.message.content, entry.timestamp)
+          : null
+      if (notification) notifications.set(notification.toolUseId, notification)
+    }
+    return [...notifications.values()]
+  }
+
+  // --------------------------------------------------------------------------
+  // Private helpers
+  // --------------------------------------------------------------------------
+
+  private entriesToMessages(entries: RawEntry[]): MessageEntry[] {
+    const messages: MessageEntry[] = []
+    const entriesByUuid = new Map<string, RawEntry>()
+    const parentToolUseIdCache = new Map<string, string | undefined>()
+    let suppressTaskNotificationResponse = false
+
+    for (const entry of entries) {
+      if (typeof entry.uuid === 'string' && entry.uuid.length > 0) {
+        entriesByUuid.set(entry.uuid, entry)
+      }
+    }
+
+    for (const entry of entries) {
+      const goalLocalCommandMessage = this.goalLocalCommandEntryToMessage(entry)
+      if (goalLocalCommandMessage) {
+        messages.push(goalLocalCommandMessage)
+        continue
+      }
+
+      // Only process transcript entries (user / assistant / system with messages)
+      if (!entry.message?.role) continue
+
+      // Skip meta entries (CLI internal bookkeeping)
+      if (entry.isMeta) continue
+
+      const isTaskNotification =
+        entry.message.role === 'user' &&
+        this.isTaskNotificationContent(entry.message.content)
+      if (isTaskNotification) {
+        suppressTaskNotificationResponse = true
+        continue
+      }
+
+      if (
+        entry.message.role === 'user' &&
+        !this.isToolResultContent(entry.message.content)
+      ) {
+        suppressTaskNotificationResponse = false
+      } else if (suppressTaskNotificationResponse) {
+        continue
+      }
+
+      if (this.shouldHideTranscriptEntry(entry)) continue
+
+      // Skip non-transcript entry types
+      const entryType = entry.type
+      if (
+        entryType !== 'user' &&
+        entryType !== 'assistant' &&
+        entryType !== 'system'
+      ) {
+        continue
+      }
+
+      const parentToolUseId = this.resolveParentToolUseId(
+        entry,
+        entriesByUuid,
+        parentToolUseIdCache,
+      )
+      const msg = this.entryToMessage(entry, parentToolUseId)
+      if (msg) {
+        messages.push(msg)
+      }
+    }
+    return messages
+  }
+
+  private async pathExists(targetPath: string | null): Promise<boolean> {
+    if (!targetPath) return false
+
+    try {
+      const stat = await fs.stat(targetPath)
+      return stat.isDirectory()
+    } catch {
+      return false
+    }
+  }
+
+  private createCachedPathExists(): (targetPath: string | null) => Promise<boolean> {
+    const cache = new Map<string, Promise<boolean>>()
+    return (targetPath) => {
+      if (!targetPath) return Promise.resolve(false)
+      const key = targetPath.normalize('NFC')
+      const cached = cache.get(key)
+      if (cached) return cached
+      const pending = this.pathExists(targetPath)
+      cache.set(key, pending)
+      return pending
+    }
+  }
+
+  private async resolveWorkspaceAvailability({
+    workDir,
+    projectRoot,
+    worktreeSession,
+    repository,
+    pathExists = (targetPath: string | null) => this.pathExists(targetPath),
+  }: {
+    workDir: string | null
+    projectRoot: string | null
+    worktreeSession?: PersistedWorktreeSession | null
+    repository?: PreparedSessionWorkspace['repository']
+    pathExists?: (targetPath: string | null) => Promise<boolean>
+  }): Promise<{ workDirExists: boolean; workspaceState: SessionWorkspaceState }> {
+    const workDirExists = await pathExists(workDir)
+    if (workDirExists) {
+      return { workDirExists: true, workspaceState: 'available' }
+    }
+
+    const projectRootIsDifferent = !this.sameWorkspacePath(workDir, projectRoot)
+    const projectRootExists = projectRootIsDifferent && await pathExists(projectRoot)
+    const removedPersistedWorktree = projectRootExists && this.matchesPersistedWorktree({
+      workDir,
+      projectRoot,
+      worktreeSession,
+      repository,
+    })
+
+    return {
+      workDirExists: false,
+      workspaceState: removedPersistedWorktree ? 'worktree_removed' : 'missing',
+    }
+  }
+
+  private matchesPersistedWorktree({
+    workDir,
+    projectRoot,
+    worktreeSession,
+    repository,
+  }: {
+    workDir: string | null
+    projectRoot: string | null
+    worktreeSession?: PersistedWorktreeSession | null
+    repository?: PreparedSessionWorkspace['repository']
+  }): boolean {
+    if (!workDir || !projectRoot) return false
+    if (this.sameWorkspacePath(workDir, worktreeSession?.worktreePath)) return true
+    if (
+      repository?.worktree &&
+      this.sameWorkspacePath(workDir, repository.worktreePath)
+    ) {
+      return true
+    }
+
+    const normalizedWorkDir = this.normalizeWorkspacePath(workDir)
+    const marker = '/.claude/worktrees/'
+    const markerIndex = normalizedWorkDir.indexOf(marker)
+    if (markerIndex <= 0) return false
+    return this.sameWorkspacePath(
+      normalizedWorkDir.slice(0, markerIndex),
+      projectRoot,
+    )
+  }
+
+  private sameWorkspacePath(
+    left: string | null | undefined,
+    right: string | null | undefined,
+  ): boolean {
+    if (!left || !right) return false
+    return this.normalizeWorkspacePath(left) === this.normalizeWorkspacePath(right)
+  }
+
+  private normalizeWorkspacePath(targetPath: string): string {
+    const normalized = normalizeDriveRootPathForPlatform(targetPath)
+      .normalize('NFC')
+      .replace(/\\/g, '/')
+    return normalized.length > 1 ? normalized.replace(/\/+$/, '') : normalized
+  }
+}
+
+// Singleton instance for shared use across API handlers
+export const sessionService = new SessionService()
