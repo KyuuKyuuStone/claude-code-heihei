@@ -293,6 +293,65 @@ describe('Servants API', () => {
     await new Promise((r) => setTimeout(r, 50))
     expect(deliverMock).toHaveBeenCalledTimes(1)
   })
+
+  it('should deliver a worker orientation on first registration', async () => {
+    const put = await handleServantsApi(
+      jsonReq(`http://localhost/api/servant-sessions/${sessionId}`, 'PUT', {
+        role: '写作',
+        description: '完成文档以及写作需求',
+        enabled: true,
+      }),
+      new URL(`http://localhost/api/servant-sessions/${sessionId}`),
+      ['api', 'servant-sessions', sessionId],
+    )
+    expect(put.status).toBe(200)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(deliverMock).toHaveBeenCalledTimes(1)
+    expect(deliverMock.mock.calls[0][0]).toBe(sessionId)
+    expect(deliverMock.mock.calls[0][1]).toContain('协作员工')
+    expect(deliverMock.mock.calls[0][1]).toContain('写作')
+
+    // 再次保存（已是员工）：不重复触发
+    const again = await handleServantsApi(
+      jsonReq(`http://localhost/api/servant-sessions/${sessionId}`, 'PUT', {
+        role: '写作',
+        enabled: true,
+      }),
+      new URL(`http://localhost/api/servant-sessions/${sessionId}`),
+      ['api', 'servant-sessions', sessionId],
+    )
+    expect(again.status).toBe(200)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(deliverMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('should notify the supervisor when a new worker is registered', async () => {
+    const supervisor = await sessionService.createSession(tmpDir)
+    await handleServantsApi(
+      jsonReq(`http://localhost/api/servant-sessions/${supervisor.sessionId}`, 'PUT', {
+        enabled: false,
+        supervisor: true,
+      }),
+      new URL(`http://localhost/api/servant-sessions/${supervisor.sessionId}`),
+      ['api', 'servant-sessions', supervisor.sessionId],
+    )
+    await new Promise((r) => setTimeout(r, 50))
+    expect(deliverMock).toHaveBeenCalledTimes(1)
+
+    await handleServantsApi(
+      jsonReq(`http://localhost/api/servant-sessions/${sessionId}`, 'PUT', {
+        role: '写作',
+        description: '完成文档以及写作需求',
+        enabled: true,
+      }),
+      new URL(`http://localhost/api/servant-sessions/${sessionId}`),
+      ['api', 'servant-sessions', sessionId],
+    )
+    await new Promise((r) => setTimeout(r, 100))
+    expect(deliverMock).toHaveBeenCalledTimes(3)
+    expect(deliverMock.mock.calls[2][0]).toBe(supervisor.sessionId)
+    expect(deliverMock.mock.calls[2][1]).toContain('新员工')
+  })
 })
 
 // ─── Session Messages API tests ─────────────────────────────────────────────

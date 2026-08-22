@@ -46,23 +46,41 @@ export async function handleServantsApi(
         enabled: body.enabled as boolean,
         supervisor: body.supervisor as boolean | undefined,
       })
+      const host = req.headers.get('host') || '127.0.0.1'
 
       // 新任命的主管：注入履新消息——主管的第一步默认是查看花名册、
       // 了解员工（角色与特性），然后等待用户命令。
       // 失败不阻塞任命本身（身份已落盘）。
       if (entry.supervisor && !previous?.supervisor) {
         void sessionMessenger
-          .deliver(
-            targetId,
-            buildSupervisorOrientation(),
-            req.headers.get('host') || '127.0.0.1',
-          )
+          .deliver(targetId, buildSupervisorOrientation(), host)
           .catch((error) => {
             console.error(
               `[Servants] Failed to deliver supervisor orientation to ${targetId}:`,
               error,
             )
           })
+      }
+
+      // 员工首次登记（enabled 从 false/未登记 变为 true）：
+      // 1) 注入上岗消息——会话从此有内容、会落盘，关闭不再消失，
+      //    员工一启动就明确自己的角色与职责；
+      // 2) 通知同项目的主管——有新员工加入了。
+      // 失败不阻塞登记本身（身份已落盘）。
+      if (entry.enabled && !previous?.enabled) {
+        void sessionMessenger
+          .deliver(
+            targetId,
+            buildWorkerOrientation(entry.role, entry.description),
+            host,
+          )
+          .catch((error) => {
+            console.error(
+              `[Servants] Failed to deliver worker orientation to ${targetId}:`,
+              error,
+            )
+          })
+        void notifySupervisorOfNewWorker(entry, host)
       }
       return Response.json({ servant: entry })
     }
@@ -150,4 +168,44 @@ function buildSupervisorOrientation(): string {
     '看完后用一两句话向用户报告你有哪些员工可用，然后等待用户命令。',
     '派活、收汇报、验收的具体做法遵循 work-orchestrator 技能；该技能已对你生效。',
   ].join('\n')
+}
+
+function buildWorkerOrientation(role?: string, description?: string): string {
+  const roleLine = role
+    ? `你的角色：${role}${description ? `——${description}` : ''}`
+    : '你的角色：协作员工（未填写具体角色）'
+  return [
+    '【系统】你已被登记为本项目的协作员工。',
+    roleLine,
+    '等待主管派活：主管派来的任务会自动出现在你的会话里，收到后立即执行。',
+    '完工后按派活消息里的要求，用一条命令向主管汇报（写一句话结果 + 产出文件路径）。',
+  ].join('\n')
+}
+
+async function notifySupervisorOfNewWorker(
+  entry: { sessionId: string; role?: string; description?: string },
+  host: string,
+): Promise<void> {
+  try {
+    const all = await servantService.listServants({
+      includeAll: true,
+      forSessionId: entry.sessionId,
+    })
+    const supervisor = all.find((s) => s.supervisor)
+    if (!supervisor || supervisor.sessionId === entry.sessionId) return
+
+    const roleText = entry.role
+      ? `${entry.role}（${entry.description || '未填写特性'}）`
+      : '未命名角色'
+    await sessionMessenger.deliver(
+      supervisor.sessionId,
+      `【系统】新员工已加入本项目：${roleText}。花名册已更新，你现在可以给这位员工派活了。`,
+      host,
+    )
+  } catch (error) {
+    console.error(
+      `[Servants] Failed to notify supervisor about new worker ${entry.sessionId}:`,
+      error,
+    )
+  }
 }
