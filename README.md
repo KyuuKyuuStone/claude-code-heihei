@@ -20,6 +20,17 @@ Claude Code Heihei is a **desktop Claude Code workspace** for macOS, Windows, an
 
 > For other platforms and versions, see [Releases](https://github.com/KyuuKyuuStone/claude-code-heihei/releases).
 
+## Screenshots
+
+<p align="center">
+  <img src="docs/images/app/ZY01.jpg" width="400" alt="Screenshot 1">
+  <img src="docs/images/app/ZY02.jpg" width="400" alt="Screenshot 2">
+</p>
+<p align="center">
+  <img src="docs/images/app/ZY03.jpg" width="400" alt="Screenshot 3">
+  <img src="docs/images/app/ZY04.jpg" width="400" alt="Screenshot 4">
+</p>
+
 ## Features
 
 ### Supervisor–worker collaboration (new in this project)
