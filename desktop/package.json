@@ -1,6 +1,7 @@
 {
   "name": "claude-code-desktop",
   "private": true,
+  "packageManager": "bun@1.3.14",
   "version": "1.0.0",
   "description": "Desktop coding agent workbench for Claude Code Heihei.",
   "type": "module",
