@@ -22,14 +22,10 @@ Claude Code Heihei is a **desktop Claude Code workspace** for macOS, Windows, an
 
 ## Screenshots
 
-<p align="center">
-  <img src="docs/images/app/ZY01.jpg" width="400" alt="Screenshot 1">
-  <img src="docs/images/app/ZY02.jpg" width="400" alt="Screenshot 2">
-</p>
-<p align="center">
-  <img src="docs/images/app/ZY03.jpg" width="400" alt="Screenshot 3">
-  <img src="docs/images/app/ZY04.jpg" width="400" alt="Screenshot 4">
-</p>
+|  |  |
+|:--:|:--:|
+| ![Screenshot 1](docs/images/app/ZY01.jpg) | ![Screenshot 2](docs/images/app/ZY02.jpg) |
+| ![Screenshot 3](docs/images/app/ZY03.jpg) | ![Screenshot 4](docs/images/app/ZY04.jpg) |
 
 ## Features
 

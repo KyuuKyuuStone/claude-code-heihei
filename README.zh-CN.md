@@ -22,14 +22,10 @@ Claude Code Heihei 是一个 **macOS / Windows / Linux 桌面端 Claude Code 工
 
 ## 界面预览
 
-<p align="center">
-  <img src="docs/images/app/ZY01.jpg" width="400" alt="界面预览 1">
-  <img src="docs/images/app/ZY02.jpg" width="400" alt="界面预览 2">
-</p>
-<p align="center">
-  <img src="docs/images/app/ZY03.jpg" width="400" alt="界面预览 3">
-  <img src="docs/images/app/ZY04.jpg" width="400" alt="界面预览 4">
-</p>
+|  |  |
+|:--:|:--:|
+| ![界面预览 1](docs/images/app/ZY01.jpg) | ![界面预览 2](docs/images/app/ZY02.jpg) |
+| ![界面预览 3](docs/images/app/ZY03.jpg) | ![界面预览 4](docs/images/app/ZY04.jpg) |
 
 ## 功能特性
 
