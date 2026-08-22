@@ -47,8 +47,7 @@
     },
     "win": {
       "target": "nsis",
-      "icon": "src-tauri/icons/icon.ico",
-      "signAndEditExecutable": false
+      "icon": "src-tauri/icons/icon.ico"
     },
     "nsis": {
       "oneClick": false,
