@@ -28,7 +28,7 @@ curl -s "\$CC_HEIHEI_DESKTOP_SERVER_URL/api/servant-sessions?forSession=\$CC_HEI
 \`\`\`json
 {
   "targetSessionId": "<员工sessionId>",
-  "content": "【上级派活】你的角色：<员工的role>——<员工的description>\\n\\n任务：<背景与交付物，写清楚>\\n\\n完工后必须汇报：用 Bash 执行以下命令（content 写一句话结果+产出文件路径）：\\ncurl -s -X POST \\"\$CC_HEIHEI_DESKTOP_SERVER_URL/api/session-messages\\" -H \\"Content-Type: application/json\\" -d '{\\"targetSessionId\\":\\"<你的会话ID>\\",\\"content\\":\\"【汇报】<一句话结果+产出路径>\\"}'\\n汇报后任务即告结束。",
+  "content": "【上级派活】你的角色：<员工的role>——<员工的description>\\n\\n任务：<背景与交付物，写清楚>\\n\\n收到后立即开始执行，先回复一句确认（如"收到，开始执行"）再干活，不要等待确认。\\n\\n完工后必须汇报：用 Bash 执行以下命令（content 写一句话结果+产出文件路径）：\\ncurl -s -X POST \\"\$CC_HEIHEI_DESKTOP_SERVER_URL/api/session-messages\\" -H \\"Content-Type: application/json\\" -d '{\\"targetSessionId\\":\\"<你的会话ID>\\",\\"content\\":\\"【汇报】<一句话结果+产出路径>\\"}'\\n汇报后任务即告结束。",
   "fromSessionId": "<你的会话ID>"
 }
 \`\`\`
