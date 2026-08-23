@@ -8,6 +8,11 @@
 
 [![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
 [![Gitee 镜像](https://img.shields.io/badge/Gitee-镜像仓库-C71D23?logo=gitee&logoColor=white)](https://gitee.com/KyuuKyuuStone/claude-code-heihei)
+[![CI](https://github.com/KyuuKyuuStone/claude-code-heihei/actions/workflows/ci.yml/badge.svg)](https://github.com/KyuuKyuuStone/claude-code-heihei/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/KyuuKyuuStone/claude-code-heihei?sort=semver)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases)
+
+[![Downloads](https://img.shields.io/github/downloads/KyuuKyuuStone/claude-code-heihei/total)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)]()
 
 [English](README.md) · **简体中文**
 
