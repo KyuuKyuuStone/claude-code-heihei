@@ -17,7 +17,7 @@ export const content = {
       lede: '本地优先的桌面客户端：会话、改动、Agent、定时任务都摆在明处。接哪个模型你说了算，改哪一行你点头才算。',
       primary: '下载桌面端',
       secondary: '三步跑通第一条会话',
-      badges: ['macOS · Windows · Linux', '开源免费', '数据留在本机'],
+      badges: ['Windows', '开源免费', '数据留在本机'],
       caption: '真实 App 的界面截图：项目、权限与模型一眼可见。'
     },
     capabilities: {
@@ -42,28 +42,28 @@ export const content = {
           id: 'session',
           label: '会话',
           title: '多会话工作台',
-          body: '标签页、项目切换、终端入口与会话历史集中管理，每个会话的状态一眼看清。',
+          body: '标签页、项目切换与会话历史集中管理，每个会话的状态一眼看清。',
           image: localizedImages.zh.shot1
         },
         {
-          id: 'diff',
-          label: '审阅',
-          title: '逐文件 Diff 审阅',
-          body: '列出本轮改动，任意文件一键打开带语法高亮的 Diff，看不顺眼可以撤销整轮。',
+          id: 'collab',
+          label: '协作',
+          title: '右键协作设置',
+          body: '在会话上点右键，把任意会话登记为员工、任命主管，按项目组建团队。',
           image: localizedImages.zh.shot2
         },
         {
-          id: 'models',
-          label: '模型',
-          title: '接入你自己的模型',
-          body: '通过 API Key 添加服务商，DeepSeek、Kimi、智谱 GLM 等有现成预设，每条会话自由选择。',
+          id: 'collab-dialog',
+          label: '配置',
+          title: '协作设置弹窗',
+          body: '设定角色与特性，主管向员工派活，员工无人值守执行、完工自动汇报。',
           image: localizedImages.zh.shot3
         },
         {
-          id: 'skills',
-          label: '技能',
-          title: '技能与定时任务',
-          body: '把流程固化成技能随会话加载，重复工作设成定时任务，自动执行并留下记录。',
+          id: 'workers',
+          label: '员工',
+          title: '协作会话与员工标识',
+          body: '会话列表里一眼分清主管与员工身份，派活与汇报按项目隔离。',
           image: localizedImages.zh.shot4
         }
       ]
@@ -98,7 +98,7 @@ export const content = {
     },
     install: {
       title: '装上试试',
-      lede: 'GitHub Releases 有三平台安装包；想从源码跑也就三行命令。',
+      lede: 'GitHub Releases 提供 Windows 安装包；想从源码跑也就三行命令。',
       primary: '下载安装包',
       docs: '安装遇到问题',
       commandLabel: '从源码运行',
@@ -120,7 +120,7 @@ export const content = {
       lede: 'A local-first desktop client. Sessions, diffs, agents and scheduled runs all sit in the open. You pick the model; nothing lands until you say so.',
       primary: 'Download the app',
       secondary: 'Run your first session',
-      badges: ['macOS · Windows · Linux', 'Open source', 'Your data stays local'],
+      badges: ['Windows', 'Open source', 'Your data stays local'],
       caption: 'Real screenshots from the app: project, permissions and model visible up front.'
     },
     capabilities: {
@@ -145,28 +145,28 @@ export const content = {
           id: 'session',
           label: 'Session',
           title: 'A multi-session workspace',
-          body: 'Tabs, project switching, terminal entry and session history in one place, with every session’s state visible at a glance.',
+          body: 'Tabs, project switching and session history in one place, with every session’s state visible at a glance.',
           image: localizedImages.en.shot1
         },
         {
-          id: 'diff',
-          label: 'Review',
-          title: 'File-by-file diff review',
-          body: 'See this turn’s changes, open any file as a syntax-highlighted diff, and undo the whole turn if you don’t like it.',
+          id: 'collab',
+          label: 'Collab',
+          title: 'Right-click collaboration setup',
+          body: 'Right-click a session to register it as a worker or appoint a supervisor, building a team per project.',
           image: localizedImages.en.shot2
         },
         {
-          id: 'models',
-          label: 'Models',
-          title: 'Bring your own model',
-          body: 'Add providers via API key — presets for DeepSeek, Kimi, Zhipu GLM and more — and pick the model for each session.',
+          id: 'collab-dialog',
+          label: 'Config',
+          title: 'Collaboration setup dialog',
+          body: 'Set roles and traits — the supervisor dispatches tasks, workers run unattended and report back.',
           image: localizedImages.en.shot3
         },
         {
-          id: 'skills',
-          label: 'Skills',
-          title: 'Skills and scheduled tasks',
-          body: 'Turn workflows into skills that load with sessions, and turn routines into scheduled jobs that run and leave a record.',
+          id: 'workers',
+          label: 'Workers',
+          title: 'Collaboration sessions and worker badges',
+          body: 'See supervisor and worker roles at a glance in the session list, with dispatch scoped per project.',
           image: localizedImages.en.shot4
         }
       ]
@@ -201,7 +201,7 @@ export const content = {
     },
     install: {
       title: 'Try it',
-      lede: 'Installers for all three platforms on GitHub Releases — or three commands from source.',
+      lede: 'Windows installer on GitHub Releases — or three commands from source.',
       primary: 'Download',
       docs: 'Install troubleshooting',
       commandLabel: 'Run from source',

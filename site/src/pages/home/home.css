@@ -217,19 +217,17 @@
   line-height: 1.75;
 }
 
-/* 舞台按截图比例固定住高度。两件事一起解决：换 tab 时新图加载完之前
-   高度不会塌成 0；竖图那一格也不会比其余六格高出一截，面板不再跳动。 */
+/* 舞台按截图比例固定住高度：换 tab 时新图加载完之前高度不会塌成 0，面板不跳动。 */
 .tour__shot {
   display: flex;
   align-items: center;
   justify-content: center;
-  aspect-ratio: 2000 / 1436;
+  aspect-ratio: 16 / 9;
 }
 
 .tour__shot img {
   width: 100%;
   height: auto;
-  aspect-ratio: 2000 / 1436;
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-sm);
