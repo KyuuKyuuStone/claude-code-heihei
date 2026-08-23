@@ -9,7 +9,7 @@ import './home.css'
 
 const SOURCE_COMMANDS = [
   'git clone https://github.com/KyuuKyuuStone/claude-code-heihei.git',
-  'cd cc-heihei && bun install',
+  'cd claude-code-heihei && bun install',
   './bin/claude-heihei'
 ]
 
@@ -42,9 +42,9 @@ function Hero({ c, locale }) {
           <img
             alt={c.tour.tabs[0].title}
             fetchPriority="high"
-            height="1436"
+            height="1080"
             src={c.tour.tabs[0].image}
-            width="2000"
+            width="1920"
           />
           <figcaption>{c.hero.caption}</figcaption>
         </figure>

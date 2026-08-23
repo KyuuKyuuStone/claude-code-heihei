@@ -1,21 +1,7 @@
-import sessionNewZh from '../../../../docs/images/app/zh-CN/session-new.webp'
-import sessionMainZh from '../../../../docs/images/app/zh-CN/session-main.webp'
-import workspaceDiffZh from '../../../../docs/images/app/zh-CN/workspace-diff.webp'
-import workspacePreviewZh from '../../../../docs/images/app/zh-CN/workspace-preview.webp'
-import modelPickerZh from '../../../../docs/images/app/zh-CN/model-picker.webp'
-import skillMarketZh from '../../../../docs/images/app/zh-CN/skill-market.webp'
-import scheduleCreateZh from '../../../../docs/images/app/zh-CN/schedule-create.webp'
-import h5SessionZh from '../../../../docs/images/app/zh-CN/h5-session.webp'
-import petDesktopZh from '../../../../docs/images/app/zh-CN/pet-desktop.webp'
-import sessionNewEn from '../../../../docs/images/app/en/session-new.webp'
-import sessionMainEn from '../../../../docs/images/app/en/session-main.webp'
-import workspaceDiffEn from '../../../../docs/images/app/en/workspace-diff.webp'
-import workspacePreviewEn from '../../../../docs/images/app/en/workspace-preview.webp'
-import modelPickerEn from '../../../../docs/images/app/en/model-picker.webp'
-import skillMarketEn from '../../../../docs/images/app/en/skill-market.webp'
-import scheduleCreateEn from '../../../../docs/images/app/en/schedule-create.webp'
-import h5SessionEn from '../../../../docs/images/app/en/h5-session.webp'
-import petDesktopEn from '../../../../docs/images/app/en/pet-desktop.webp'
+import shot1 from '../../../../docs/images/app/ZY01.jpg'
+import shot2 from '../../../../docs/images/app/ZY02.jpg'
+import shot3 from '../../../../docs/images/app/ZY03.jpg'
+import shot4 from '../../../../docs/images/app/ZY04.jpg'
 
 // 吉祥物与截图一样从 docs/ 取 —— docs/ 是站点唯一的媒体源。
 // 原图是桌面端的 agent-mascots，改动那边时记得同步这四张。
@@ -25,28 +11,8 @@ import bubu from '../../../../docs/images/mascots/bubu.png'
 import huihui from '../../../../docs/images/mascots/huihui.png'
 
 const localizedImages = {
-  zh: {
-    h5Session: h5SessionZh,
-    modelPicker: modelPickerZh,
-    petDesktop: petDesktopZh,
-    scheduleCreate: scheduleCreateZh,
-    sessionMain: sessionMainZh,
-    sessionNew: sessionNewZh,
-    skillMarket: skillMarketZh,
-    workspaceDiff: workspaceDiffZh,
-    workspacePreview: workspacePreviewZh
-  },
-  en: {
-    h5Session: h5SessionEn,
-    modelPicker: modelPickerEn,
-    petDesktop: petDesktopEn,
-    scheduleCreate: scheduleCreateEn,
-    sessionMain: sessionMainEn,
-    sessionNew: sessionNewEn,
-    skillMarket: skillMarketEn,
-    workspaceDiff: workspaceDiffEn,
-    workspacePreview: workspacePreviewEn
-  }
+  zh: { shot1, shot2, shot3, shot4 },
+  en: { shot1, shot2, shot3, shot4 }
 }
 
 export const images = localizedImages.zh
@@ -59,7 +25,7 @@ export const content = {
       primary: '下载桌面端',
       secondary: '三步跑通第一条会话',
       badges: ['macOS · Windows · Linux', '开源免费', '数据留在本机'],
-      caption: '真实 App 的空会话首屏：100% 界面缩放、纯白主题，项目、权限与模型一眼可见。'
+      caption: '真实 App 的界面截图：项目、权限与模型一眼可见。'
     },
     capabilities: {
       title: '它替你做的事',
@@ -72,68 +38,40 @@ export const content = {
         ['装技能', '技能市场里看中就装，来源和安全状态摆在明处。'],
         ['到点自动跑', '重复流程设成定时任务，在独立会话里执行，每次都留记录。'],
         ['操作电脑', 'Computer Use 让它看屏幕、点鼠标、敲键盘，敏感操作等你点头。'],
-        ['出门接着聊', '手机浏览器扫码进 H5，或者从飞书 / Telegram / 微信继续同一条会话。']
+        ['上下级协作', '每项目任命主管、登记员工，自动派活、无人值守执行、完工汇报。']
       ]
     },
     tour: {
       title: '真实 App、真实任务，没有概念图',
-      lede: '截图统一使用纯白主题与 100% 界面缩放；任务由 ChatGPT 官方服务商的 GPT-5.6-Luna 在真实测试项目中执行。',
+      lede: '截图来自 Claude Code Heihei 桌面端，通过 API Key 接入 DeepSeek 等服务商，在真实项目中执行。',
       tabs: [
         {
-          id: 'start',
-          label: '开始',
-          title: '第一眼，就是空会话',
-          body: '刚打开项目时不塞演示内容。输入框、权限模式、运行位置和 GPT-5.6-Luna 都在首屏直接可见。',
-          image: localizedImages.zh.sessionNew
-        },
-        {
           id: 'session',
-          label: '执行',
-          title: '说一句话，看它一步步做完',
-          body: '选好项目、权限模式和模型就能开工。它读了哪些文件、执行了什么命令、改了哪一行，全都留在对话里。',
-          image: localizedImages.zh.sessionMain
+          label: '会话',
+          title: '多会话工作台',
+          body: '标签页、项目切换、终端入口与会话历史集中管理，每个会话的状态一眼看清。',
+          image: localizedImages.zh.shot1
         },
         {
-          id: 'review',
+          id: 'diff',
           label: '审阅',
-          title: '改了什么，逐个文件看清楚',
-          body: '右侧工作区列出本轮改动，点开就是带语法高亮的 Diff。看不顺眼可以撤销整轮。',
-          image: localizedImages.zh.workspaceDiff
-        },
-        {
-          id: 'preview',
-          label: '预览',
-          title: '页面效果，会话里直接验证',
-          body: '内置浏览器打开本地服务，改完当场看效果；截图和元素选择都能带回对话继续说。',
-          image: localizedImages.zh.workspacePreview
+          title: '逐文件 Diff 审阅',
+          body: '列出本轮改动，任意文件一键打开带语法高亮的 Diff，看不顺眼可以撤销整轮。',
+          image: localizedImages.zh.shot2
         },
         {
           id: 'models',
           label: '模型',
-          title: '接哪个模型，你自己定',
-          body: 'Claude / ChatGPT / Grok 官方账号直接登录，每条会话再选具体模型；这次真实任务使用 ChatGPT 官方与 GPT-5.6-Luna。',
-          image: localizedImages.zh.modelPicker
+          title: '接入你自己的模型',
+          body: '通过 API Key 添加服务商，DeepSeek、Kimi、智谱 GLM 等有现成预设，每条会话自由选择。',
+          image: localizedImages.zh.shot3
         },
         {
           id: 'skills',
           label: '技能',
-          title: '缺什么手艺，装什么手艺',
-          body: '技能市场聚合 ClawHub 与 SkillHub，每个技能都标了来源和安全状态，装之前先看清楚。',
-          image: localizedImages.zh.skillMarket
-        },
-        {
-          id: 'schedule',
-          label: '定时',
-          title: '设好时间，它按时回来交活',
-          body: '定好频率、模型、目录和通知方式；任务在独立会话里执行，每跑一次都有记录可查。',
-          image: localizedImages.zh.scheduleCreate
-        },
-        {
-          id: 'remote',
-          label: '手机',
-          title: '离开电脑，会话不断',
-          body: '扫码用手机浏览器接着聊。锁屏切后台也不会打断正在跑的任务，回来就能看结果。',
-          image: localizedImages.zh.h5Session
+          title: '技能与定时任务',
+          body: '把流程固化成技能随会话加载，重复工作设成定时任务，自动执行并留下记录。',
+          image: localizedImages.zh.shot4
         }
       ]
     },
@@ -188,7 +126,7 @@ export const content = {
     footer: {
       tagline: '本地优先的 Claude Code 桌面客户端',
       columns: [
-        ['文档', [['/start', '开始使用'], ['/desktop', '桌面端功能'], ['/im', 'IM 接入'], ['/cli', '命令行']]],
+        ['文档', [['/start', '开始使用'], ['/desktop', '桌面端功能'], ['/cli', '命令行']]],
         ['开发者', [['/internals', '架构总览'], ['/internals/structure', '项目结构'], ['/internals/contributing', '参与贡献']]]
       ]
     }
@@ -201,7 +139,7 @@ export const content = {
       primary: 'Download the app',
       secondary: 'Run your first session',
       badges: ['macOS · Windows · Linux', 'Open source', 'Your data stays local'],
-      caption: 'The real empty-session screen at 100% UI zoom in Pure White, with project, permissions and model visible up front.'
+      caption: 'Real screenshots from the app: project, permissions and model visible up front.'
     },
     capabilities: {
       title: 'What it does for you',
@@ -214,21 +152,41 @@ export const content = {
         ['Install skills', 'Browse the marketplace with source and safety status shown up front.'],
         ['Run on a clock', 'Turn routines into scheduled jobs that run in their own sessions and leave a record.'],
         ['Drive the desktop', 'Computer Use can see the screen, click and type. Sensitive moves still wait for you.'],
-        ['Keep going anywhere', 'Scan into the mobile web app, or continue the same session from Feishu, Telegram or WeChat.']
+        ['Supervisor–worker teams', 'Appoint a supervisor and register workers per project — auto-dispatch, unattended execution, and hand-off reports.']
       ]
     },
     tour: {
       title: 'Real app, real tasks, no concept art',
-      lede: 'Every shot uses Pure White at 100% UI zoom. The task flow ran in a real test project through ChatGPT Official and GPT-5.6-Luna.',
+      lede: 'Screenshots from the Claude Code Heihei desktop app, connected to DeepSeek and other providers via API key, running in real projects.',
       tabs: [
-        { id: 'start', label: 'Start', title: 'The first screen is an empty session', body: 'No staged demo content. The composer, permission mode, working location and GPT-5.6-Luna are visible before the first task starts.', image: localizedImages.en.sessionNew },
-        { id: 'session', label: 'Run', title: 'Say it once. Watch it get done.', body: 'Pick a project, a permission mode and a model. Every file it read, every command it ran and every line it changed stays in the thread.', image: localizedImages.en.sessionMain },
-        { id: 'review', label: 'Review', title: 'Know exactly what changed', body: 'The workspace lists this turn’s edits; open any file for a syntax-highlighted diff. Don’t like it? Undo the whole turn.', image: localizedImages.en.workspaceDiff },
-        { id: 'preview', label: 'Preview', title: 'Check the page without leaving', body: 'Open your dev server in the built-in browser, see the result immediately, and bring screenshots or picked elements back into the thread.', image: localizedImages.en.workspacePreview },
-        { id: 'models', label: 'Models', title: 'Bring your own model', body: 'Sign in to Claude, ChatGPT or Grok, then choose the exact model for each session. This real run uses ChatGPT Official with GPT-5.6-Luna.', image: localizedImages.en.modelPicker },
-        { id: 'skills', label: 'Skills', title: 'Missing a trick? Install it.', body: 'The marketplace aggregates ClawHub and SkillHub, and labels every skill with its source and safety status before you install.', image: localizedImages.en.skillMarket },
-        { id: 'schedule', label: 'Schedule', title: 'Set the time. It comes back with results.', body: 'Choose a cadence, model, directory and notification. Jobs run in their own sessions and every run leaves a record.', image: localizedImages.en.scheduleCreate },
-        { id: 'remote', label: 'Mobile', title: 'Step away, keep the session', body: 'Scan the QR code and continue in your phone browser. Locking the screen won’t kill a running task.', image: localizedImages.en.h5Session }
+        {
+          id: 'session',
+          label: 'Session',
+          title: 'A multi-session workspace',
+          body: 'Tabs, project switching, terminal entry and session history in one place, with every session’s state visible at a glance.',
+          image: localizedImages.en.shot1
+        },
+        {
+          id: 'diff',
+          label: 'Review',
+          title: 'File-by-file diff review',
+          body: 'See this turn’s changes, open any file as a syntax-highlighted diff, and undo the whole turn if you don’t like it.',
+          image: localizedImages.en.shot2
+        },
+        {
+          id: 'models',
+          label: 'Models',
+          title: 'Bring your own model',
+          body: 'Add providers via API key — presets for DeepSeek, Kimi, Zhipu GLM and more — and pick the model for each session.',
+          image: localizedImages.en.shot3
+        },
+        {
+          id: 'skills',
+          label: 'Skills',
+          title: 'Skills and scheduled tasks',
+          body: 'Turn workflows into skills that load with sessions, and turn routines into scheduled jobs that run and leave a record.',
+          image: localizedImages.en.shot4
+        }
       ]
     },
     crew: {
@@ -282,7 +240,7 @@ export const content = {
     footer: {
       tagline: 'A local-first desktop client for Claude Code',
       columns: [
-        ['Docs', [['/en/start', 'Get started'], ['/en/desktop', 'Desktop app'], ['/en/im', 'Messaging'], ['/en/cli', 'Command line']]],
+        ['Docs', [['/en/start', 'Get started'], ['/en/desktop', 'Desktop app'], ['/en/cli', 'Command line']]],
         ['Developers', [['/en/internals', 'Architecture'], ['/en/internals/structure', 'Project structure'], ['/en/internals/contributing', 'Contributing']]]
       ]
     }

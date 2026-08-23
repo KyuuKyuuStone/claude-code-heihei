@@ -19,7 +19,6 @@ You'll come here once during setup and rarely again. Full steps in [Connecting a
 
 The tab you'll open most often — everything about how the app feels.
 
-![Settings → General: color themes, language, output style, default permissions](../../images/app/en/settings-general.webp)
 
 - **Color theme** — six of them: Pure White (default), Paper, Warm Classic, Celadon, Ink Night, Ink Blue. There's also **Follow the system**, which lets you pick which theme to use in light mode and which in dark mode.
 - **Language** — the interface language.
@@ -91,7 +90,6 @@ Let Claude read the screen, click, and type. Unusable until you install the runt
 
 ## Token usage
 
-![Settings → Token usage: heatmap and stat cards](../../images/app/en/settings-usage.webp)
 
 A usage dashboard computed from the Claude Code session records on this machine. Everything is calculated locally and nothing is uploaded.
 

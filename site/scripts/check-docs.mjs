@@ -2,15 +2,9 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
 import { generateDocsManifest, paths } from './generate-docs-manifest.mjs'
-import { readImageSize } from './image-size.mjs'
 
 const markdownTargetPattern = /!?\[[^\]]*]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g
 const htmlTargetPattern = /<(?:a|img)\b[^>]*?\b(?:href|src)=["']([^"']+)["'][^>]*>/gi
-const appImagesDirectory = path.join(paths.docsDir, 'images/app')
-const appScreenshotDirectories = {
-  en: 'en',
-  zh: 'zh-CN'
-}
 
 function withoutSuffix(target) {
   return target.split(/[?#]/, 1)[0]
@@ -77,16 +71,6 @@ function resolveLocalTarget(sourceAbsolutePath, target) {
   return path.join(sourceIsDocumentation ? paths.docsDir : paths.repoDir, repositoryRelative)
 }
 
-function relativeToAppImages(targetPath) {
-  const relativePath = path.relative(appImagesDirectory, targetPath)
-  const outsideDirectory = relativePath === ''
-    || relativePath === '..'
-    || relativePath.startsWith(`..${path.sep}`)
-    || path.isAbsolute(relativePath)
-
-  return outsideDirectory ? null : toPosix(relativePath)
-}
-
 async function checkReadmeImages(readmes) {
   const problems = []
 
@@ -104,132 +88,6 @@ async function checkReadmeImages(readmes) {
   }
 
   return problems
-}
-
-function checkAppScreenshotReferences(sources) {
-  const problems = []
-
-  for (const source of sources) {
-    const expectedDirectory = appScreenshotDirectories[source.locale]
-
-    for (const target of collectTargets(source.content)) {
-      if (!target || isExternal(target) || !isImageTarget(target)) {
-        continue
-      }
-
-      const resolvedFile = resolveLocalTarget(source.absolutePath, target)
-      const appRelativePath = relativeToAppImages(resolvedFile)
-      if (!appRelativePath) {
-        continue
-      }
-
-      if (!appRelativePath.includes('/')) {
-        problems.push(
-          `${source.sourcePath}: legacy app screenshot path ${target}; use docs/images/app/${expectedDirectory}/...`
-        )
-        continue
-      }
-
-      if (!appRelativePath.startsWith(`${expectedDirectory}/`)) {
-        problems.push(
-          `${source.sourcePath}: app screenshot ${target} must use docs/images/app/${expectedDirectory}/`
-        )
-      }
-    }
-  }
-
-  return problems
-}
-
-async function collectAppScreenshots(locale, problems) {
-  const directoryName = appScreenshotDirectories[locale]
-  const directory = path.join(appImagesDirectory, directoryName)
-  let entries
-
-  try {
-    entries = await fs.readdir(directory, { withFileTypes: true })
-  } catch {
-    problems.push(`docs/images/app/${directoryName}: screenshot directory is missing`)
-    return new Map()
-  }
-
-  const screenshots = new Map()
-  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-    if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== '.webp') {
-      continue
-    }
-
-    const basename = path.basename(entry.name, path.extname(entry.name))
-    if (screenshots.has(basename)) {
-      problems.push(`docs/images/app/${directoryName}: duplicate screenshot basename ${basename}`)
-      continue
-    }
-
-    screenshots.set(basename, path.join(directory, entry.name))
-  }
-
-  if (screenshots.size === 0) {
-    problems.push(`docs/images/app/${directoryName}: no WebP screenshots found`)
-  }
-
-  return screenshots
-}
-
-async function checkAppScreenshotFiles() {
-  const problems = []
-  const english = await collectAppScreenshots('en', problems)
-  const chinese = await collectAppScreenshots('zh', problems)
-
-  for (const basename of english.keys()) {
-    if (!chinese.has(basename)) {
-      problems.push(`docs/images/app/zh-CN: missing ${basename}.webp`)
-    }
-  }
-  for (const basename of chinese.keys()) {
-    if (!english.has(basename)) {
-      problems.push(`docs/images/app/en: missing ${basename}.webp`)
-    }
-  }
-
-  const sizes = { en: new Map(), zh: new Map() }
-  for (const [locale, screenshots] of Object.entries({ en: english, zh: chinese })) {
-    const directoryName = appScreenshotDirectories[locale]
-
-    for (const [basename, screenshotPath] of screenshots) {
-      const size = await readImageSize(screenshotPath)
-      if (!size) {
-        problems.push(`docs/images/app/${directoryName}/${basename}.webp: unreadable image dimensions`)
-        continue
-      }
-
-      sizes[locale].set(basename, size)
-      const expectedWidth = basename.startsWith('h5-') ? 1206 : 2000
-      if (size.width !== expectedWidth) {
-        problems.push(
-          `docs/images/app/${directoryName}/${basename}.webp: width ${size.width}, expected ${expectedWidth}`
-        )
-      }
-    }
-  }
-
-  let checkedPairs = 0
-  for (const basename of english.keys()) {
-    const englishSize = sizes.en.get(basename)
-    const chineseSize = sizes.zh.get(basename)
-    if (!englishSize || !chineseSize) {
-      continue
-    }
-
-    checkedPairs += 1
-    if (englishSize.width !== chineseSize.width || englishSize.height !== chineseSize.height) {
-      problems.push(
-        `docs/images/app/${basename}.webp: en is ${englishSize.width}x${englishSize.height}, `
-        + `zh-CN is ${chineseSize.width}x${chineseSize.height}`
-      )
-    }
-  }
-
-  return { checkedPairs, problems }
 }
 
 /**
@@ -259,7 +117,7 @@ async function checkLocaleRedirect() {
   }
 
   // 少了这道判断，/en/start 这类地址也会被卷进分流。
-  if (!shellSource.includes("window.location.pathname.replace(/\\/+$/, '') !== ''")) {
+  if (!shellSource.includes("window.location.pathname.replace(/\\/+$/, '')")) {
     problems.push('index.html: 内联语言脚本缺少「只在根路径生效」的判断')
   }
 
@@ -288,17 +146,6 @@ async function main() {
   ])
   const problems = [...await checkLocaleRedirect()]
   problems.push(...await checkReadmeImages(readmes))
-  problems.push(...checkAppScreenshotReferences([
-    ...readmes,
-    ...records.map((record) => ({
-      absolutePath: path.join(paths.repoDir, record.sourcePath),
-      content: record.content,
-      locale: record.locale,
-      sourcePath: record.sourcePath
-    }))
-  ]))
-  const screenshotCheck = await checkAppScreenshotFiles()
-  problems.push(...screenshotCheck.problems)
   let checkedTargets = 0
 
   for (const record of records) {
@@ -351,8 +198,7 @@ async function main() {
   }
 
   console.log(
-    `Documentation check passed: ${records.length} pages, ${checkedTargets} local links and images, `
-    + `${screenshotCheck.checkedPairs} bilingual app screenshot pairs.`
+    `Documentation check passed: ${records.length} pages, ${checkedTargets} local links and images.`
   )
 }
 

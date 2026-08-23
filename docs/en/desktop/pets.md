@@ -20,7 +20,6 @@ The pet is **off by default**:
 3. Pick one from **Built-in pets**.
 4. Turn on **Show desktop pet**.
 
-![Settings → Pets: four built-in pets and appearance controls](../../images/app/en/settings-pets.webp)
 
 ## The four built-in pets
 
@@ -35,7 +34,6 @@ Switching characters updates an already-open pet window immediately.
 
 ## Interacting with it
 
-![The pet floating on the desktop](../../images/app/en/pet-desktop.webp)
 
 - **Hover** — while idle it hops, and its gaze follows your pointer.
 - **Click** — brings the main window forward with a wave. Note that it only raises the window; it doesn't jump into a particular session.
