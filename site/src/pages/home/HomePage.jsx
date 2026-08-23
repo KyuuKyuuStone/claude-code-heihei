@@ -4,7 +4,7 @@ import SiteHeader, { DOWNLOAD_URL, GITHUB_URL } from '../../components/SiteHeade
 import { toSiteHref } from '../../content/docs'
 import { rememberLocale } from '../../lib/locale'
 import { setPageMeta } from '../../lib/meta'
-import { content, mascotAccents, mascots } from './content'
+import { content } from './content'
 import './home.css'
 
 const SOURCE_COMMANDS = [
@@ -141,33 +141,6 @@ function Tour({ c, locale }) {
             <img alt={active.title} key={active.id} loading="lazy" src={active.image} />
           </div>
         </div>
-      </div>
-    </section>
-  )
-}
-
-function Crew({ c, locale }) {
-  return (
-    <section className="section" id="crew">
-      <div className="u-shell crew">
-        <div className="crew__intro">
-          <h2>{c.crew.title}</h2>
-          <p className="u-lede">{c.crew.lede}</p>
-          <a className="link-arrow" href={toSiteHref(locale === 'en' ? '/en/desktop/pets' : '/desktop/pets')}>
-            {c.crew.link}
-            <Icon name="arrow" size={16} />
-          </a>
-        </div>
-        <ul className="crew__grid">
-          {c.crew.members.map(([name, latin, role, body], index) => (
-            <li key={latin} style={{ '--accent': mascotAccents[index] }}>
-              <img alt="" loading="lazy" src={mascots[index]} />
-              <span className="crew__role">{role}</span>
-              <h3>{name}{name !== latin && <em>{latin}</em>}</h3>
-              <p>{body}</p>
-            </li>
-          ))}
-        </ul>
       </div>
     </section>
   )
@@ -315,7 +288,6 @@ export default function HomePage({ locale = 'zh' }) {
         <Hero c={c} locale={locale} />
         <Capabilities c={c} />
         <Tour c={c} locale={locale} />
-        <Crew c={c} locale={locale} />
         <Paths c={c} />
         <Install c={c} locale={locale} />
       </main>

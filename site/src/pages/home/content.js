@@ -3,13 +3,6 @@ import shot2 from '../../../../docs/images/app/ZY02.jpg'
 import shot3 from '../../../../docs/images/app/ZY03.jpg'
 import shot4 from '../../../../docs/images/app/ZY04.jpg'
 
-// 吉祥物与截图一样从 docs/ 取 —— docs/ 是站点唯一的媒体源。
-// 原图是桌面端的 agent-mascots，改动那边时记得同步这四张。
-import dada from '../../../../docs/images/mascots/dada.png'
-import huhu from '../../../../docs/images/mascots/huhu.png'
-import bubu from '../../../../docs/images/mascots/bubu.png'
-import huihui from '../../../../docs/images/mascots/huihui.png'
-
 const localizedImages = {
   zh: { shot1, shot2, shot3, shot4 },
   en: { shot1, shot2, shot3, shot4 }
@@ -73,17 +66,6 @@ export const content = {
           body: '把流程固化成技能随会话加载，重复工作设成定时任务，自动执行并留下记录。',
           image: localizedImages.zh.shot4
         }
-      ]
-    },
-    crew: {
-      title: '干活的时候，桌面上有个伴',
-      lede: '一个转圈图标代表所有状态太敷衍了。搭搭、弧弧、补补、回回随任务状态换动作——忙不忙，瞟一眼就知道。',
-      link: '怎么养一只自己的',
-      members: [
-        ['搭搭', 'Dada', '构建', '把想法一块块搭成能跑的东西。'],
-        ['弧弧', 'Huhu', '规划', '复杂任务也能画出一条清楚的路线。'],
-        ['补补', 'Bubu', '修复', '找到裂缝，验证之后再补好它。'],
-        ['回回', 'Huihui', '交付', '新回复一到，抱着齿轮就接着跑。']
       ]
     },
     paths: {
@@ -189,17 +171,6 @@ export const content = {
         }
       ]
     },
-    crew: {
-      title: 'Someone to keep you company while it works',
-      lede: 'One spinner for every state felt lazy. Dada, Huhu, Bubu and Huihui change what they are doing with the task — one glance tells you.',
-      link: 'Raise one of your own',
-      members: [
-        ['Dada', 'Dada', 'Build', 'Turns an idea into something you can run.'],
-        ['Huhu', 'Huhu', 'Plan', 'Finds a clear route through complicated work.'],
-        ['Bubu', 'Bubu', 'Fix', 'Finds the crack, proves it, then patches it.'],
-        ['Huihui', 'Huihui', 'Ship', 'Grabs the gear and moves the moment a reply lands.']
-      ]
-    },
     paths: {
       title: 'Which one are you',
       lede: 'The docs run along two tracks. Everything else branches off them.',
@@ -246,6 +217,3 @@ export const content = {
     }
   }
 }
-
-export const mascots = [dada, huhu, bubu, huihui]
-export const mascotAccents = ['#2eaa91', '#3577d4', '#e56645', '#7657c8']

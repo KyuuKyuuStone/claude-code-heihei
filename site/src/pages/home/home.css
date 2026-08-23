@@ -242,89 +242,6 @@
   aspect-ratio: 1206 / 2622;
 }
 
-/* ── 搭档 ───────────────────────────────────────────────────── */
-
-.crew {
-  display: grid;
-  grid-template-columns: minmax(0, 340px) minmax(0, 1fr);
-  gap: var(--sp-12);
-  align-items: start;
-}
-
-.crew__intro h2 {
-  margin-bottom: var(--sp-3);
-  font-size: var(--fs-4xl);
-  letter-spacing: -0.015em;
-}
-
-.crew__intro .link-arrow {
-  margin-top: var(--sp-5);
-}
-
-.crew__grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--sp-4);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.crew__grid li {
-  padding: var(--sp-5);
-  border: 1px solid var(--border);
-  border-radius: var(--r-xl);
-  background: var(--bg);
-  transition: border-color var(--t-base) var(--ease), transform var(--t-base) var(--ease);
-}
-
-.crew__grid li:hover {
-  border-color: var(--accent);
-  transform: translateY(-2px);
-}
-
-.crew__grid img {
-  width: 76px;
-  height: 76px;
-  margin-bottom: var(--sp-3);
-  object-fit: contain;
-}
-
-.crew__role {
-  display: inline-block;
-  margin-bottom: var(--sp-2);
-  padding: 2px 8px;
-  border-radius: var(--r-full);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  /* --accent 是吉祥物自带的品牌色，直接当 12px 文字用时最低只有 2.57:1。
-     往当前主题的正文色掺一道，保住色相又够 AA。 */
-  color: color-mix(in srgb, var(--accent) 60%, var(--text));
-  font-size: var(--fs-xs);
-  font-weight: 500;
-}
-
-.crew__grid h3 {
-  display: flex;
-  align-items: baseline;
-  gap: var(--sp-2);
-  margin-bottom: var(--sp-1);
-  font-size: var(--fs-xl);
-}
-
-.crew__grid h3 em {
-  color: var(--text-3);
-  font-family: var(--font-sans);
-  font-size: var(--fs-sm);
-  font-style: normal;
-  font-weight: 400;
-}
-
-.crew__grid p {
-  color: var(--text-2);
-  font-size: var(--fs-base);
-  line-height: 1.65;
-}
-
 /* ── 两条路线 ───────────────────────────────────────────────── */
 
 .paths {
@@ -558,11 +475,6 @@
     grid-template-columns: minmax(0, 1fr);
     gap: var(--sp-6);
     padding: var(--sp-5);
-  }
-
-  .crew {
-    grid-template-columns: minmax(0, 1fr);
-    gap: var(--sp-8);
   }
 
   .install {
