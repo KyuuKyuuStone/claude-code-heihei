@@ -88,6 +88,13 @@ cp .env.example .env
   <img src="docs/images/donate/alipay.jpg" width="240" alt="支付宝收款">
 </p>
 
+## 反馈与联系
+
+使用中遇到问题或有改进建议，欢迎通过以下方式联系：
+
+- 邮箱：[511829667@qq.com](mailto:511829667@qq.com)
+- GitHub Issues：[提交问题](https://github.com/KyuuKyuuStone/claude-code-heihei/issues)
+
 ## 技术栈
 
 | 类别 | 技术 |

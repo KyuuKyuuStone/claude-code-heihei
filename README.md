@@ -88,6 +88,13 @@ If this project helps you, consider supporting its ongoing development ❤️
   <img src="docs/images/donate/alipay.jpg" width="240" alt="Alipay">
 </p>
 
+## Feedback & Contact
+
+For questions, bugs, or feature suggestions, reach out via:
+
+- Email: [511829667@qq.com](mailto:511829667@qq.com)
+- GitHub Issues: [open an issue](https://github.com/KyuuKyuuStone/claude-code-heihei/issues)
+
 ## Tech Stack
 
 | Category | Technology |
