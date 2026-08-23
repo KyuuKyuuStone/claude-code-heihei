@@ -4,7 +4,7 @@ import path from 'node:path'
 import { generateDocsManifest, paths } from './generate-docs-manifest.mjs'
 
 const distDir = path.join(paths.siteDir, 'dist')
-const expectedCustomDomain = 'ccheihei.ai'
+const siteOrigin = 'kyuukyuustone.github.io/claude-code-heihei'
 
 async function pathExists(targetPath) {
   return fs.access(targetPath).then(() => true, () => false)
@@ -73,7 +73,10 @@ async function copyReferencedDocImages(records) {
 }
 
 async function siteSourceFiles() {
-  const files = [path.join(paths.siteDir, 'index.html')]
+  // index.html 里的 favicon/og:image 等引用不再扫描：app-icon 由 jsx 的 toSiteHref('/images/app-icon.png')
+  // 触发复制，banner 由 docs/public/images 经 copyDirectory 复制；带 base 前缀的字面量路径会在这里被
+  // 误当成 docs 相对路径，所以干脆跳过 HTML，只扫 src 的 jsx/css。
+  const files = []
   const srcDir = path.join(paths.siteDir, 'src')
   const entries = await fs.readdir(srcDir, { recursive: true, withFileTypes: true })
   for (const entry of entries) {
@@ -131,7 +134,7 @@ function escapeHtml(value) {
 function shellForRoute(shell, meta) {
   if (!meta) return shell
 
-  const origin = `https://${expectedCustomDomain}`
+  const origin = `https://${siteOrigin}`
   const isEnglish = meta.path === '/en' || meta.path.startsWith('/en/')
   const canonical = `${origin}${meta.path}`
   const alternate = meta.alternate ? `${origin}${meta.alternate}` : null
@@ -181,7 +184,7 @@ function alternateFor(record, records) {
 }
 
 async function writeSitemap(records) {
-  const origin = `https://${expectedCustomDomain}`
+  const origin = `https://${siteOrigin}`
   const urls = ['/', '/en', ...records.map((record) => record.path)]
   const body = urls
     .map((url) => `  <url><loc>${origin}${url}</loc><changefreq>weekly</changefreq></url>`)
@@ -222,11 +225,6 @@ async function main() {
   await copyDirectory(path.join(paths.docsDir, 'public'), distDir)
   await copyReferencedDocImages(records)
   await copySiteReferencedImages()
-
-  const customDomain = (await fs.readFile(path.join(distDir, 'CNAME'), 'utf8')).trim()
-  if (customDomain !== expectedCustomDomain) {
-    throw new Error(`Expected CNAME to contain ${expectedCustomDomain}, received ${customDomain || 'an empty value'}.`)
-  }
 
   for (const record of records) {
     await createRouteEntry(record.path, shell, {

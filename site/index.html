@@ -6,23 +6,25 @@
     <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
     <meta name="theme-color" content="#201d17" media="(prefers-color-scheme: dark)">
     <meta name="description" content="Claude Code Heihei — Claude Code 的本地优先桌面客户端。会话、改动、Agent、定时任务都摆在明处，接哪个模型你说了算。">
-    <link rel="icon" href="/images/app-icon.png" type="image/png">
-    <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
-    <link rel="preload" href="/fonts/noto-serif-sc-latin.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="icon" href="/claude-code-heihei/images/app-icon.png" type="image/png">
+    <link rel="preload" href="/claude-code-heihei/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="/claude-code-heihei/fonts/noto-serif-sc-latin.woff2" as="font" type="font/woff2" crossorigin>
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="Claude Code Heihei">
     <meta property="og:title" content="Claude Code Heihei — Claude Code 的本地优先桌面客户端">
     <meta property="og:description" content="会话、改动、Agent、定时任务都摆在明处。接哪个模型你说了算，改哪一行你点头才算。">
-    <meta property="og:image" content="https://ccheihei.ai/images/banner.png">
+    <meta property="og:image" content="https://kyuukyuustone.github.io/claude-code-heihei/images/banner.png">
     <meta name="twitter:card" content="summary_large_image">
     <title>Claude Code Heihei — Claude Code 的本地优先桌面客户端</title>
     <script>
       // 首帧就把语言定下来：中文浏览器留在中文站，其余跳英文站。等 React 起来再跳的话，
-      // 英文用户会先看到一整屏中文。只认根路径，带语言前缀的地址是用户的明确意图。
+      // 英文用户会先看到一整屏中文。只认站点根路径（含 base 前缀），带语言前缀的地址是用户的明确意图。
       // 判定规则与 src/lib/locale.js 是同一套，check-docs.mjs 盯着两处不漂移。
       (function () {
         try {
-          if (window.location.pathname.replace(/\/+$/, '') !== '') return
+          var base = '/claude-code-heihei'
+          var pathname = window.location.pathname.replace(/\/+$/, '')
+          if (pathname !== '' && pathname !== base) return
 
           var stored = localStorage.getItem('cch-locale')
           var locale = stored === 'en' || stored === 'zh'
@@ -32,7 +34,7 @@
             }) ? 'zh' : 'en')
 
           if (locale === 'en') {
-            window.location.replace('/en' + window.location.search + window.location.hash)
+            window.location.replace(base + '/en' + window.location.search + window.location.hash)
           }
         } catch (error) {
           // 读不到偏好就维持中文站，别让语言分流把首页整个拦死。
@@ -52,13 +54,6 @@
           document.documentElement.dataset.theme = 'light'
         }
       })()
-    </script>
-    <script async src="https://www.googletagmanager.com/gtag/js?id=G-D42DM82263"></script>
-    <script>
-      window.dataLayer = window.dataLayer || []
-      function gtag(){dataLayer.push(arguments)}
-      gtag('js', new Date())
-      gtag('config', 'G-D42DM82263')
     </script>
   </head>
   <body>

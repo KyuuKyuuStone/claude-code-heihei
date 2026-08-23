@@ -60,6 +60,7 @@ function docsManifestPlugin() {
 }
 
 export default defineConfig({
+  base: '/claude-code-heihei/',
   plugins: [docsManifestPlugin()],
   build: {
     outDir: 'dist',
