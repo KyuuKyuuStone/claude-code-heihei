@@ -7,6 +7,7 @@
 <div align="center">
 
 [![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
+[![Gitee mirror](https://img.shields.io/badge/Gitee-mirror-C71D23?logo=gitee&logoColor=white)](https://gitee.com/KyuuKyuuStone/claude-code-heihei)
 
 **English** · [简体中文](README.zh-CN.md)
 
