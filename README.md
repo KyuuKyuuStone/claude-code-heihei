@@ -12,13 +12,13 @@
 [![Release](https://img.shields.io/github/v/release/KyuuKyuuStone/claude-code-heihei?sort=semver)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases)
 
 [![Downloads](https://img.shields.io/github/downloads/KyuuKyuuStone/claude-code-heihei/total)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases)
-[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)]()
+[![Platform](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows&logoColor=white)]()
 
 **English** · [简体中文](README.zh-CN.md)
 
 </div>
 
-Claude Code Heihei is a **desktop Claude Code workspace** for macOS, Windows, and Linux. It adds a **session-level supervisor–worker collaboration** layer on top of the classic session workspace, while keeping multi-session, multi-project, diff review, permission approval, model setup, Computer Use, skill marketplace, and scheduled tasks in one app.
+Claude Code Heihei is a **Windows desktop Claude Code workspace**. It adds a **session-level supervisor–worker collaboration** layer on top of the classic session workspace, while keeping multi-session, multi-project, diff review, permission approval, model setup, Computer Use, skill marketplace, and scheduled tasks in one app.
 
 ## Download
 

@@ -12,19 +12,19 @@
 [![Release](https://img.shields.io/github/v/release/KyuuKyuuStone/claude-code-heihei?sort=semver)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases)
 
 [![Downloads](https://img.shields.io/github/downloads/KyuuKyuuStone/claude-code-heihei/total)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases)
-[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)]()
+[![Platform](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows&logoColor=white)]()
 
 [English](README.md) · **简体中文**
 
 </div>
 
-Claude Code Heihei 是一个 **macOS / Windows / Linux 桌面端 Claude Code 工作台**。它在经典会话工作台之上新增了 **会话级上下级协作** 能力，同时保留多会话、多项目、Diff 审阅、权限审批、模型配置、Computer Use、技能市场、定时任务等完整能力。
+Claude Code Heihei 是一个 **Windows 桌面端 Claude Code 工作台**。它在经典会话工作台之上新增了 **会话级上下级协作** 能力，同时保留多会话、多项目、Diff 审阅、权限审批、模型配置、Computer Use、技能市场、定时任务等完整能力。
 
 ## 下载
 
 [![下载 Windows 安装包](https://img.shields.io/badge/⬇%20下载-Windows%20exe-FF7A00?style=for-the-badge)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases/latest/download/Claude-Code-Heihei-1.0.0-win-x64.exe)
 
-> 更多平台与版本见 [Releases](https://github.com/KyuuKyuuStone/claude-code-heihei/releases)。
+> 历史版本见 [Releases](https://github.com/KyuuKyuuStone/claude-code-heihei/releases)。
 
 ## 界面预览
 
