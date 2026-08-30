@@ -54,6 +54,8 @@ When a preset has a signup page for API keys, a "Get API Key" button appears und
 
 To spend nothing and stay offline, run a model server on your machine and point the app at it.
 
+Besides the two external services below, you can also let Claude Code Heihei **run a GGUF model directly on your machine** (bundled llama.cpp, nothing extra to install) — that's a different path, see [Local models](../desktop/local-model.md).
+
 **LM Studio**: load a model, start the local server, then choose the `LM Studio` preset in "Add Provider" with base URL `http://localhost:1234`.
 
 **Ollama**: run `ollama serve`, choose the `Ollama` preset, and use base URL `http://localhost:11434`.

@@ -65,7 +65,7 @@ Only do this for packages you have confirmed came from this repository's Release
 
 Unsigned packages trigger a SmartScreen warning. Once you've confirmed the file came from this repository's Releases, click "More info" → "Run anyway".
 
-When upgrading in place, the installer inspects user data in the old install directory. If it reports that the program is still running, quit the main window and the tray icon, give the background sidecar, terminal, and IM adapter processes a few seconds to exit, then run the installer again. Don't delete the old install directory by hand first.
+When upgrading in place, the installer inspects user data in the old install directory. If it reports that the program is still running, quit the main window and the tray icon, give the background sidecar and terminal processes a few seconds to exit, then run the installer again. Don't delete the old install directory by hand first.
 
 ## Linux
 

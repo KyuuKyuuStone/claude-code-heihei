@@ -145,7 +145,6 @@ Run the checks that match the files you changed:
 ```bash
 bun run check:server      # Server API, WebSocket, providers, sessions, and related tests
 bun run check:desktop     # Desktop lint, Vitest, and production build
-bun run check:adapters    # IM adapter tests
 bun run check:native      # Desktop sidecars, Electron host, and package-smoke checks
 bun run check:provider-contract # Offline provider/runtime/proxy contract tests
 bun run check:chat-contract     # WebSocket, session, and desktop chat-store contracts
@@ -299,8 +298,8 @@ Every release should be verified by upgrading from the previous stable build at 
 2. Push the tag and let the `Release Desktop` workflow finish green.
 3. Open the old build and wait for the startup check, or check for updates manually in settings.
 4. Confirm the new version is offered, then install and restart.
-5. After restart, confirm the version in About, and that providers, sessions, skills, agents, memories, custom pets, and a custom data directory all still work.
-6. Confirm historical attachment context, subagent details, and task state restore correctly; open a pet window and check the overlay and current-session navigation.
+5. After restart, confirm the version in About, and that providers, sessions, skills, agents, memories, and a custom data directory all still work.
+6. Confirm historical attachment context, subagent details, and task state restore correctly.
 
 Platforms differ in what matters: on macOS confirm the release job used the signed artifacts and the launch-policy check passed; on Windows confirm `latest.yml`, `.exe`, and `.exe.blockmap` are all in the release assets, and remember that a SmartScreen prompt on an unsigned build does not mean the updater failed; on Linux verify auto-update through the AppImage, since `.deb` ships as a manual installer only.
 

@@ -1,13 +1,13 @@
 ---
 title: Desktop Architecture
 nav_title: Desktop
-description: Process boundaries between the Electron main process, server sidecar, CLI subprocesses, and IM adapters.
+description: Process boundaries between the Electron main process, server sidecar, and CLI subprocesses.
 order: 1
 ---
 
 # Desktop Architecture
 
-The desktop app does not embed the CLI inside React. It is four kinds of processes cooperating, and most maintenance mistakes come from crossing a boundary that was meant to stay closed.
+The desktop app does not embed the CLI inside React. It is processes cooperating, and most maintenance mistakes come from crossing a boundary that was meant to stay closed.
 
 ## Process map
 
@@ -18,19 +18,12 @@ Electron main
 │   ├── Bun.serve HTTP API
 │   ├── Bun WebSocket session gateway
 │   └── CLI subprocess per session
-└── claude-sidecar adapters (launched per platform)
-    ├── Telegram
-    ├── Feishu
-    ├── WeChat
-    ├── DingTalk
-    └── WhatsApp
 ```
 
-- **Electron main** owns windows, native dialogs, updates, terminals, native preview, pet windows, and the sidecar lifecycle.
+- **Electron main** owns windows, native dialogs, updates, terminals, native preview, and the sidecar lifecycle.
 - **Renderer** owns the interface only. It reaches native capabilities through `window.desktopHost`, exposed by preload.
-- **Server sidecar** is the local service shared by the desktop app and the H5 client: REST, WebSocket, provider proxy, and session management.
+- **Server sidecar** is the local service shared by the desktop app: REST, WebSocket, provider proxy, and session management.
 - **CLI subprocess** executes model requests, tool calls, and agent orchestration.
-- **Adapter sidecar** bridges IM platform messages into the same server and CLI sessions.
 
 `desktop/src-tauri/` now only holds packaging assets and historical code. It is not the desktop runtime; Electron is the current host.
 
@@ -54,7 +47,6 @@ Versions follow `desktop/package.json`. This page lists only the majors that cha
 | `desktop/electron/main.ts` | Electron main entry, windows, IPC registration |
 | `desktop/electron/preload.ts` | Typed host API exposed to the main renderer |
 | `desktop/electron/preview-preload.ts` | Isolated bridge for native web preview |
-| `desktop/electron/pet-preload.ts` | Minimal bridge for pet windows |
 | `desktop/electron/ipc/` | IPC channel registration and payload validation |
 | `desktop/electron/services/` | Sidecar, update, terminal, preview, window, and proxy services |
 
@@ -66,10 +58,9 @@ The renderer must not import Electron directly, and must not assemble arbitrary 
 2. The host picks a free port and starts the unified `claude-sidecar server` binary.
 3. The sidecar enters `startServer()` from `src/server/index.ts` and serves HTTP and WebSocket from one `Bun.serve`.
 4. Once the health check passes, the renderer takes the loopback server URL and loads sessions and settings.
-5. The host starts adapter sidecars for the platforms that are configured.
-6. The server starts a CLI subprocess on demand when a session begins.
+5. The server starts a CLI subprocess on demand when a session begins.
 
-The server can bind a LAN-reachable address for H5, but the desktop renderer always talks to the loopback control address. H5, remote access, and pet windows each pass their own token and capability limits. A running local server does not make every caller trusted.
+The server can bind a LAN-reachable address, but the desktop renderer always talks to the loopback control address. Any new remotely-accessible capability needs its own token and capability limits designed in — a running local server does not make every caller trusted.
 
 ### Sidecar entry point
 
@@ -78,10 +69,9 @@ The server can bind a LAN-reachable address for H5, but the desktop renderer alw
 ```text
 claude-sidecar server   --app-root <path> --host <host> --port <port>
 claude-sidecar cli      --app-root <path> [CLI arguments]
-claude-sidecar adapters --app-root <path> --telegram|--feishu|--wechat|--dingtalk|--whatsapp
 ```
 
-The sidecar sets `CLAUDE_APP_ROOT`, `CALLER_DIR`, and the launch arguments before importing any business module, because the top-level modules of the server, CLI, and adapters read those values at import time.
+The sidecar sets `CLAUDE_APP_ROOT`, `CALLER_DIR`, and the launch arguments before importing any business module, because the top-level modules of the server and CLI read those values at import time.
 
 ## Server sidecar
 
@@ -102,13 +92,13 @@ src/server/
 A single `Bun.serve` `fetch` boundary handles:
 
 - `/api/*` REST requests
-- `/ws/:sessionId` for desktop, H5, and pet clients
+- `/ws/:sessionId` for desktop clients
 - `/sdk/:sessionId` for internal CLI connections
 - OAuth callbacks
 - Restricted preview and local file access
-- Bundled H5 static assets
+- Bundled static assets
 
-Auth rules differ by client capability. Before adding a route, decide whether it belongs to the local desktop, H5, pets, the internal SDK, or public static assets, then place it inside the matching auth and CORS boundary.
+Auth rules differ by client capability. Before adding a route, decide whether it belongs to the local desktop, the internal SDK, or public static assets, then place it inside the matching auth and CORS boundary.
 
 ## WebSocket semantics
 
@@ -157,25 +147,9 @@ The server starts a CLI per session and forwards output, permission requests, to
 
 Model mapping, authentication style, and context settings follow the actual provider configuration. Do not hardcode a vendor list in architecture docs.
 
-## IM adapters
+## Local models
 
-Each platform runs its own adapter sidecar, so one platform's bad credentials or failed startup cannot take the others down.
-
-```text
-IM platform
-  → adapters/<platform>
-  → adapters/common WebSocket bridge
-  → server sidecar
-  → CLI session
-```
-
-The shared layer in `adapters/common/` handles configuration, pairing, session mapping, message buffering, deduplication, attachments, and the server WebSocket bridge. Current platform directories:
-
-- `adapters/telegram/`
-- `adapters/feishu/`
-- `adapters/wechat/`
-- `adapters/dingtalk/`
-- `adapters/whatsapp/`
+A local model is a separate `llama-server` subprocess that the desktop app starts, waits to become ready, then registers its loopback port as an `anthropic`-format provider. Details and the memory model are in [Local model internals](./local-model.md).
 
 ## Persistence boundaries
 
@@ -185,9 +159,8 @@ Different data does not share one store:
 |---|---|
 | Renderer UI preferences and open tabs | Browser storage and its migrations |
 | Sessions and messages | Local session data managed by the server and CLI |
-| Provider, H5, Computer Use, and other settings | Config files managed by the server |
+| Provider, Computer Use, and other settings | Config files managed by the server |
 | Electron window and native state | Electron user data / app mode directory |
-| IM configuration and pairing state | Adapter config and per-platform state directories |
 
 Any change to a JSON shape, a `localStorage` key, or the app config layout needs a forward migration plus a regression test against old data. Never overwrite the user's shared Claude configuration, and never read the real user directory from tests.
 

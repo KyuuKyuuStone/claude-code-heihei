@@ -31,9 +31,7 @@ If you'd rather stay in the terminal, the CLI is still there: see [Command line]
 
 **Delegates.** Big tasks can be split across subagents running in parallel, with their progress visible in the activity panel. You can also give each agent its own model, tools, and system prompt.
 
-**Runs on a schedule.** Tidy up logs every morning, audit dependencies every week — set a job on a schedule and it clocks in on its own, leaving a record of each run.
-
-**Follows you to your phone.** Turn on H5 access, scan a QR code, and pick the conversation back up on your phone. Or connect Telegram, Feishu, or WeChat and drive it from a chat window.
+**Run local models.** Prefer to stay offline and avoid API charges? Have it run a GGUF model on your own machine, with nothing leaving your computer.
 
 ## Three commitments
 

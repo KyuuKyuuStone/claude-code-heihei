@@ -205,6 +205,8 @@ async function writeSitemap(records) {
 const legacyRoutes = [
   '/agent', '/agent/01-usage-guide', '/agent/02-implementation', '/agent/03-agent-framework',
   '/channel', '/channel/01-channel-system', '/channel/02-im-gateway-proposal',
+  '/im', '/im/dingtalk', '/im/feishu', '/im/telegram', '/im/wechat', '/im/whatsapp',
+  '/desktop/pets', '/desktop/schedule', '/desktop/remote',
   '/desktop/01-quick-start', '/desktop/02-architecture', '/desktop/03-features',
   '/desktop/04-installation', '/desktop/05-FAQ', '/desktop/06-h5-access',
   '/desktop/07-electron-migration-research', '/desktop/08-electron-migration-tasks',

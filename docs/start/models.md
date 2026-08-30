@@ -54,6 +54,8 @@ Claude Code Heihei 自己不带模型，它只是那个替你干活的壳。装�
 
 想彻底不花钱、不联网，就在本机跑一个模型服务，让应用连过去。
 
+除了下面两种外部服务，也可以让 Claude Code Heihei **直接在本机跑 GGUF 模型**（内置 llama.cpp，无需额外装任何东西）——那是另一条路，见[本地模型](../desktop/local-model.md)。
+
 **LM Studio**：在 LM Studio 里加载好模型并启动本地服务器，然后在「添加服务商」里选 `LM Studio` 预设，接口地址填 `http://localhost:1234`。
 
 **Ollama**：`ollama serve` 起来之后，选 `Ollama` 预设，接口地址填 `http://localhost:11434`。

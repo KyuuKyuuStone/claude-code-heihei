@@ -18,11 +18,11 @@
 
 </div>
 
-Claude Code Heihei is a **Windows desktop Claude Code workspace**. It adds a **session-level supervisor–worker collaboration** layer on top of the classic session workspace, while keeping multi-session, multi-project, diff review, permission approval, model setup, Computer Use, skill marketplace, and scheduled tasks in one app.
+Claude Code Heihei is a **Windows desktop Claude Code workspace**. It adds a **session-level supervisor–worker collaboration** layer on top of the classic session workspace, while keeping multi-session, multi-project, diff review, permission approval, model setup, Computer Use, skill marketplace, and now **local GGUF models** in one app.
 
 ## Download
 
-[![Download Windows installer](https://img.shields.io/badge/⬇%20Download-Windows%20exe-FF7A00?style=for-the-badge)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases/latest/download/Claude-Code-Heihei-1.0.0-win-x64.exe)
+[![Download Windows installer](https://img.shields.io/badge/⬇%20Download-Windows%20exe-FF7A00?style=for-the-badge)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases/latest/download/Claude-Code-Heihei-1.0.1-win-x64.exe)
 
 > For other platforms and versions, see [Releases](https://github.com/KyuuKyuuStone/claude-code-heihei/releases).
 
@@ -57,12 +57,16 @@ Claude Code Heihei is a **Windows desktop Claude Code workspace**. It adds a **s
 - **Computer Use**: let the agent screenshot, click, type, and control desktop apps after authorization.
 - **MCP support**: connect MCP tools and external capabilities.
 
+### Local models (new)
+
+Run **GGUF models directly on your own machine** — no internet, no API key, nothing leaves your computer. The app bundles the [llama.cpp](https://github.com/ggml-org/llama.cpp) runtime and detects your GPU (Vulkan, cross NVIDIA / AMD / Intel) to recommend a config tier. A one-click **benchmark** measures your real hardware and finds the tier that hits your target speed with the least resource use, and estimates whether a context size fits your VRAM. Perfect for modest student machines.
+
 ### More
 
 - **Permission modes**: five levels, from "ask every time" to "skip permissions" — risky commands and tool calls are approved in the GUI.
 - **Bring your own model**: add providers via API key with presets for DeepSeek, Kimi, Zhipu GLM and others, or point at LM Studio and Ollama running locally.
 - **Three colour themes**: Pure White, Paper, and Ink Blue — optionally following the system light/dark setting.
-- **Scheduled tasks & usage stats**: run planned tasks in their own sessions and track local token usage trends.
+- **Usage stats**: track local token usage trends.
 
 ## Run the CLI from Source
 
@@ -81,9 +85,9 @@ See [environment variables](docs/en/cli/env.md) and [CLI setup](docs/en/cli/inde
 | Section | Documents |
 |------|------|
 | **Getting started** | [What this is](docs/en/start/index.md) · [Download and install](docs/en/start/install.md) · [Connect a model provider](docs/en/start/models.md) · [Your first session](docs/en/start/first-session.md) · [Troubleshooting](docs/en/start/troubleshooting.md) |
-| **Desktop features** | [Feature overview](docs/en/desktop/index.md) · [Computer Use](docs/en/desktop/computer-use.md) |
+| **Desktop features** | [Feature overview](docs/en/desktop/index.md) · [Local models](docs/en/desktop/local-model.md) · [Computer Use](docs/en/desktop/computer-use.md) |
 | **CLI** | [Install and run](docs/en/cli/index.md) · [Command reference](docs/en/cli/reference.md) · [Environment variables](docs/en/cli/env.md) |
-| **Internals** | [Desktop architecture](docs/en/internals/desktop.md) · [Multi-agent system](docs/en/internals/agent.md) · [Skills system](docs/en/internals/skills.md) · [Memory system](docs/en/internals/memory.md) · [Computer Use architecture](docs/en/internals/computer-use.md) · [Local server and API](docs/en/internals/server.md) · [Channel system](docs/en/internals/channel.md) · [Project structure](docs/en/internals/structure.md) |
+| **Internals** | [Desktop architecture](docs/en/internals/desktop.md) · [Local model internals](docs/en/internals/local-model.md) · [Multi-agent system](docs/en/internals/agent.md) · [Skills system](docs/en/internals/skills.md) · [Memory system](docs/en/internals/memory.md) · [Computer Use architecture](docs/en/internals/computer-use.md) · [Local server and API](docs/en/internals/server.md) · [Project structure](docs/en/internals/structure.md) |
 
 ## Support
 

@@ -6,14 +6,14 @@ These rules apply to `docs/` changes in addition to the root instructions.
 
 Two audiences, nothing else. If a page serves neither, it does not belong here.
 
-- **People using the app** — `start/`, `desktop/`, `im/`. No prior code knowledge assumed.
+- **People using the app** — `start/`, `desktop/`. No prior code knowledge assumed.
 - **People reading the source** — `internals/`, `cli/`. Architecture, implementation, contributing.
 
 Internal process artefacts (migration task lists, validation checklists, design proposals, release runbooks) are not documentation. Keep them out of `docs/`, or fold the durable part into `internals/contributing.md`.
 
 ## Structure
 
-Five top-level sections: `start/`, `desktop/`, `im/`, `cli/`, `internals/`. Adding a sixth means registering it in the `sections` array of `site/scripts/generate-docs-manifest.mjs`.
+Four top-level sections: `start/`, `desktop/`, `cli/`, `internals/`. Adding a fifth means registering it in the `sections` array of `site/scripts/generate-docs-manifest.mjs`.
 
 `docs/en/` mirrors the Chinese tree file for file. Keep Chinese pages and their `docs/en/` counterparts aligned.
 
@@ -38,13 +38,11 @@ Put a space between Chinese characters and adjacent Latin letters or digits: 「
 
 Product screenshots live in `docs/images/app/` as WebP at 2000px wide, captured from a real build. Never ship a screenshot from an older UI generation; re-capture instead. Redact tokens, QR codes, API keys and paired account names before committing. Cap feature pages at roughly three screenshots.
 
-Step-by-step setup walkthroughs are the exception: `docs/im/` embeds console screenshots from `docs/images/im/<platform>/` and needs one per step. Judge those by whether a reader could follow along without them.
+Step-by-step setup walkthroughs are the exception: the local-model download guide embeds site links, and a couple of pages keep a small number of console screenshots. Judge those by whether a reader could follow along without them.
 
 ## Routes are file paths
 
 `docs/start/install.md` publishes to `/start/install`. Renaming a file changes a public URL, so add the old path to `LEGACY_ROUTES` in `site/src/content/docs.js` and to `legacyRoutes` in `site/scripts/prepare-static-output.mjs`.
-
-`/im/` is linked from inside the desktop app (`desktop/src/pages/AdapterSettings.tsx`). That route cannot move.
 
 ## Checks
 

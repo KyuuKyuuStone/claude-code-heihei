@@ -27,7 +27,7 @@ First, one check: make sure you're on the latest stable build from [GitHub Relea
 
 ### The Windows installer says the program is still running
 
-**Why** — The old version's main process, sidecar, embedded terminal, or IM adapter hasn't fully exited, so the installer won't overwrite it.
+**Why** — The old version's main process, sidecar, or embedded terminal hasn't fully exited, so the installer won't overwrite it.
 
 **What to do**
 
@@ -146,38 +146,11 @@ For local models (LM Studio / Ollama), **do not append `/v1` to the base URL** �
 
 ## Port conflicts
 
-**What you see** — H5 won't load, or the local service doesn't come up after launch.
+**What you see** — The local service doesn't come up after launch.
 
 **Why** — The local server defaults to port `3456`. If something else already holds that port, the service moves elsewhere or fails to start.
 
-**What to do** — Open Settings → H5 Access and read "Current port" — it may have already moved, leaving your old QR code pointing at the wrong place. If you need a stable address (for a bookmark or a reverse proxy), set "Fixed port" on the same page, anywhere in 1024–65535. Port changes apply after restarting the app.
-
-## Phone won't connect
-
-**What you see** — Scanning the QR code opens nothing, or you get an unauthorized error.
-
-**Why** — Address, port, token, and network all have to line up. Any one of them being wrong breaks the connection.
-
-**What to do** — Go through Settings → H5 Access:
-
-1. Is H5 access actually switched on?
-2. Does "Access host / IP" still match your computer's current network interface? It changes when you switch Wi-Fi.
-3. Does the port in the QR code match "Current port"?
-4. Are the phone and computer on the same local network?
-5. Does your firewall allow that port?
-6. Has the token been regenerated? **The moment you regenerate it, every old QR code is dead.**
-
-If you changed the fixed port, restart the app. Full deployment guidance and security boundaries are in [Phone and IM handoff](../desktop/remote.md).
-
-### Does locking my phone kill a running task?
-
-No. A brief disconnect doesn't stop work in progress — it finishes in the background and you'll see the result when you reconnect. Only when a task is already idle *and* no client is connected does the disconnect grace timer stop the corresponding CLI (30 seconds by default).
-
-That's not a promise it will never drop, though. System sleep, process exit, proxy failures, and service restarts all still end the connection.
-
-### I scanned the IM QR code but my contacts still can't talk to it
-
-Scanning only binds the platform account; it doesn't authorize everyone who can message you. Each person still has to send the one-time pairing code generated in the desktop app, or be added to the allowlist. With both empty, access is denied by default. Per-platform differences are in [IM integrations](../im/index.md).
+**What to do** — Free up whatever holds port 3456, or switch to a free port, then restart the app for the change to take effect.
 
 ## Computer Use does nothing
 

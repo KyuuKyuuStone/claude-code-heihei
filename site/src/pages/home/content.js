@@ -14,7 +14,7 @@ export const content = {
   zh: {
     hero: {
       title: '让 Claude Code 有个能看见的地方干活',
-      lede: '本地优先的桌面客户端：会话、改动、Agent、定时任务都摆在明处。接哪个模型你说了算，改哪一行你点头才算。',
+      lede: '本地优先的桌面客户端：会话、改动、Agent 都摆在明处。接哪个模型你说了算，改哪一行你点头才算。',
       primary: '下载桌面端',
       secondary: '三步跑通第一条会话',
       badges: ['Windows', '开源免费', '数据留在本机'],
@@ -29,7 +29,7 @@ export const content = {
         ['隔离试验', '把试验放进独立工作树，主分支一个字都不动。'],
         ['派 Agent', '大活拆给子 Agent 并行跑，进度和后台任务都汇总在活动面板。'],
         ['装技能', '技能市场里看中就装，来源和安全状态摆在明处。'],
-        ['到点自动跑', '重复流程设成定时任务，在独立会话里执行，每次都留记录。'],
+        ['本地大模型', '不联网、不要 API Key，GGUF 模型直接跑在你自己的显卡上。'],
         ['操作电脑', 'Computer Use 让它看屏幕、点鼠标、敲键盘，敏感操作等你点头。'],
         ['上下级协作', '每项目任命主管、登记员工，自动派活、无人值守执行、完工汇报。']
       ]
@@ -117,7 +117,7 @@ export const content = {
   en: {
     hero: {
       title: 'Give Claude Code somewhere you can watch it work',
-      lede: 'A local-first desktop client. Sessions, diffs, agents and scheduled runs all sit in the open. You pick the model; nothing lands until you say so.',
+      lede: 'A local-first desktop client. Sessions, diffs and agents all sit in the open. You pick the model; nothing lands until you say so.',
       primary: 'Download the app',
       secondary: 'Run your first session',
       badges: ['Windows', 'Open source', 'Your data stays local'],
@@ -132,7 +132,7 @@ export const content = {
         ['Isolate experiments', 'Keep risky work in its own worktree and leave your main branch untouched.'],
         ['Delegate', 'Split big jobs across subagents; progress and background tasks roll up into one panel.'],
         ['Install skills', 'Browse the marketplace with source and safety status shown up front.'],
-        ['Run on a clock', 'Turn routines into scheduled jobs that run in their own sessions and leave a record.'],
+        ['Local models', 'Offline, no API key — run GGUF models directly on your own GPU.'],
         ['Drive the desktop', 'Computer Use can see the screen, click and type. Sensitive moves still wait for you.'],
         ['Supervisor–worker teams', 'Appoint a supervisor and register workers per project — auto-dispatch, unattended execution, and hand-off reports.']
       ]

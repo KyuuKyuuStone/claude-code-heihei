@@ -65,7 +65,7 @@ xattr -dr com.apple.quarantine "/Applications/Claude Code Heihei.app"
 
 未签名的安装包会触发 SmartScreen 蓝屏提示。确认文件确实来自本仓库 Release 后，点「更多信息」→「仍要运行」。
 
-覆盖升级时安装器会检查旧安装目录里的用户数据。如果它提示「程序仍在运行」，退出主窗口和托盘图标，等几秒让后台的 sidecar、终端和 IM adapter 退干净，再重新运行安装器。别先手动删掉旧安装目录。
+覆盖升级时安装器会检查旧安装目录里的用户数据。如果它提示「程序仍在运行」，退出主窗口和托盘图标，等几秒让后台的 sidecar 和终端退干净，再重新运行安装器。别先手动删掉旧安装目录。
 
 ## Linux
 

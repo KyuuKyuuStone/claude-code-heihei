@@ -12,15 +12,14 @@ Claude Code Heihei looks like one desktop app, but it is five pieces of code tha
 ```text
 desktop/src/          Frontend — React + Zustand. Draws the UI, touches no native capability.
 desktop/electron/     Desktop shell — Electron main process: windows, updates, terminals, native preview.
-src/server/           Local server — REST + WebSocket on Bun.serve, shared by desktop and phone.
+src/server/           Local server — REST + WebSocket on Bun.serve, shared by the desktop app.
 src/                  CLI core — agent loop, tool system, permissions, memory, skills.
-adapters/             IM bridges — one sidecar per platform, all wired back to the same sessions.
 ```
 
 Three facts are worth holding onto:
 
 - **The CLI core is the only thing that executes.** Every desktop session makes the server spawn a CLI subprocess; every button in the frontend eventually becomes a message sent to it.
-- **The local server is the only entry point.** Desktop, mobile H5, and IM adapters share one REST and WebSocket surface — they differ only in how much they are trusted.
+- **The local server is the only entry point.** The desktop app uses one REST and WebSocket surface — differing only in how much it is trusted.
 - **Electron is the current desktop path.** `desktop/src-tauri/` keeps packaging assets and historical code as a rollback option; it is not the runtime.
 
 ## How the CLI core is layered
@@ -57,7 +56,7 @@ Every tool registers in one registry, grouped by capability: files, shell, syste
 | Memory injection, extraction, retrieval, team sync | [Memory system internals](./memory-internals.md) |
 | Background memory consolidation | [AutoDream memory consolidation](./autodream.md) |
 | Screen control tools, authorization, coordinate mapping | [Computer Use architecture](./computer-use.md) |
-| IM message protocol, access control, permission relay | [Channel system](./channel.md) |
+| Local-model processes, GPU detection, KV cache estimation | [Local model internals](./local-model.md) |
 | What to run before a PR, and the release process | [Contributing and quality gates](./contributing.md) |
 | Running the CLI in a terminal or from a script | [CLI install and run](../cli/index.md) |
 

@@ -145,7 +145,6 @@ bun run quality:gate --mode baseline --allow-live --provider-model minimax:main:
 ```bash
 bun run check:server      # 服务端 API、WebSocket、provider、会话等测试
 bun run check:desktop     # 桌面端 lint、Vitest、生产构建
-bun run check:adapters    # IM adapter 测试
 bun run check:native      # 桌面 sidecar、Electron host 与 package-smoke 检查
 bun run check:provider-contract # Provider/runtime/proxy 的离线契约测试
 bun run check:chat-contract     # WebSocket、会话与桌面 chat store 契约测试
@@ -299,8 +298,8 @@ bun run check:policy
 2. 推 tag，让 `Release Desktop` workflow 完整通过。
 3. 打开旧版本，等待启动后的自动检查，或在设置里手动检查更新。
 4. 确认提示新版本，下载完成后安装并重启。
-5. 重启后确认「关于」里的版本号正确，且服务商、会话、Skills、Agents、记忆、自定义宠物和自定义数据目录仍然可用。
-6. 确认历史附件上下文、子 Agent 详情和任务状态可以恢复；打开桌宠，验证悬浮窗口与当前会话导航。
+5. 重启后确认「关于」里的版本号正确，且服务商、会话、Skills、Agents、记忆和自定义数据目录仍然可用。
+6. 确认历史附件上下文、子 Agent 详情和任务状态可以恢复。
 
 各平台的重点不同：macOS 要确认 release job 走的是签名产物且启动策略检查通过；Windows 要确认 `latest.yml`、`.exe`、`.exe.blockmap` 都在 Release 资产里，未签名时的 SmartScreen 提示不代表 updater 失败；Linux 优先用 AppImage 验证自动更新，`.deb` 只作手动安装包发布。
 

@@ -111,5 +111,5 @@ Computer Use still controls Windows desktop apps, so CLI tools inside WSL do not
 
 - [Command reference](./reference.md): flags, headless mode, and recovery mode
 - [Environment variables](./env.md): the full list of authentication, model, and runtime variables
-- [Architecture overview](../internals/index.md): how the CLI, server, desktop shell, and adapters divide the work
+- [Architecture overview](../internals/index.md): how the CLI, server, and desktop shell divide the work
 - [Contributing and quality gates](../internals/contributing.md): what to run before opening a PR

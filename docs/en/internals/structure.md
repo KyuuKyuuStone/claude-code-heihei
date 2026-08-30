@@ -1,13 +1,13 @@
 ---
 title: Project Structure
 nav_title: Structure
-description: Responsibility boundaries across the CLI, server, desktop app, adapters, and docs site.
+description: Responsibility boundaries across the CLI, server, desktop app, and docs site.
 order: 3
 ---
 
 # Project Structure
 
-The repository contains the CLI/TUI, local Server, Electron desktop app, IM adapters, and documentation site. This map lists stable responsibility boundaries rather than every file.
+The repository contains the CLI/TUI, local Server, Electron desktop app, and documentation site. This map lists stable responsibility boundaries rather than every file.
 
 ```text
 .
@@ -40,8 +40,8 @@ The repository contains the CLI/TUI, local Server, Electron desktop app, IM adap
 │   ├── src/                        # React Renderer
 │   │   ├── api/                    # Server API and WebSocket clients
 │   │   ├── components/             # Chat, Workspace, Browser, and layout
-│   │   ├── features/               # Isolated features such as Pets
-│   │   ├── pages/                  # Sessions, Settings, tasks, diagnostics
+│   │   ├── features/               # Isolated features
+│   │   ├── pages/                  # Sessions, Settings, diagnostics
 │   │   ├── stores/                 # Zustand state
 │   │   ├── i18n/                   # Desktop locales
 │   │   └── lib/                    # Renderer runtime utilities
@@ -49,20 +49,12 @@ The repository contains the CLI/TUI, local Server, Electron desktop app, IM adap
 │   │   ├── main.ts                 # Electron main entry
 │   │   ├── preload.ts              # Main-window Host bridge
 │   │   ├── preview-preload.ts      # Native preview bridge
-│   │   ├── pet-preload.ts          # Pet-window bridge
 │   │   ├── ipc/                    # IPC channels and validation
 │   │   └── services/               # Sidecar, terminal, updater, and preview services
 │   ├── sidecars/
-│   │   └── claude-sidecar.ts       # Unified server / cli / adapters entry
+│   │   └── claude-sidecar.ts       # Unified server / cli entry
 │   ├── scripts/                    # Build, packaging, and resource preparation
 │   └── src-tauri/                  # Historical code and current package resources; not the Host
-├── adapters/
-│   ├── common/                     # Shared config, pairing, messaging, and WS bridge
-│   ├── telegram/
-│   ├── feishu/
-│   ├── wechat/
-│   ├── dingtalk/
-│   └── whatsapp/
 ├── runtime/
 │   ├── mac_helper.py               # macOS Computer Use helper
 │   ├── win_helper.py               # Windows Computer Use helper
@@ -79,10 +71,9 @@ The repository contains the CLI/TUI, local Server, Electron desktop app, IM adap
 | Entry | Runtime | Responsibility |
 |---|---|---|
 | `src/entrypoints/cli.tsx` | Bun | CLI/TUI and Agent tools |
-| `src/server/index.ts` | Bun / `Bun.serve` | Local HTTP, WebSocket, and H5 |
+| `src/server/index.ts` | Bun / `Bun.serve` | Local HTTP and WebSocket |
 | `desktop/electron/main.ts` | Electron main | Native desktop Host |
 | `desktop/src/` | Chromium Renderer | React desktop UI |
-| `desktop/sidecars/claude-sidecar.ts` | Bun-compiled Sidecar | Packaged Server, CLI, and Adapter entry |
-| `adapters/<platform>/` | Bun Sidecar | Platform messaging integration |
+| `desktop/sidecars/claude-sidecar.ts` | Bun-compiled Sidecar | Packaged Server and CLI entry |
 
-Place new code at the boundary that owns the responsibility: native desktop capabilities belong in `desktop/electron/`, shared business APIs in `src/server/`, and platform-specific messaging behavior in `adapters/<platform>/`. The Renderer should not bypass these boundaries.
+Place new code at the boundary that owns the responsibility: native desktop capabilities belong in `desktop/electron/`, shared business APIs in `src/server/`. The Renderer should not bypass these boundaries.

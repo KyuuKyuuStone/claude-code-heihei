@@ -1,19 +1,23 @@
 ---
 title: Settings reference
 nav_title: Settings
-description: All 16 settings tabs — what each one configures and when you'd need it.
+description: Each settings tab — what it configures and when you'd need it.
 order: 6
 ---
 
 # Settings reference
 
-Click **Settings** at the bottom of the sidebar. Sixteen tabs on the left, in a fixed order. This page walks through them in that order: what each one configures, and when you'd actually need to touch it.
+Click **Settings** at the bottom of the sidebar. The tabs on the left sit in a fixed order. This page walks through them: what each one configures, and when you'd actually need to touch it.
 
 ## Providers
 
 Model access. Sign in to Claude, ChatGPT, or Grok with an account (no API key required), or add any Anthropic- or OpenAI-compatible service with an API key.
 
 You'll come here once during setup and rarely again. Full steps in [Connecting a model](../start/models.md).
+
+## Local models
+
+Run GGUF models directly on your own machine. No network, no API key. Download a model, create a configuration, and start the engine — it's all here. See [Local models](./local-model.md).
 
 ## General
 
@@ -27,7 +31,7 @@ The tab you'll open most often — everything about how the app feels.
 - **Default Session Permissions** — which permission mode new sessions start in. Each session can still be changed individually.
 - **Effort Level** and **Thinking Mode** — defaults for new sessions. Turning thinking off sends an explicit non-thinking parameter to providers like DeepSeek that need one.
 - **Message Sending** — Enter to send (Shift+Enter for a newline), or `Ctrl/Cmd+Enter` to send.
-- **System Notifications** — route permission prompts, completed replies, and scheduled task results to the OS notification center. Enabling it requests system permission.
+- **System Notifications** — route permission prompts and completed replies to the OS notification center. Enabling it requests system permission.
 - **Network** — three modes: Direct connection (explicitly bypass the system proxy), System proxy (follow system or PAC rules per destination), or Manual proxy (a URL like `http://user:password@127.0.0.1:7890`). Below that, **AI request timeout**, which can go up to 1800 seconds when a provider is slow to first byte. App updates use their own proxy setting, over in About.
 - **WebSearch** — how web search is routed. Auto prefers Claude's native WebSearch for Claude models and falls back to Tavily or Brave otherwise; those two need API keys you supply.
 - **Auto-dream** — periodically tidies and compresses memory files in the background. Off by default, because it spends tokens.
@@ -35,14 +39,6 @@ The tab you'll open most often — everything about how the app feels.
 - **Data Storage Location** — an advanced, rarely-touched setting. Defaults to the system directory `~/.claude`, or point it at an absolute path of your own. After switching, sessions, skills, MCP, plugins, and provider config are all read from the new directory; it needs a restart, and the two directories are never merged or migrated automatically.
 
 Product screenshots in this guide consistently use the **Pure White** theme so the interface can be compared without palette changes.
-
-## H5 Access
-
-Continue the same session in your phone's browser. Off by default. See [Phone (H5) and IM](./remote.md).
-
-## IM Adapters
-
-Talk to Claude from WeChat, DingTalk, WhatsApp, Telegram, or Feishu, and manage paired users. See [Phone (H5) and IM](./remote.md) and [IM integrations](../im/index.md).
 
 ## Terminal
 
@@ -80,10 +76,6 @@ A plugin bundles skills, agents, hooks, and MCP servers together. This tab shows
 
 After enabling or disabling anything, click **Apply changes** to push the change into the running runtime.
 
-## Pets
-
-A little robot floating on your desktop. Off by default. See [Desktop pet](./pets.md).
-
 ## Computer Use
 
 Let Claude read the screen, click, and type. Unusable until you install the runtime environment and grant system permissions. See [Computer Use](./computer-use.md).
@@ -111,7 +103,7 @@ Where to go when something breaks. Logs server and CLI startup, provider, and se
 - **Recent events** lists the actual errors, each with an event ID you can copy on its own.
 - **Export Bundle** / **Copy error summary** / **Copy issue report** — use the latter two when filing an issue; they're already formatted.
 - **Doctor** — checks user and current-project configuration state, read-only, returning a healthy / not configured / missing / invalid list. `/doctor` in a session opens it directly.
-- **Reset safe UI state** — clears only regenerable interface keys like open tabs, theme, and zoom. Chat history, model config, skills, MCP, IM, and OAuth are always protected and never touched.
+- **Reset safe UI state** — clears only regenerable interface keys like open tabs, theme, and zoom. Chat history, model config, skills, MCP, and OAuth are always protected and never touched.
 - **Local index** — status and size of the derived SQLite index, with a rebuild button. Rebuilding only affects the index; source conversations are never deleted.
 
 :::info

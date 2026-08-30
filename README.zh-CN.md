@@ -18,11 +18,11 @@
 
 </div>
 
-Claude Code Heihei 是一个 **Windows 桌面端 Claude Code 工作台**。它在经典会话工作台之上新增了 **会话级上下级协作** 能力，同时保留多会话、多项目、Diff 审阅、权限审批、模型配置、Computer Use、技能市场、定时任务等完整能力。
+Claude Code Heihei 是一个 **Windows 桌面端 Claude Code 工作台**。它在经典会话工作台之上新增了 **会话级上下级协作** 能力，同时保留多会话、多项目、Diff 审阅、权限审批、模型配置、Computer Use、技能市场，并新增了**本地 GGUF 模型**支持。
 
 ## 下载
 
-[![下载 Windows 安装包](https://img.shields.io/badge/⬇%20下载-Windows%20exe-FF7A00?style=for-the-badge)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases/latest/download/Claude-Code-Heihei-1.0.0-win-x64.exe)
+[![下载 Windows 安装包](https://img.shields.io/badge/⬇%20下载-Windows%20exe-FF7A00?style=for-the-badge)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases/latest/download/Claude-Code-Heihei-1.0.1-win-x64.exe)
 
 > 历史版本见 [Releases](https://github.com/KyuuKyuuStone/claude-code-heihei/releases)。
 
@@ -57,12 +57,16 @@ Claude Code Heihei 是一个 **Windows 桌面端 Claude Code 工作台**。它�
 - **Computer Use**：授权后让 Agent 截图、点击、输入并控制桌面应用。
 - **MCP 支持**：接入 MCP 工具与外部能力。
 
+### 本地大模型（新增）
+
+直接在你**自己的电脑上跑 GGUF 模型**——不联网、不要 API Key、数据不出本机。应用内置 [llama.cpp](https://github.com/ggml-org/llama.cpp) 内核，自动识别显卡（Vulkan，跨 NVIDIA / AMD / Intel）并按硬件推荐配置档位；一键**跑分**实测你的真实硬件，找到「达到目标速度、资源占用最小」的档位，并估算某个上下文大小装不装得下显存。特别适合普通学生电脑。
+
 ### 其他
 
 - **权限模式**：五档权限，从「每次都问」到「跳过权限」，危险命令、工具调用和 AI 反问都在桌面端审批。
 - **自带模型**：通过 API Key 添加服务商，DeepSeek、Kimi、智谱 GLM 等第三方有现成预设，也支持 LM Studio、Ollama 本地模型。
 - **三套配色主题**：纯白、纸墨、墨夜蓝，可跟随系统深浅色自动切换。
-- **定时任务与用量统计**：计划任务在独立会话里执行，查看本机 Token 使用趋势。
+- **用量统计**：查看本机 Token 使用趋势。
 
 ## 从源码启动 CLI
 
@@ -81,9 +85,9 @@ cp .env.example .env
 | 分区 | 文档 |
 |------|------|
 | **开始使用** | [这是什么](docs/start/index.md) · [下载与安装](docs/start/install.md) · [连接模型服务](docs/start/models.md) · [跑通第一条会话](docs/start/first-session.md) · [故障排查](docs/start/troubleshooting.md) |
-| **桌面端功能** | [功能总览](docs/desktop/index.md) · [Computer Use](docs/desktop/computer-use.md) |
+| **桌面端功能** | [功能总览](docs/desktop/index.md) · [本地模型](docs/desktop/local-model.md) · [Computer Use](docs/desktop/computer-use.md) |
 | **命令行** | [安装与启动](docs/cli/index.md) · [命令参考](docs/cli/reference.md) · [环境变量](docs/cli/env.md) |
-| **深入原理** | [桌面端架构](docs/internals/desktop.md) · [多 Agent 系统](docs/internals/agent.md) · [Skills 系统](docs/internals/skills.md) · [记忆系统](docs/internals/memory.md) · [Computer Use 架构](docs/internals/computer-use.md) · [本地 Server 与 API](docs/internals/server.md) · [Channel 系统](docs/internals/channel.md) · [项目结构](docs/internals/structure.md) |
+| **深入原理** | [桌面端架构](docs/internals/desktop.md) · [本地模型原理](docs/internals/local-model.md) · [多 Agent 系统](docs/internals/agent.md) · [Skills 系统](docs/internals/skills.md) · [记忆系统](docs/internals/memory.md) · [Computer Use 架构](docs/internals/computer-use.md) · [本地 Server 与 API](docs/internals/server.md) · [项目结构](docs/internals/structure.md) |
 
 ## 赞助
 

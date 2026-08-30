@@ -96,5 +96,4 @@ Denied edits never reach the disk, but the disk and `git diff` are the only sour
 ## Next
 
 - See what else it can do — [desktop feature map](../desktop/index.md)
-- Keep going from your phone — [Phone and IM handoff](../desktop/remote.md)
 - Something got stuck — [Won't install, won't open, won't connect](./troubleshooting.md)

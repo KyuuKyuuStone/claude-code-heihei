@@ -26,7 +26,6 @@ const excludedFiles = new Set(['AGENTS.md'])
 export const sections = [
   { id: 'start', zh: '开始使用', en: 'Get started' },
   { id: 'desktop', zh: '桌面端功能', en: 'Desktop app' },
-  { id: 'im', zh: 'IM 接入', en: 'Messaging' },
   { id: 'cli', zh: '命令行', en: 'Command line' },
   { id: 'internals', zh: '深入原理', en: 'Internals' }
 ]

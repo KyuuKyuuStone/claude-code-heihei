@@ -111,5 +111,5 @@ Computer Use 控制的仍然是 Windows 桌面应用，WSL 内的命令行工具
 
 - [命令参考](./reference.md)：命令行参数、无头模式与恢复模式
 - [环境变量](./env.md)：认证、模型与本地运行变量的完整清单
-- [架构总览](../internals/index.md)：CLI、Server、桌面壳与 Adapter 的分工
+- [架构总览](../internals/index.md)：CLI、Server 与桌面壳的分工
 - [参与贡献与质量门禁](../internals/contributing.md)：提 PR 之前要跑哪些检查

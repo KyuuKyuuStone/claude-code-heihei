@@ -96,5 +96,4 @@ order: 3
 ## 接下来
 
 - 想看看还有哪些能力 — [桌面端功能地图](../desktop/index.md)
-- 出门了想在手机上接着聊 — [手机与 IM 接力](../desktop/remote.md)
 - 哪一步卡住了 — [装不上 / 打不开 / 连不上](./troubleshooting.md)
