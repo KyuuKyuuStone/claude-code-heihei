@@ -57,6 +57,7 @@ import { TerminalSettings } from './TerminalSettings'
 import { DiagnosticsSettings } from './DiagnosticsSettings'
 import { TraceList } from './TraceList'
 import { ActivitySettings } from './ActivitySettings'
+import { LocalModelSettings } from './LocalModelSettings'
 import { MemorySettings } from './MemorySettings'
 import { useUIStore } from '../stores/uiStore'
 import { AgentManager } from '../components/settings/AgentManager'
@@ -132,6 +133,7 @@ export function Settings() {
         <div className="w-[220px] flex-shrink-0 flex flex-col overflow-y-auto border-r border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-4">
           <div className="flex-1 flex flex-col gap-0.5">
             <TabButton icon="dns" label={t('settings.tab.providers')} active={activeTab === 'providers'} onClick={() => setActiveTab('providers')} />
+            <TabButton icon="memory" label={t('settings.tab.localModel')} active={activeTab === 'localModel'} onClick={() => setActiveTab('localModel')} />
             <TabButton icon="tune" label={t('settings.tab.general')} active={activeTab === 'general'} onClick={() => setActiveTab('general')} />
             <TabButton icon="terminal" label={t('settings.tab.terminal')} active={activeTab === 'terminal'} onClick={() => setActiveTab('terminal')} />
             <TabButton icon="dns" label={t('settings.tab.mcp')} active={activeTab === 'mcp'} onClick={() => setActiveTab('mcp')} />
@@ -152,6 +154,7 @@ export function Settings() {
         {/* Tab content; trace embeds a full-bleed page that manages its own scroll */}
         <div className={activeTab === 'trace' ? 'flex-1 flex min-h-0 flex-col overflow-hidden' : 'flex-1 overflow-y-auto px-9 py-8'}>
           {activeTab === 'providers' && <ProviderSettings />}
+          {activeTab === 'localModel' && <LocalModelSettings />}
           {activeTab === 'activity' && <ActivitySettings />}
           {activeTab === 'general' && <GeneralSettings />}
           {activeTab === 'terminal' && <TerminalSettings showPreferences />}

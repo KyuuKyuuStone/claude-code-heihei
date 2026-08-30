@@ -22,6 +22,8 @@ import { installTray, shouldInstallTray, type TrayController } from './services/
 import { ElectronUpdaterService, updaterSessionProxyConfig } from './services/updater'
 import { createUpdateSmokeUpdaterFromEnv } from './services/updateSmoke'
 import { ElectronTerminalService, type TerminalSpawnInput } from './services/terminal'
+import { LocalModelService, resolveLlamaServerExecutable, resolveVulkanExecutable, detectGpu, detectHardware, type LocalModelStartInput } from './services/localModelService'
+import { runBenchmark, resolveLlamaBenchExecutable, type BenchmarkRunInput } from './services/localModelBenchmark'
 import { ElectronPreviewService, type PreviewBounds } from './services/preview'
 import {
   configureLocalServerRequestAuth,
@@ -91,6 +93,7 @@ let mainWindow: BrowserWindow | null = null
 let serverRuntime: ElectronServerRuntime | null = null
 let updaterService: ElectronUpdaterService | null = null
 let terminalService: ElectronTerminalService | null = null
+let localModelService: LocalModelService | null = null
 let previewService: ElectronPreviewService | null = null
 let petWindowController: PetWindowController | null = null
 const traceWindows = new Map<string, BrowserWindow>()
@@ -280,6 +283,22 @@ function getTerminalService() {
     nodePtyCacheDir: nodePtyRuntimeCacheDir(),
   })
   return terminalService
+}
+
+function getLocalModelService() {
+  localModelService ??= new LocalModelService()
+  return localModelService
+}
+
+let cachedGpuDetection: boolean | null = null
+
+function resolveLocalModelExe(): string {
+  if (cachedGpuDetection === null) {
+    cachedGpuDetection = detectGpu(resolveVulkanExecutable(unpackedRoot()))
+  }
+  return cachedGpuDetection
+    ? resolveVulkanExecutable(unpackedRoot())
+    : resolveLlamaServerExecutable(unpackedRoot())
 }
 
 function getPreviewService() {
@@ -672,6 +691,19 @@ function registerIpcHandlers() {
     app.quit()
   })
   registerHandler(ELECTRON_IPC_CHANNELS.adaptersRestartSidecar, () => getServerRuntime().restartAdaptersSidecars())
+  registerHandler(ELECTRON_IPC_CHANNELS.localModelStart, (_event, payload) => {
+    const input = payload as LocalModelStartInput
+    return getLocalModelService().start(input, resolveLocalModelExe())
+  })
+  registerHandler(ELECTRON_IPC_CHANNELS.localModelStop, () => getLocalModelService().stop())
+  registerHandler(ELECTRON_IPC_CHANNELS.localModelStatus, () => getLocalModelService().status())
+  registerHandler(ELECTRON_IPC_CHANNELS.localModelDetectHardware, () => detectHardware(resolveVulkanExecutable(unpackedRoot())))
+  registerHandler(ELECTRON_IPC_CHANNELS.localModelBenchmark, (event, payload) => {
+    const input = payload as BenchmarkRunInput
+    return runBenchmark(input, resolveLlamaBenchExecutable(unpackedRoot()), (progress) => {
+      event.sender.send(ELECTRON_EVENT_CHANNELS.localModelBenchmarkProgress, progress)
+    })
+  })
   registerHandler(ELECTRON_IPC_CHANNELS.zoomSet, (event, payload) => currentWindow(event).webContents.setZoomFactor(normalizeZoomFactor(payload)))
   registerHandler(ELECTRON_IPC_CHANNELS.appearanceSetApplied, (_event, payload) => {
     if (!isAppliedAppearance(payload)) return

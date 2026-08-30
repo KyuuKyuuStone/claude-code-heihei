@@ -129,6 +129,78 @@ export type TerminalExitEvent = {
   signal?: string | null
 }
 
+export type LocalModelStartInput = {
+  modelPath: string
+  ctxSize: number
+  threads: number
+  nGpuLayers: string
+  batchSize?: number
+  cacheTypeK?: string
+  cacheTypeV?: string
+  flashAttn?: boolean
+  temperature?: number
+  topK?: number
+  topP?: number
+  minP?: number
+  repeatPenalty?: number
+  maxPredict?: number
+}
+
+export type LocalModelStatus = {
+  state: 'stopped' | 'starting' | 'running' | 'error'
+  port: number | null
+  modelPath: string | null
+  error: string | null
+  logTail: string
+}
+
+export type LocalModelHardware = {
+  cpuCores: number
+  memoryGB: number
+  gpu: { name: string; vramMB: number } | null
+}
+
+export type LocalModelBenchmarkStep = {
+  label: string
+  usage: number
+  ngl: string
+  threads: number
+  tgTokensPerSec: number
+  meetsTarget: boolean
+}
+
+export type LocalModelBenchmarkInput = {
+  modelPath: string
+  targetSpeed: number
+  ctxSize: number
+  usage: number
+  threads: number
+}
+
+export type LocalModelBenchmarkContextFit = {
+  kvBytesPerToken: number | null
+  kvCacheGB: number | null
+  availableVramGB: number
+  fits: boolean
+}
+
+export type LocalModelBenchmarkOutput = {
+  modelParamsB: number | null
+  modelSizeMB: number | null
+  ppTokensPerSec: number
+  maxTgTokensPerSec: number
+  steps: LocalModelBenchmarkStep[]
+  recommendedStep: LocalModelBenchmarkStep | null
+  contextFit: LocalModelBenchmarkContextFit
+  error: string | null
+}
+
+export type LocalModelBenchmarkProgress = {
+  current: number
+  total: number
+  label: string
+}
+
 export type PreviewBounds = {
   x: number
   y: number
@@ -368,6 +440,14 @@ export type DesktopHost = {
   }
   adapters: {
     restartSidecar(): Promise<void>
+  }
+  localModel: {
+    start(input: LocalModelStartInput): Promise<LocalModelStatus>
+    stop(): Promise<void>
+    status(): Promise<LocalModelStatus>
+    detectHardware(): Promise<LocalModelHardware>
+    benchmark(input: LocalModelBenchmarkInput): Promise<LocalModelBenchmarkOutput>
+    onBenchmarkProgress(handler: (progress: LocalModelBenchmarkProgress) => void): Promise<DesktopHostUnlisten>
   }
   zoom: {
     set(level: number): Promise<void>

@@ -154,6 +154,53 @@ const terminalSessionId: Validator = value =>
   && hasOnlyKeys(value, ['sessionId'])
   && isTerminalSessionId(value.sessionId)
 
+const localModelStart: Validator = value =>
+  isRecord(value)
+  && hasOnlyKeys(value, ['modelPath', 'ctxSize', 'threads', 'nGpuLayers', 'batchSize', 'cacheTypeK', 'cacheTypeV', 'flashAttn', 'temperature', 'topK', 'topP', 'minP', 'repeatPenalty', 'maxPredict'])
+  && typeof value.modelPath === 'string'
+  && value.modelPath.length > 0
+  && value.modelPath.length <= 4096
+  && !value.modelPath.includes('\0')
+  && typeof value.ctxSize === 'number'
+  && Number.isInteger(value.ctxSize)
+  && value.ctxSize >= 16000
+  && value.ctxSize <= 1_000_000
+  && typeof value.threads === 'number'
+  && Number.isInteger(value.threads)
+  && value.threads >= 1
+  && value.threads <= 256
+  && typeof value.nGpuLayers === 'string'
+  && value.nGpuLayers.length > 0
+  && value.nGpuLayers.length <= 16
+  && (value.batchSize === undefined || (typeof value.batchSize === 'number' && Number.isInteger(value.batchSize) && value.batchSize > 0))
+  && (value.cacheTypeK === undefined || typeof value.cacheTypeK === 'string')
+  && (value.cacheTypeV === undefined || typeof value.cacheTypeV === 'string')
+  && (value.flashAttn === undefined || typeof value.flashAttn === 'boolean')
+  && (value.temperature === undefined || typeof value.temperature === 'number')
+  && (value.topK === undefined || typeof value.topK === 'number')
+  && (value.topP === undefined || typeof value.topP === 'number')
+  && (value.minP === undefined || typeof value.minP === 'number')
+  && (value.repeatPenalty === undefined || typeof value.repeatPenalty === 'number')
+  && (value.maxPredict === undefined || typeof value.maxPredict === 'number')
+
+const localModelBenchmark: Validator = value =>
+  isRecord(value)
+  && typeof value.modelPath === 'string'
+  && value.modelPath.length > 0
+  && value.modelPath.length <= 4096
+  && typeof value.targetSpeed === 'number'
+  && Number.isFinite(value.targetSpeed)
+  && value.targetSpeed > 0
+  && value.targetSpeed <= 10000
+  && typeof value.ctxSize === 'number'
+  && Number.isInteger(value.ctxSize)
+  && value.ctxSize >= 1024
+  && value.ctxSize <= 1_000_000
+  && typeof value.usage === 'number'
+  && value.usage > 0
+  && value.usage <= 1
+  && typeof value.threads === 'number'
+
 const boundsPayload: Validator = value =>
   isRecord(value)
   && typeof value.x === 'number'
@@ -275,6 +322,11 @@ export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.appModePrepareRestart]: noPayload,
   [ELECTRON_IPC_CHANNELS.appModeRestart]: noPayload,
   [ELECTRON_IPC_CHANNELS.adaptersRestartSidecar]: noPayload,
+  [ELECTRON_IPC_CHANNELS.localModelStart]: localModelStart,
+  [ELECTRON_IPC_CHANNELS.localModelStop]: noPayload,
+  [ELECTRON_IPC_CHANNELS.localModelStatus]: noPayload,
+  [ELECTRON_IPC_CHANNELS.localModelDetectHardware]: noPayload,
+  [ELECTRON_IPC_CHANNELS.localModelBenchmark]: localModelBenchmark,
   [ELECTRON_IPC_CHANNELS.zoomSet]: zoomPayload,
   [ELECTRON_IPC_CHANNELS.appearanceSetApplied]: appliedAppearance,
 } satisfies Record<ElectronIpcChannel, Validator>

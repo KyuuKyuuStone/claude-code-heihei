@@ -45,6 +45,7 @@ function getStoredSidebarWidth(): number {
 
 const SETTINGS_TABS = [
   'providers',
+  'localModel',
   'activity',
   'general',
   'terminal',
@@ -229,6 +230,7 @@ export type Toast = {
 
 export type SettingsTab =
   | 'providers'
+  | 'localModel'
   | 'activity'
   | 'general'
   | 'terminal'

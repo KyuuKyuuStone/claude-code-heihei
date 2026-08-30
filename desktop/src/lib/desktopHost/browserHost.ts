@@ -326,6 +326,26 @@ export const browserHost: DesktopHost = {
       unsupported('Adapter sidecar restart')
     },
   },
+  localModel: {
+    async start() {
+      unsupported('Local model engine')
+    },
+    async stop() {
+      unsupported('Local model engine')
+    },
+    async status() {
+      return { state: 'stopped', port: null, modelPath: null, error: null, logTail: '' }
+    },
+    async detectHardware() {
+      unsupported('Local model engine')
+    },
+    async benchmark() {
+      unsupported('Local model benchmark')
+    },
+    async onBenchmarkProgress() {
+      return noopUnlisten
+    },
+  },
   zoom: {
     async set() {
       unsupported('Native app zoom')

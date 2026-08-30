@@ -196,6 +196,14 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
     adapters: {
       restartSidecar: () => invoke(ELECTRON_IPC_CHANNELS.adaptersRestartSidecar),
     },
+    localModel: {
+      start: input => invoke(ELECTRON_IPC_CHANNELS.localModelStart, input),
+      stop: () => invoke(ELECTRON_IPC_CHANNELS.localModelStop),
+      status: () => invoke(ELECTRON_IPC_CHANNELS.localModelStatus),
+      detectHardware: () => invoke(ELECTRON_IPC_CHANNELS.localModelDetectHardware),
+      benchmark: input => invoke(ELECTRON_IPC_CHANNELS.localModelBenchmark, input),
+      onBenchmarkProgress: handler => subscribe(ELECTRON_EVENT_CHANNELS.localModelBenchmarkProgress, handler),
+    },
     zoom: {
       set: level => invoke(ELECTRON_IPC_CHANNELS.zoomSet, level),
     },

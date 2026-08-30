@@ -63,6 +63,11 @@ export const ELECTRON_IPC_CHANNELS = {
   appModePrepareRestart: 'desktop:app-mode:prepare-restart',
   appModeRestart: 'desktop:app-mode:restart',
   adaptersRestartSidecar: 'desktop:adapters:restart-sidecar',
+  localModelStart: 'desktop:local-model:start',
+  localModelStop: 'desktop:local-model:stop',
+  localModelStatus: 'desktop:local-model:status',
+  localModelDetectHardware: 'desktop:local-model:detect-hardware',
+  localModelBenchmark: 'desktop:local-model:benchmark',
   zoomSet: 'desktop:zoom:set',
   appearanceSetApplied: 'desktop:appearance:set-applied',
 } as const
@@ -81,6 +86,7 @@ export const ELECTRON_EVENT_CHANNELS = {
   petNavigateSession: 'desktop:pets:navigate-session',
   petVisibilityChanged: 'desktop:pets:visibility-changed',
   petPanelPlacementChanged: 'desktop:pets:panel-placement-changed',
+  localModelBenchmarkProgress: 'desktop:local-model:benchmark-progress',
 } as const
 
 export const ELECTRON_INTERNAL_CHANNELS = {
