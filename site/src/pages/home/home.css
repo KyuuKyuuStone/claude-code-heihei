@@ -512,3 +512,72 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ── 本地大模型 ───────────────────────────────────────────────── */
+
+.section__eyebrow {
+  display: inline-block;
+  margin-bottom: var(--sp-3);
+  padding: 3px 10px;
+  border-radius: var(--r-full);
+  background: var(--brand-soft);
+  color: var(--on-brand-soft);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.lm-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lm-card {
+  display: flex;
+  flex-direction: column;
+  padding: var(--sp-5);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background: var(--bg);
+}
+
+.lm-card img {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: var(--r-lg);
+  margin-bottom: var(--sp-4);
+  border: 1px solid var(--border);
+}
+
+.lm-card h3 {
+  margin-bottom: var(--sp-2);
+  font-family: var(--font-sans);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.lm-card p {
+  color: var(--text-2);
+  font-size: var(--fs-base);
+  line-height: 1.7;
+}
+
+.lm-cta {
+  margin-top: var(--sp-8);
+}
+
+@media (max-width: 900px) {
+  .lm-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .lm-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -2,10 +2,15 @@ import shot1 from '../../../../docs/images/app/ZY01.jpg'
 import shot2 from '../../../../docs/images/app/ZY02.jpg'
 import shot3 from '../../../../docs/images/app/ZY03.jpg'
 import shot4 from '../../../../docs/images/app/ZY04.jpg'
+import lmHome from '../../../../docs/images/app/LM-home.png'
+import lmBenchmark from '../../../../docs/images/app/LM-benchmark.png'
+import lmEdit from '../../../../docs/images/app/LM-edit-config.png'
+import lmRunning from '../../../../docs/images/app/LM-running.png'
+import lmSelect from '../../../../docs/images/app/LM-select.png'
 
 const localizedImages = {
-  zh: { shot1, shot2, shot3, shot4 },
-  en: { shot1, shot2, shot3, shot4 }
+  zh: { shot1, shot2, shot3, shot4, lmHome, lmBenchmark, lmEdit, lmRunning, lmSelect },
+  en: { shot1, shot2, shot3, shot4, lmHome, lmBenchmark, lmEdit, lmRunning, lmSelect }
 }
 
 export const images = localizedImages.zh
@@ -33,6 +38,19 @@ export const content = {
         ['操作电脑', 'Computer Use 让它看屏幕、点鼠标、敲键盘，敏感操作等你点头。'],
         ['上下级协作', '每项目任命主管、登记员工，自动派活、无人值守执行、完工汇报。']
       ]
+    },
+    localModel: {
+      eyebrow: '本地大模型',
+      title: '不联网、不要 API Key，跑在你自己的显卡上',
+      lede: '内置 llama.cpp 内核，直接运行 GGUF 模型。识别你的硬件、推荐配置档位，一键跑分测出真实速度。',
+      steps: [
+        { image: lmHome, title: '一目了然的本地模型首页', body: '硬件信息、配置方案、运行状态，一屏全摆出来。' },
+        { image: lmBenchmark, title: '一键跑分', body: '设目标速度、上下文、硬件使用率，实测出最优配置。' },
+        { image: lmEdit, title: '细节参数随你调', body: '上下文窗口、GPU 层数、KV cache、采样，全都能细调。' },
+        { image: lmRunning, title: '引擎跑起来', body: '内置 llama.cpp，加载模型后在本机端口提供对话服务。' },
+        { image: lmSelect, title: '会话里切换', body: '输入框左下角换成本地模型，就能离线用了。' }
+      ],
+      cta: { href: '/desktop/local-model', label: '看本地模型怎么用' }
     },
     tour: {
       title: '真实 App、真实任务，没有概念图',
@@ -136,6 +154,19 @@ export const content = {
         ['Drive the desktop', 'Computer Use can see the screen, click and type. Sensitive moves still wait for you.'],
         ['Supervisor–worker teams', 'Appoint a supervisor and register workers per project — auto-dispatch, unattended execution, and hand-off reports.']
       ]
+    },
+    localModel: {
+      eyebrow: 'Local models',
+      title: 'Offline, no API key — run on your own GPU',
+      lede: 'The bundled llama.cpp runtime runs GGUF models directly. It detects your hardware, recommends a config tier, and benchmarks your real speed in one click.',
+      steps: [
+        { image: lmHome, title: 'The local model page at a glance', body: 'Hardware, configurations, and run state all on one screen.' },
+        { image: lmBenchmark, title: 'One-click benchmark', body: 'Set a target speed, context, and hardware usage — it measures the best config.' },
+        { image: lmEdit, title: 'Tune the details', body: 'Context window, GPU layers, KV cache, sampling — all adjustable.' },
+        { image: lmRunning, title: 'Engine up and running', body: 'The bundled llama.cpp loads your model and serves it on a local port.' },
+        { image: lmSelect, title: 'Switch in a session', body: 'Pick the local model in the composer picker and chat offline.' }
+      ],
+      cta: { href: '/en/desktop/local-model', label: 'See how local models work' }
     },
     tour: {
       title: 'Real app, real tasks, no concept art',

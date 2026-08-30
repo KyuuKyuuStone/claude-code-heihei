@@ -53,6 +53,35 @@ function Hero({ c, locale }) {
   )
 }
 
+function LocalModel({ c }) {
+  return (
+    <section className="section section--muted" id="local-model">
+      <div className="u-shell">
+        <header className="section__head">
+          <span className="section__eyebrow">{c.localModel.eyebrow}</span>
+          <h2>{c.localModel.title}</h2>
+          <p className="u-lede">{c.localModel.lede}</p>
+        </header>
+        <ul className="lm-grid">
+          {c.localModel.steps.map((step) => (
+            <li className="lm-card" key={step.title}>
+              <img alt={step.title} loading="lazy" src={step.image} />
+              <h3>{step.title}</h3>
+              <p>{step.body}</p>
+            </li>
+          ))}
+        </ul>
+        <div className="lm-cta">
+          <a className="link-arrow" href={toSiteHref(c.localModel.cta.href)}>
+            {c.localModel.cta.label}
+            <Icon name="arrow" size={16} />
+          </a>
+        </div>
+      </div>
+    </section>
+  )
+}
+
 function Capabilities({ c }) {
   return (
     <section className="section" id="capabilities">
@@ -287,6 +316,7 @@ export default function HomePage({ locale = 'zh' }) {
       <main id="main" tabIndex={-1}>
         <Hero c={c} locale={locale} />
         <Capabilities c={c} />
+        <LocalModel c={c} />
         <Tour c={c} locale={locale} />
         <Paths c={c} />
         <Install c={c} locale={locale} />

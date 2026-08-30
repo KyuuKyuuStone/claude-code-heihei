@@ -33,6 +33,13 @@ Claude Code Heihei is a **Windows desktop Claude Code workspace**. It adds a **s
 | ![Screenshot 1](docs/images/app/ZY01.jpg) | ![Screenshot 2](docs/images/app/ZY02.jpg) |
 | ![Screenshot 3](docs/images/app/ZY03.jpg) | ![Screenshot 4](docs/images/app/ZY04.jpg) |
 
+### Local models
+
+|  |  |
+|:--:|:--:|
+| ![Local model home](docs/images/app/LM-home.png) | ![Benchmark](docs/images/app/LM-benchmark.png) |
+| ![Edit config](docs/images/app/LM-edit-config.png) | ![Running](docs/images/app/LM-running.png) |
+
 ## Features
 
 ### Supervisor–worker collaboration (new in this project)

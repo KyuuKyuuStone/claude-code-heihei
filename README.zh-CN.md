@@ -33,6 +33,13 @@ Claude Code Heihei 是一个 **Windows 桌面端 Claude Code 工作台**。它�
 | ![界面预览 1](docs/images/app/ZY01.jpg) | ![界面预览 2](docs/images/app/ZY02.jpg) |
 | ![界面预览 3](docs/images/app/ZY03.jpg) | ![界面预览 4](docs/images/app/ZY04.jpg) |
 
+### 本地大模型
+
+|  |  |
+|:--:|:--:|
+| ![本地模型首页](docs/images/app/LM-home.png) | ![跑分](docs/images/app/LM-benchmark.png) |
+| ![修改配置方案](docs/images/app/LM-edit-config.png) | ![启动模型](docs/images/app/LM-running.png) |
+
 ## 功能特性
 
 ### 会话级上下级协作（本项目新增）
