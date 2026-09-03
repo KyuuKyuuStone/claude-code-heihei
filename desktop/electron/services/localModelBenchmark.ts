@@ -160,7 +160,7 @@ export function kvBytesPerToken(meta: GgufMeta): number | null {
 
 /* ── 输出解析 ── */
 
-type BenchParse = { tg: number; pp: number; paramsB: number | null; sizeMB: number | null; error: string | null }
+type BenchParse = { tg: number; pp: number; paramsB: number | null; sizeMB: number | null; error: string | null; crashed?: boolean }
 
 function parseBenchOutput(output: string): BenchParse {
   let tg = 0
@@ -244,10 +244,13 @@ function runBenchOnce(
     })
 
     const timeout = setTimeout(() => finish({ tg: 0, pp: 0, paramsB: null, sizeMB: null, error: '跑分超时（模型或上下文太大）' }), BENCH_TIMEOUT_MS)
-    child.once('close', () => {
+    child.once('close', (code) => {
       clearTimeout(timeout)
       const parsed = parseBenchOutput(stdout)
       if (parsed.tg === 0) {
+        // 进程崩溃（如 STATUS_STACK_BUFFER_OVERRUN）会给出非零退出码且无输出。
+        // 用 crashed 标记，让主流程能降级到 CPU 重测而不是当成「没有产出结果」。
+        if (code !== 0 && code !== null) parsed.crashed = true
         parsed.error = humanizeBenchError(stderr) ?? 'llama-bench 没有产出结果'
       }
       finish(parsed)
@@ -322,8 +325,9 @@ export async function runBenchmark(
     fits: kvCacheGB !== null ? kvCacheGB <= availableVramGB * 0.9 : true, // 留 10% 余量
   }
 
-  // 速度测试固定在中等深度（8K），大上下文测速度会把 KV 缓存填满卡死——上下文可行性用上面的内存账算
-  const benchDepth = 8192
+  // 速度测试用中等深度，既能测出真实的 token 生成速度，又不会在弱硬件上把 KV 缓存填满卡死。
+  // GTX 750 这类无 fp16 的老显卡，深度太大（8K）跑分进程会崩溃；1024 是稳妥值。
+  const benchDepth = 1024
 
   // 从用户选的使用率起步，达不到目标就往上加（直到 100%）
   const usageSteps: number[] = []
@@ -363,7 +367,21 @@ export async function runBenchmark(
     if (run.paramsB !== null) modelParamsB = run.paramsB
     if (run.sizeMB !== null) modelSizeMB = run.sizeMB
 
-    // 硬错误（显存不足/超时等）：立即停，把原因告诉用户，别再把后面的档位挨个跑一遍
+    // GPU 档崩溃（进程以非零码退出且无输出）：改用纯 CPU 重测这一档，别让整个跑分卡死。
+    // GTX 750 这类无 fp16 的老显卡跑 512 token 提示 + 高 GPU 层会触发 llama.cpp 崩溃。
+    if (run.crashed && hasGpu) {
+      const cpuRun = await runBenchOnce(input.modelPath, benchExePath, '0', threads, benchDepth)
+      if (cpuRun.tg > 0) {
+        // CPU 能跑——把这一档记为 CPU 实测，并提示用户 GPU 加速不可用。
+        run.tg = cpuRun.tg
+        run.pp = cpuRun.pp
+        run.error = '此显卡跑不动 GPU 加速（崩溃），已自动改用纯 CPU 测速。'
+      } else {
+        // CPU 也崩，留原错误
+      }
+    }
+
+    // 硬错误（显存不足/超时/崩溃后 CPU 仍失败）：立即停，把原因告诉用户，别再把后面的档位挨个跑一遍
     if (run.tg === 0 && run.error) {
       return {
         modelParamsB,
