@@ -272,7 +272,7 @@ export const en = {
   'settings.localModel.state.running': 'Running',
   'settings.localModel.state.error': 'Error',
   'settings.localModel.downloadGuide': 'Download models',
-  'settings.localModel.downloadGuideDesc': 'Open the download hub: GGUF site links, recommended models, and usage guide.',
+  'settings.localModel.downloadGuideDesc': 'Open the download hub: GGUF site links and usage guide.',
   'settings.localModel.logTitle': 'Engine log',
   'settings.tab.permissions': 'Permissions',
   'settings.tab.activity': 'Token usage',

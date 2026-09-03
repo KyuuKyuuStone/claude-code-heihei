@@ -274,7 +274,7 @@ export const kr: Record<TranslationKey, string> = {
   'settings.localModel.state.running': '실행 중',
   'settings.localModel.state.error': '오류',
   'settings.localModel.downloadGuide': '모델 다운로드',
-  'settings.localModel.downloadGuideDesc': '다운로드 센터 열기: GGUF 사이트 이동, 추천 모델, 사용법.',
+  'settings.localModel.downloadGuideDesc': '다운로드 센터 열기: GGUF 사이트 이동과 사용법.',
   'settings.localModel.logTitle': '엔진 로그',
   'settings.tab.permissions': '권한',
   'settings.tab.activity': '토큰 사용량',

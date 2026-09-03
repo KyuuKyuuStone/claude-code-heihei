@@ -120,16 +120,6 @@ const STATE_DOT_TONE = {
   error: 'danger',
 } as const
 
-/** 推荐的大模型（写死：型号/大小/显存需求/上下文/适合场景/下载链接） */
-const RECOMMENDED_MODELS = [
-  { name: 'Qwen2.5-1.5B-Instruct', size: '1.5B', format: 'Q4_K_M', vram: '约 1 GB', context: '32K', best: '极速问答、学习笔记', download: 'https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF' },
-  { name: 'Qwen2.5-3B-Instruct', size: '3B', format: 'Q4_K_M', vram: '约 2.5 GB', context: '32K', best: '日常问答、轻量写代码（推荐）', download: 'https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF' },
-  { name: 'Qwen3-4B-Instruct', size: '4B', format: 'Q4_K_M', vram: '约 3 GB', context: '32K', best: '更新的 Qwen 小模型，中文强', download: 'https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507-GGUF' },
-  { name: 'Qwen2.5-7B-Instruct', size: '7B', format: 'Q4_K_M', vram: '约 4.5 GB', context: '128K', best: '写代码、长文档理解', download: 'https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF' },
-  { name: 'Llama 3.2 3B', size: '3B', format: 'Q4_K_M', vram: '约 2 GB', context: '128K', best: '英文见长、通用问答', download: 'https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF' },
-  { name: 'DeepSeek-R1-Distill-Qwen-7B', size: '7B', format: 'Q4_K_M', vram: '约 4.5 GB', context: '32K', best: '推理链思考、数学/逻辑', download: 'https://huggingface.co/bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF' },
-] as const
-
 type AdvancedConfig = {
   ctxSize: string
   threads: string
@@ -985,34 +975,6 @@ export function LocalModelSettings() {
           </ol>
         </div>
 
-        {/* 推荐的大模型 */}
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.15em] text-[var(--color-text-tertiary)]">
-          推荐的大模型
-        </div>
-        <p className="mb-3 text-[13px] leading-6 text-[var(--color-text-secondary)]">
-          按您的硬件（{hardware ? `${hardware.memoryGB}GB 内存${hardware.gpu ? ` + ${Math.round(hardware.gpu.vramMB / 1024)}GB 显存` : '、无独显'}` : '检测中'}），以下模型比较合适。点「下载」去对应页面。
-        </p>
-        <div className="space-y-2">
-          {RECOMMENDED_MODELS.map((model) => (
-            <div key={model.name} className="flex items-center gap-4 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
-              <div className="min-w-0 flex-1">
-                <div className="text-[13.5px] font-semibold text-[var(--color-text-primary)]">{model.name}</div>
-                <div className="mt-0.5 text-[11.5px] text-[var(--color-text-tertiary)]">
-                  {model.size} · {model.format} · 显存 {model.vram} · 上下文 {model.context}
-                </div>
-                <div className="mt-0.5 text-[11.5px] text-[var(--color-text-secondary)]">适合：{model.best}</div>
-              </div>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => void host.shell.open(model.download)}
-                icon={<span className="material-symbols-outlined text-[15px]">open_in_new</span>}
-              >
-                下载
-              </Button>
-            </div>
-          ))}
-        </div>
       </Modal>
     </div>
   )

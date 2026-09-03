@@ -274,7 +274,7 @@ export const jp: Record<TranslationKey, string> = {
   'settings.localModel.state.running': '実行中',
   'settings.localModel.state.error': 'エラー',
   'settings.localModel.downloadGuide': 'モデルをダウンロード',
-  'settings.localModel.downloadGuideDesc': 'ダウンロードセンターを開く：GGUF サイトへの移動、おすすめモデル、使い方。',
+  'settings.localModel.downloadGuideDesc': 'ダウンロードセンターを開く：GGUF サイトへの移動と使い方。',
   'settings.localModel.logTitle': 'エンジンログ',
   'settings.tab.permissions': '権限',
   'settings.tab.activity': 'トークン使用量',

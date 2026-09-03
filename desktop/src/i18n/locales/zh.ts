@@ -274,7 +274,7 @@ export const zh: Record<TranslationKey, string> = {
   'settings.localModel.state.running': '运行中',
   'settings.localModel.state.error': '出错',
   'settings.localModel.downloadGuide': '下载模型',
-  'settings.localModel.downloadGuideDesc': '打开下载中心：GGUF 网站跳转、推荐模型与使用说明。',
+  'settings.localModel.downloadGuideDesc': '打开下载中心：GGUF 网站跳转与使用说明。',
   'settings.localModel.logTitle': '引擎日志',
   'settings.tab.permissions': '权限',
   'settings.tab.activity': 'Token 用量',
