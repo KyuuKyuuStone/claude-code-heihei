@@ -15,12 +15,8 @@ import path from 'node:path'
 
 export type BenchmarkRunInput = {
   modelPath: string
-  /** 目标生成速度（token/秒） */
-  targetSpeed: number
-  /** 上下文大小（tokens） */
+  /** 上下文大小（tokens）。Claude Code 真实负载需要 ≥32K */
   ctxSize: number
-  /** 硬件使用率 0~1（如 0.6 = 60%） */
-  usage: number
   threads: number
 }
 
@@ -30,7 +26,6 @@ export type BenchmarkStepResult = {
   ngl: string
   threads: number
   tgTokensPerSec: number
-  meetsTarget: boolean
 }
 
 export type BenchmarkRunResult = {
@@ -353,19 +348,15 @@ export async function runBenchmark(
   // 上下文可行性不依赖这里——它用上面的内存账算。
   const benchDepth = 512
 
-  // 从用户选的使用率起步，达不到目标就往上加（直到 100%）
-  const usageSteps: number[] = []
-  for (let u = input.usage; u <= 1.0001; u += 0.2) {
-    usageSteps.push(Math.min(1, Math.round(u * 100) / 100))
-  }
+  // 跑分固定测几档：CPU 50%、CPU 100%、GPU 可用时测 GPU。不需要用户选目标速度。
+  // 按软件需求（Claude Code 需要 32K 上下文）推荐一个能用的配置。
+  const usageSteps: number[] = [0.5, 1.0]
 
-  // 先用「用户选的使用率」对应的 GPU 层数探测一次，看这张卡能不能真跑（不是只列出来）。
+  // 先用 CPU 探测一次，看这张卡能不能真跑（不是只列出来）。
   // GTX 750 这类无 fp16 的老卡，`--list-devices` 能列出，但真跑大深度就崩——探测失败就全程用 CPU。
-  const firstUsageThreads = Math.max(1, Math.round(input.threads * input.usage))
-  const firstUsageNgl = layers && layers > 0
-    ? String(Math.max(1, Math.round(layers * input.usage)))
-    : (input.usage >= 1 ? '-1' : String(Math.max(1, Math.round(input.usage * 99))))
-  const gpuUsable = hasGpu && await probeGpuUsable(input.modelPath, benchExePath, firstUsageNgl, firstUsageThreads, benchDepth)
+  const probeThreads = Math.max(1, Math.round(input.threads * 0.5))
+  const probeNgl = layers && layers > 0 ? String(Math.max(1, Math.round(layers * 0.5))) : '1'
+  const gpuUsable = hasGpu && await probeGpuUsable(input.modelPath, benchExePath, probeNgl, probeThreads, benchDepth)
   const gpuNote = hasGpu && !gpuUsable
     ? '检测到你的显卡跑不动这个模型（GPU 推理崩溃），已自动改用纯 CPU 测速。'
     : null
@@ -374,6 +365,7 @@ export async function runBenchmark(
   let pp = 0
   let modelParamsB: number | null = null
   let modelSizeMB: number | null = null
+  // 推荐 = 最快的那个档（不是按目标速度，是按机器实测的最快档）
   let recommendedStep: BenchmarkStepResult | null = null
 
   for (let i = 0; i < usageSteps.length; i++) {
@@ -435,15 +427,15 @@ export async function runBenchmark(
       ngl,
       threads,
       tgTokensPerSec: run.tg,
-      meetsTarget: run.tg >= input.targetSpeed,
     }
     results.push(stepResult)
-
-    // 达到目标速度就停（不必再往上堆资源）
-    if (run.tg >= input.targetSpeed && run.tg > 0) {
+    // 推荐 = 最快的那个档
+    if (recommendedStep === null || run.tg > recommendedStep.tgTokensPerSec) {
       recommendedStep = stepResult
-      break
     }
+
+    // 跑完一档就停（只测 CPU 50% 和 100%，不需要更多）
+    if (i === 1) break
   }
 
   const maxTg = Math.max(0, ...results.map((r) => r.tgTokensPerSec))

@@ -104,15 +104,6 @@ const TIER_CONFIGS: Record<LocalModelTier, TierConfig> = {
 
 const TIER_ORDER: LocalModelTier[] = ['low', 'mid', 'high', 'super', 'emperor']
 
-/** 目标生成速度档（token/秒），从 15 开始 */
-const SPEED_TARGETS = [15, 20, 25, 30, 35, 40, 50, 60, 80, 100, 150, 200]
-
-/** 上下文选择：从 1M 往下到 8K */
-const CONTEXT_CHOICES = [8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576]
-
-/** 硬件使用率档 */
-const USAGE_CHOICES = [0.4, 0.5, 0.6, 0.7, 0.8]
-
 const STATE_DOT_TONE = {
   stopped: 'neutral',
   starting: 'info',
@@ -322,9 +313,6 @@ export function LocalModelSettings() {
   // 跑分状态
   const [showBenchmarkModal, setShowBenchmarkModal] = useState(false)
   const [benchmarkModelPath, setBenchmarkModelPath] = useState('')
-  const [benchmarkTargetSpeed, setBenchmarkTargetSpeed] = useState(35)
-  const [benchmarkCtxSize, setBenchmarkCtxSize] = useState(32768)
-  const [benchmarkUsage, setBenchmarkUsage] = useState(0.6)
   const [benchmarkRunning, setBenchmarkRunning] = useState(false)
   const [benchmarkOutput, setBenchmarkOutput] = useState<LocalModelBenchmarkOutput | null>(null)
   const [benchmarkProgress, setBenchmarkProgress] = useState<LocalModelBenchmarkProgress | null>(null)
@@ -445,9 +433,7 @@ export function LocalModelSettings() {
     try {
       const output = await host.localModel.benchmark({
         modelPath: benchmarkModelPath,
-        targetSpeed: benchmarkTargetSpeed,
-        ctxSize: benchmarkCtxSize,
-        usage: benchmarkUsage,
+        ctxSize: 32768,
         threads: hardware?.cpuCores ?? 4,
       })
       if (output.error) {
@@ -472,11 +458,11 @@ export function LocalModelSettings() {
     const tierConfig = TIER_CONFIGS[tier]
     const entry: LocalModelConfig = {
       id: `${Date.now()}`,
-      name: `${modelNameFromPath(benchmarkModelPath)} · ${tierConfig.label} · ${benchmarkCtxSize >= 1048576 ? '1M' : `${Math.round(benchmarkCtxSize / 1024)}K`} · ${Math.round(speed)}t/s`,
+      name: `${modelNameFromPath(benchmarkModelPath)} · ${tierConfig.label} · 32K · ${Math.round(speed)}t/s`,
       modelPath: benchmarkModelPath,
       tier,
       ...DEFAULT_ADVANCED,
-      ctxSize: String(benchmarkCtxSize),
+      ctxSize: '32768',
       threads: String(recommended.threads),
       nGpuLayers: recommended.ngl,
     }
@@ -788,40 +774,8 @@ export function LocalModelSettings() {
               </div>
             </FieldRow>
 
-            <div>
-              <div className="mb-2 text-[13px] font-medium text-[var(--color-text-secondary)]">目标生成速度（token/秒）</div>
-              <div className="flex flex-wrap gap-2">
-                {SPEED_TARGETS.map((speed) => (
-                  <SettingsPill key={speed} selected={benchmarkTargetSpeed === speed} onClick={() => setBenchmarkTargetSpeed(speed)}>
-                    {speed}
-                  </SettingsPill>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <div className="mb-2 text-[13px] font-medium text-[var(--color-text-secondary)]">上下文长度</div>
-              <div className="flex flex-wrap gap-2">
-                {CONTEXT_CHOICES.map((ctx) => (
-                  <SettingsPill key={ctx} selected={benchmarkCtxSize === ctx} onClick={() => setBenchmarkCtxSize(ctx)}>
-                    {ctx >= 1048576 ? '1M' : `${Math.round(ctx / 1024)}K`}
-                  </SettingsPill>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <div className="mb-2 text-[13px] font-medium text-[var(--color-text-secondary)]">
-                硬件使用率
-                <span className="ml-2 text-[11px] font-normal text-[var(--color-text-tertiary)]">（GPU 层数 / CPU 线程的占用比例，留余量给系统）</span>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {USAGE_CHOICES.map((usage) => (
-                  <SettingsPill key={usage} selected={benchmarkUsage === usage} onClick={() => setBenchmarkUsage(usage)}>
-                    {Math.round(usage * 100)}%
-                  </SettingsPill>
-                ))}
-              </div>
+            <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3 text-[12.5px] leading-5 text-[var(--color-text-secondary)]">
+              跑分会自动测出这台机器的真实速度，按软件需求（Claude Code 需要 32K 上下文）推荐一个能用的配置。
             </div>
 
             <div className="flex justify-end pt-2">
@@ -868,12 +822,12 @@ export function LocalModelSettings() {
               <p className="mb-2 text-[12px] text-[var(--color-text-tertiary)]">
                 模型实测：{benchmarkOutput.modelParamsB.toFixed(2)}B 参数
                 {benchmarkOutput.modelSizeMB !== null ? `（${Math.round(benchmarkOutput.modelSizeMB)} MB）` : ''}
-                · 长文输入 {Math.round(benchmarkOutput.ppTokensPerSec)} t/s · 目标 {benchmarkTargetSpeed} t/s
+                · 长文输入 {Math.round(benchmarkOutput.ppTokensPerSec)} t/s
               </p>
             )}
             {benchmarkOutput.contextFit.kvCacheGB !== null && (
               <div className={`mb-3 rounded-[var(--radius-md)] border px-4 py-3 text-[12.5px] leading-5 ${benchmarkOutput.contextFit.fits ? 'border-[var(--color-border)] bg-[var(--color-surface-container-low)]' : 'border-[var(--color-warning)] bg-[var(--color-surface-container-low)]'}`}>
-                <span className="font-semibold">上下文 {benchmarkCtxSize >= 1048576 ? '1M' : `${Math.round(benchmarkCtxSize / 1024)}K`}</span>
+                <span className="font-semibold">上下文 32K</span>
                 {' 的 KV 缓存约需 '}
                 <span className="font-semibold">{benchmarkOutput.contextFit.kvCacheGB.toFixed(2)} GB</span>
                 {'，您可用显存 '}
@@ -885,7 +839,7 @@ export function LocalModelSettings() {
             )}
             {benchmarkOutput.contextTooSmall && (
               <div className="mb-3 rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[var(--color-surface-container-low)] px-4 py-3 text-[12.5px] leading-5" role="alert">
-                <span className="font-semibold">上下文 {benchmarkCtxSize >= 1048576 ? '1M' : `${Math.round(benchmarkCtxSize / 1024)}K`} 太小</span>
+                <span className="font-semibold">上下文 32K 是软件需求的最小值</span>
                 ——Claude Code 的系统提示词 + 工具定义就要 ~30K tokens。这个上下文装不下，模型启动成功但真实请求会被拒。建议选至少 32K。
               </div>
             )}
@@ -901,12 +855,12 @@ export function LocalModelSettings() {
                       <span className="text-[13.5px] font-semibold text-[var(--color-text-primary)]">{step.label}</span>
                       {isRecommended && (
                         <span className="inline-flex items-center rounded-full bg-[var(--color-brand)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[var(--color-surface)]">
-                          达标
+                          最快
                         </span>
                       )}
                     </div>
                     <div className="mt-0.5 text-[11.5px] text-[var(--color-text-tertiary)]">
-                      使用率 {Math.round(step.usage * 100)}% · {step.meetsTarget ? `达到目标 ${benchmarkTargetSpeed} t/s` : '未达目标'}
+                      使用率 {Math.round(step.usage * 100)}%
                     </div>
                   </div>
                   <div className="text-right">
@@ -920,11 +874,11 @@ export function LocalModelSettings() {
             })}
             {benchmarkOutput.recommendedStep ? (
               <p className="pt-2 text-[12px] leading-5 text-[var(--color-text-tertiary)]">
-                推荐：<span className="font-semibold text-[var(--color-text-secondary)]">{benchmarkOutput.recommendedStep.label}</span>——这是达到目标速度的最小资源占用配置，再往上就是浪费了。
+                推荐：<span className="font-semibold text-[var(--color-text-secondary)]">{benchmarkOutput.recommendedStep.label}</span>——这是这台机器最快的配置。
               </p>
             ) : benchmarkOutput.steps.length > 0 ? (
               <p className="pt-2 text-[12px] leading-5 text-[var(--color-warning)]" role="alert">
-                这台机器跑这个模型最快约 {Math.round(benchmarkOutput.maxTgTokensPerSec)} t/s，达不到您的目标 {benchmarkTargetSpeed} t/s——建议降低目标速度、换更小的模型，或开更大的上下文/使用率再试。
+                这台机器跑这个模型最快约 {Math.round(benchmarkOutput.maxTgTokensPerSec)} t/s。
               </p>
             ) : null}
           </div>

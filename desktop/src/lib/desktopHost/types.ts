@@ -166,14 +166,11 @@ export type LocalModelBenchmarkStep = {
   ngl: string
   threads: number
   tgTokensPerSec: number
-  meetsTarget: boolean
 }
 
 export type LocalModelBenchmarkInput = {
   modelPath: string
-  targetSpeed: number
   ctxSize: number
-  usage: number
   threads: number
 }
 
