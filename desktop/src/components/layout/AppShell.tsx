@@ -17,8 +17,6 @@ import {
   isH5ConnectionRequiredError,
 } from '../../lib/desktopRuntime'
 import { getDesktopHost } from '../../lib/desktopHost'
-import { desktopUiPreferencesApi } from '../../api/desktopUiPreferences'
-import { openDesktopNotificationTarget } from '../../lib/desktopNotificationNavigation'
 import { TabBar } from './TabBar'
 import { StartupErrorView } from './StartupErrorView'
 import { useTabStore, SETTINGS_TAB_ID } from '../../stores/tabStore'
@@ -117,14 +115,6 @@ export function AppShell() {
           setReady(true)
         }
 
-        if (desktopRuntime && !traceLaunch.windowMode) {
-          void desktopUiPreferencesApi.getPreferences()
-            .then(({ preferences }) => {
-              if (preferences.pet.enabled) return getDesktopHost().pets.show()
-            })
-            .catch(() => undefined)
-        }
-
         void (async () => {
           if (traceLaunch.windowMode) return
 
@@ -184,31 +174,6 @@ export function AppShell() {
       .catch(() => {})
     return () => { unlisten?.() }
   }, [])
-
-  useEffect(() => {
-    const host = getDesktopHost()
-    if (!host.isDesktop || !host.pets) return
-    let unlisten: (() => void) | undefined
-    let disposed = false
-    host.pets.onNavigateSession((sessionId) => {
-      openDesktopNotificationTarget({ type: 'session', sessionId })
-    })
-      .then((fn) => {
-        if (disposed) fn()
-        else unlisten = fn
-      })
-      .catch(() => {})
-    return () => {
-      disposed = true
-      unlisten?.()
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!ready || !desktopRuntime || !isActiveChatTab || !activeTabId) return
-    void desktopUiPreferencesApi.updatePetPreferences({ lastSessionId: activeTabId })
-      .catch(() => undefined)
-  }, [activeTabId, desktopRuntime, isActiveChatTab, ready])
 
   useKeyboardShortcuts()
   useElectronWindowDragRegions()

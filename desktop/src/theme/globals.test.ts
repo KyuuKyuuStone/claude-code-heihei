@@ -236,51 +236,6 @@ describe('desktop theme tokens', () => {
     expect(css).toContain('overflow: hidden;')
   })
 
-  it('keeps the pet task card controls above the mascot hit target', () => {
-    const mascotCss = getCssBetween('.pet-mascot-button {', '.pet-mascot-wrap {')
-    const cardCss = getCssBetween('.pet-activity-card {', '.pet-activity-card[data-expanded=')
-
-    expect(mascotCss).toContain('z-index: 10;')
-    expect(cardCss).toContain('z-index: 15;')
-  })
-
-  it('restacks the pet task card under the mascot when the host flips it', () => {
-    // Reaching the macOS menu bar puts the window's top edge above the work
-    // area, and the card lives in exactly that strip. The host asks for the
-    // flip; without every one of these rules the card stays behind the menu
-    // bar, or lands on the mascot instead of beside it (#1140).
-    const stackCss = getCssBetween(
-      ".pet-window-stack[data-panel-placement='below'] {",
-      '.pet-mascot-button {',
-    )
-    expect(stackCss).toContain('justify-content: flex-start;')
-    expect(stackCss).toContain('padding: 12px 12px 0;')
-
-    const mascotCss = getCssBetween(
-      ".pet-window-stack[data-panel-placement='below'] .pet-mascot-wrap {",
-      '}',
-    )
-    expect(mascotCss).toContain('order: 1;')
-
-    const cardCss = getCssBetween(
-      ".pet-window-stack[data-panel-placement='below'] .pet-activity-card {",
-      '}',
-    )
-    expect(cardCss).toContain('order: 2;')
-    expect(cardCss).toContain('margin-top: 12px;')
-    expect(cardCss).toContain('margin-bottom: 0;')
-
-    // The collapse control hangs off the card's mascot-facing edge, so flipping
-    // the card has to flip the control with it. Its selector also has to outrank
-    // the expanded-state rule that pins `top: auto`, whatever the source order.
-    const toggleCss = getCssBetween(
-      ".pet-window-stack[data-panel-placement='below'] .pet-activity-card .pet-panel-toggle {",
-      '}',
-    )
-    expect(toggleCss).toContain('top: -31px;')
-    expect(toggleCss).toContain('bottom: auto;')
-  })
-
   it('binds the dark variant to the app theme attribute, not the operating system', () => {
     // The app ships six themes toggled via `<html data-theme>`. Tailwind's
     // stock `dark:` compiles to `prefers-color-scheme`, which fires on the OS

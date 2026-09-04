@@ -22,13 +22,6 @@ export type DesktopHostCapabilities = Record<DesktopHostCapability, boolean>
 
 export type DesktopHostUnlisten = () => void
 
-export type DesktopPetInteractiveRegion = {
-  x: number
-  y: number
-  width: number
-  height: number
-}
-
 export type DialogFileFilter = {
   name: string
   extensions: string[]
@@ -227,94 +220,6 @@ export type PreviewPickerMessage = {
 
 export type PreviewHostMessage = PreviewCaptureMessage | PreviewPickerMessage
 
-type DesktopPetBase = {
-  id: string
-  displayName: string
-  description: string
-  mimeType: 'image/png' | 'image/webp'
-  dataUrl: string
-}
-
-export type DesktopAtlasPet = DesktopPetBase & {
-  spriteVersionNumber: 2
-  spritesheetPath: string
-}
-
-export type DesktopImagePet = DesktopPetBase & {
-  manifestVersion: 1
-  spriteVersionNumber: 1
-  imagePath: string
-  motionProfile: 'soft-spring-v1'
-}
-
-export type DesktopPet = DesktopAtlasPet | DesktopImagePet
-
-export type DesktopPetLoadError = {
-  entry?: string
-  code: string
-  message: string
-}
-
-export type DesktopPetListResult = {
-  pets: DesktopPet[]
-  errors: DesktopPetLoadError[]
-}
-
-export type DesktopPetCreateInput = {
-  slug: string
-  displayName: string
-  description: string
-  dialogTitle?: string
-  dialogFilterName?: string
-}
-
-export type DesktopPetCreateResult =
-  | { id: string }
-  | { errorCode: string }
-
-export type DesktopPetSheetPickInput = {
-  dialogTitle?: string
-  dialogFilterName?: string
-}
-
-/** Decoded pixels of a user-picked action sheet, ready to be normalized on a canvas. */
-export type DesktopPetSourceSheet = {
-  bytes: Uint8Array
-  mimeType: 'image/png' | 'image/webp'
-  width: number
-  height: number
-}
-
-export type DesktopPetSheetPickResult =
-  | DesktopPetSourceSheet
-  | { errorCode: string }
-
-export type DesktopPetCreateFromAtlasBytesInput = {
-  slug: string
-  displayName: string
-  description: string
-  atlasData: Uint8Array
-  mimeType: 'image/png' | 'image/webp'
-}
-
-export type DesktopPetWindowDrag = {
-  phase: 'start' | 'move' | 'end'
-  x: number
-  y: number
-}
-
-/**
- * Which side of the mascot the host wants the activity panel drawn on.
- *
- * The mascot is clamped to the display edge through the window's transparent
- * padding, so at the top of the screen the panel that shares that padding ends
- * up behind the menu bar. Only the host knows the window position and the work
- * area, so it decides and the renderer follows.
- */
-export type DesktopPetPanelPlacement = {
-  vertical: 'above' | 'below'
-}
-
 export type AppModeConfig = SettingsAppModeConfig
 
 export type AppModeSetInput = {
@@ -359,31 +264,6 @@ export type DesktopHost = {
   }
   trace?: {
     openWindow(sessionId: string): Promise<void>
-  }
-  pets: {
-    list(): Promise<DesktopPetListResult>
-    createFromImage(input: DesktopPetCreateInput): Promise<DesktopPetCreateResult | null>
-    createFromAtlas(input: DesktopPetCreateInput): Promise<DesktopPetCreateResult | null>
-    pickSourceSheet(input: DesktopPetSheetPickInput): Promise<DesktopPetSheetPickResult | null>
-    createFromAtlasBytes(
-      input: DesktopPetCreateFromAtlasBytesInput,
-    ): Promise<DesktopPetCreateResult | null>
-    openFolder(): Promise<void>
-    show(): Promise<void>
-    hide(): Promise<void>
-    showContextMenu(closeLabel: string): Promise<boolean>
-    dragWindow(payload: DesktopPetWindowDrag): Promise<DesktopPetPanelPlacement>
-    setIgnoreMouseEvents(ignore: boolean): Promise<void>
-    setInteractiveRegions(
-      regions: DesktopPetInteractiveRegion[],
-    ): Promise<DesktopPetPanelPlacement>
-    focusMainWindow(): Promise<void>
-    focusSession(sessionId: string): Promise<void>
-    onNavigateSession(handler: (sessionId: string) => void): Promise<DesktopHostUnlisten>
-    onVisibilityChanged(handler: (visible: boolean) => void): Promise<DesktopHostUnlisten>
-    onPanelPlacementChanged(
-      handler: (placement: DesktopPetPanelPlacement) => void,
-    ): Promise<DesktopHostUnlisten>
   }
   dialogs: {
     open(options?: DialogOpenOptions): Promise<string | string[] | null>

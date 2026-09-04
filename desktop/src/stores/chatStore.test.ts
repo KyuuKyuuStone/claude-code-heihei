@@ -2593,18 +2593,6 @@ describe('chatStore history mapping', () => {
     })
   })
 
-  it('connects a scoped pet client without fetching transcript, commands, or tasks', () => {
-    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
-      prewarm: false,
-      applyRuntimeSelection: false,
-      minimalBootstrap: true,
-    })
-
-    expect(fetchSessionTasksMock).not.toHaveBeenCalled()
-    expect(sessionsApi.getMessages).not.toHaveBeenCalled()
-    expect(sessionsApi.getSlashCommands).not.toHaveBeenCalled()
-  })
-
   it('blocks sends across reconnects until a fresh authoritative snapshot arrives', () => {
     useChatStore.getState().connectToSession(TEST_SESSION_ID, {
       prewarm: false,

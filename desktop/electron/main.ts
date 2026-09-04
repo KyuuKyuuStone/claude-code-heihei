@@ -1,10 +1,9 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, screen, session, WebContentsView } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, Notification, screen, session, WebContentsView } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
 import { ELECTRON_EVENT_CHANNELS, ELECTRON_INTERNAL_CHANNELS, ELECTRON_IPC_CHANNELS, type ElectronIpcChannel } from './ipc/channels'
 import {
   isElectronIpcChannel,
-  isElectronIpcChannelAllowedForPetWindow,
   validateElectronIpcPayload,
 } from './ipc/capabilities'
 import { ElectronServerRuntime } from './services/serverRuntime'
@@ -56,26 +55,10 @@ import { installRendererLifecycle } from './services/rendererLifecycle'
 import { writeWindowSmokeSnapshot } from './services/windowSmoke'
 import { loadAndRevealMainWindow } from './services/windowStartup'
 import {
-  PetWindowController,
-  readPetWindowPosition,
-  writePetWindowPosition,
-  type PetWindowDragPayload,
-} from './services/petWindow'
-import {
   readLocalePreference,
   writeLocalePreference,
 } from './services/localePreference'
 import type { Locale } from '../src/i18n/locale'
-import {
-  createCustomPetCatalogLoader,
-  createCustomPetFromAtlas,
-  createCustomPetFromAtlasBytes,
-  createCustomPetFromImage,
-  ensureCustomPetsRoot,
-  getPetPackageErrorCode,
-  loadCustomPets,
-  readCustomPetSourceImage,
-} from './services/pets'
 import {
   installWindowLifecycle,
   readWindowState,
@@ -95,7 +78,6 @@ let updaterService: ElectronUpdaterService | null = null
 let terminalService: ElectronTerminalService | null = null
 let localModelService: LocalModelService | null = null
 let previewService: ElectronPreviewService | null = null
-let petWindowController: PetWindowController | null = null
 const traceWindows = new Map<string, BrowserWindow>()
 let isQuitting = false
 let trayController: TrayController | null = null
@@ -120,10 +102,6 @@ function preloadPath() {
 
 function previewPreloadPath() {
   return path.join(appRoot(), 'electron-dist', 'preview-preload.cjs')
-}
-
-function petPreloadPath() {
-  return path.join(appRoot(), 'electron-dist', 'pet-preload.cjs')
 }
 
 function previewAgentPath() {
@@ -241,14 +219,6 @@ function getServerRuntime() {
   return serverRuntime
 }
 
-function resolvePetServerAccess(): PreviewLocalAccess | null {
-  const runtime = getServerRuntime()
-  const serverUrl = runtime.getActiveServerUrl()
-  return serverUrl
-    ? { serverUrl, token: runtime.getPetAccessToken() }
-    : null
-}
-
 function resolveMainRendererServerAccess(): PreviewLocalAccess | null {
   const runtime = getServerRuntime()
   const serverUrl = runtime.getActiveServerUrl()
@@ -326,49 +296,6 @@ function getPreviewService() {
   return previewService
 }
 
-function getPetWindowController() {
-  petWindowController ??= new PetWindowController({
-    createWindow: options => new BrowserWindow(options),
-    getCursorScreenPoint: () => screen.getCursorScreenPoint(),
-    getCurrentWorkArea: () => screen.getDisplayNearestPoint(
-      screen.getCursorScreenPoint(),
-    ).workArea,
-    getWorkAreaForPoint: point => screen.getDisplayNearestPoint(point).workArea,
-    preloadPath: petPreloadPath(),
-    platform: process.platform,
-    readPosition: () => readPetWindowPosition(process.env, app.getPath('home')),
-    writePosition: position => writePetWindowPosition(position, process.env, app.getPath('home')),
-    onCreated: (window) => {
-      configurePreviewSessionPermissions(window.webContents.session)
-      configureLocalServerRequestAuth(
-        window.webContents.session.webRequest,
-        resolvePetServerAccess,
-      )
-      installMainWindowNavigationGuards(window.webContents, { openExternal: openExternalUrl })
-    },
-    load: window => loadRendererEntry(window, { petWindow: '1' }),
-    onPanelPlacementChanged: (window, placement) => {
-      if (window.isDestroyed()) return
-      window.webContents.send(ELECTRON_EVENT_CHANNELS.petPanelPlacementChanged, placement)
-    },
-  })
-  return petWindowController
-}
-
-const loadCustomPetCatalog = createCustomPetCatalogLoader(() => loadCustomPets({
-    inspectImageSize: ({ data }) => nativeImage.createFromBuffer(data).getSize(),
-  }))
-
-async function listCustomPets() {
-  const { pets, errors } = await loadCustomPetCatalog()
-  return { pets, errors }
-}
-
-function focusPetSession(sessionId: string) {
-  showMainWindow(mainWindow, app)
-  mainWindow?.webContents.send(ELECTRON_EVENT_CHANNELS.petNavigateSession, sessionId)
-}
-
 function currentWindow(event: Electron.IpcMainInvokeEvent) {
   const window = BrowserWindow.fromWebContents(event.sender)
   if (!window) throw new Error('No BrowserWindow for Electron IPC event')
@@ -382,13 +309,6 @@ function registerHandler<T>(
   ipcMain.handle(channel, async (event, payload) => {
     if (!isElectronIpcChannel(channel) || !validateElectronIpcPayload(channel, payload)) {
       throw new Error(`Invalid Electron IPC payload for ${channel}`)
-    }
-    const senderWindow = BrowserWindow.fromWebContents(event.sender)
-    if (
-      petWindowController?.owns(senderWindow) &&
-      !isElectronIpcChannelAllowedForPetWindow(channel)
-    ) {
-      throw new Error(`Electron IPC channel ${channel} is not available to the pet window`)
     }
     return handler(event, payload)
   })
@@ -462,159 +382,12 @@ function registerIpcHandlers() {
     ELECTRON_IPC_CHANNELS.runtimeGetLocalAccessToken,
     () => getServerRuntime().getLocalAccessToken(),
   )
-  registerHandler(
-    ELECTRON_IPC_CHANNELS.runtimeGetPetAccessToken,
-    () => getServerRuntime().getPetAccessToken(),
-  )
   registerHandler(ELECTRON_IPC_CHANNELS.commandInvoke, (_event, payload) => handleCommandInvoke(payload))
   registerHandler(ELECTRON_IPC_CHANNELS.clipboardReadText, () => clipboard.readText())
   registerHandler(ELECTRON_IPC_CHANNELS.clipboardWriteText, (_event, payload) => clipboard.writeText(String(payload)))
   registerHandler(ELECTRON_IPC_CHANNELS.shellOpen, (_event, payload) => openExternalUrl(String(payload)))
   registerHandler(ELECTRON_IPC_CHANNELS.shellOpenPath, (_event, payload) => openSystemPath(String(payload)))
   registerHandler(ELECTRON_IPC_CHANNELS.traceOpenWindow, (_event, payload) => openTraceWindow(String(payload)))
-  registerHandler(ELECTRON_IPC_CHANNELS.petsList, () => listCustomPets())
-  registerHandler(ELECTRON_IPC_CHANNELS.petsCreateFromImage, async (event, payload) => {
-    const input = payload as {
-      slug: string
-      displayName: string
-      description: string
-      dialogTitle?: string
-      dialogFilterName?: string
-    }
-    const imagePath = await openDialog(currentWindow(event), {
-      title: input.dialogTitle || 'Choose a transparent pet image',
-      filters: [{ name: input.dialogFilterName || 'Pet image', extensions: ['png', 'webp'] }],
-    })
-    if (typeof imagePath !== 'string') return null
-    try {
-      const pet = await loadCustomPetCatalog.invalidateAfter(() =>
-        createCustomPetFromImage({
-          slug: input.slug,
-          displayName: input.displayName,
-          description: input.description,
-          imagePath,
-        }, {
-          inspectImageSize: ({ data }) => nativeImage.createFromBuffer(data).getSize(),
-        }))
-      return { id: pet.id }
-    } catch (error) {
-      return { errorCode: getPetPackageErrorCode(error) }
-    }
-  })
-  registerHandler(ELECTRON_IPC_CHANNELS.petsCreateFromAtlas, async (event, payload) => {
-    const input = payload as {
-      slug: string
-      displayName: string
-      description: string
-      dialogTitle?: string
-      dialogFilterName?: string
-    }
-    const atlasPath = await openDialog(currentWindow(event), {
-      title: input.dialogTitle || 'Choose a v2 pet animation atlas',
-      filters: [{ name: input.dialogFilterName || 'Pet animation atlas', extensions: ['png', 'webp'] }],
-    })
-    if (typeof atlasPath !== 'string') return null
-    try {
-      const pet = await loadCustomPetCatalog.invalidateAfter(() =>
-        createCustomPetFromAtlas({
-          slug: input.slug,
-          displayName: input.displayName,
-          description: input.description,
-          atlasPath,
-        }, {
-          inspectImageSize: ({ data }) => nativeImage.createFromBuffer(data).getSize(),
-        }))
-      return { id: pet.id }
-    } catch (error) {
-      return { errorCode: getPetPackageErrorCode(error) }
-    }
-  })
-  registerHandler(ELECTRON_IPC_CHANNELS.petsPickSourceSheet, async (event, payload) => {
-    const input = payload as { dialogTitle?: string, dialogFilterName?: string }
-    const imagePath = await openDialog(currentWindow(event), {
-      title: input.dialogTitle || 'Choose a pet action sheet',
-      filters: [{ name: input.dialogFilterName || 'Pet action sheet', extensions: ['png', 'webp'] }],
-    })
-    if (typeof imagePath !== 'string') return null
-    try {
-      const source = await readCustomPetSourceImage(imagePath)
-      // The renderer needs the pixels to assemble the atlas on a canvas; the path
-      // itself is deliberately never handed over.
-      return {
-        bytes: source.data,
-        mimeType: source.mimeType,
-        width: source.width,
-        height: source.height,
-      }
-    } catch (error) {
-      return { errorCode: getPetPackageErrorCode(error) }
-    }
-  })
-  registerHandler(ELECTRON_IPC_CHANNELS.petsCreateFromAtlasBytes, async (_event, payload) => {
-    const input = payload as {
-      slug: string
-      displayName: string
-      description: string
-      atlasData: Uint8Array
-      mimeType: 'image/png' | 'image/webp'
-    }
-    try {
-      const pet = await loadCustomPetCatalog.invalidateAfter(() =>
-        createCustomPetFromAtlasBytes({
-          slug: input.slug,
-          displayName: input.displayName,
-          description: input.description,
-          atlasData: input.atlasData,
-          mimeType: input.mimeType,
-        }, {
-          inspectImageSize: ({ data }) => nativeImage.createFromBuffer(data).getSize(),
-        }))
-      return { id: pet.id }
-    } catch (error) {
-      return { errorCode: getPetPackageErrorCode(error) }
-    }
-  })
-  registerHandler(ELECTRON_IPC_CHANNELS.petsOpenFolder, async () => {
-    const root = await ensureCustomPetsRoot()
-    await openSystemPath(root)
-  })
-  registerHandler(ELECTRON_IPC_CHANNELS.petsShow, async () => {
-    await getPetWindowController().show()
-    mainWindow?.webContents.send(ELECTRON_EVENT_CHANNELS.petVisibilityChanged, true)
-  })
-  registerHandler(ELECTRON_IPC_CHANNELS.petsHide, () => {
-    getPetWindowController().hide()
-    mainWindow?.webContents.send(ELECTRON_EVENT_CHANNELS.petVisibilityChanged, false)
-  })
-  registerHandler(ELECTRON_IPC_CHANNELS.petsShowContextMenu, (event, payload) => {
-    const { closeLabel } = payload as { closeLabel: string }
-    return getPetWindowController().showContextMenu(
-      currentWindow(event),
-      closeLabel.trim(),
-      Menu,
-    )
-  })
-  registerHandler(ELECTRON_IPC_CHANNELS.petsDragWindow, (event, payload) =>
-    getPetWindowController().dragWindow(
-      currentWindow(event),
-      payload as PetWindowDragPayload,
-    ))
-  registerHandler(ELECTRON_IPC_CHANNELS.petsSetIgnoreMouseEvents, (event, payload) => {
-    getPetWindowController().setIgnoreMouseEvents(currentWindow(event), Boolean(payload))
-  })
-  registerHandler(ELECTRON_IPC_CHANNELS.petsSetInteractiveRegions, (event, payload) =>
-    getPetWindowController().setInteractiveRegions(
-      currentWindow(event),
-      payload as Electron.Rectangle[],
-    ))
-  registerHandler(ELECTRON_IPC_CHANNELS.petsFocusMainWindow, (event) => {
-    if (!getPetWindowController().owns(currentWindow(event))) {
-      throw new Error('Pet window IPC sender does not own the companion window')
-    }
-    showMainWindow(mainWindow, app)
-  })
-  registerHandler(ELECTRON_IPC_CHANNELS.petsFocusSession, (_event, payload) =>
-    focusPetSession(String(payload)))
   registerHandler(ELECTRON_IPC_CHANNELS.dialogOpen, (event, payload) =>
     openDialog(currentWindow(event), payload as Parameters<typeof openDialog>[1]))
   registerHandler(ELECTRON_IPC_CHANNELS.dialogSave, (event, payload) =>
@@ -710,7 +483,6 @@ function registerIpcHandlers() {
     lastAppliedAppearance = payload
     applyAppliedAppearance(payload, {
       app,
-      // The pet window is deliberately transparent, so it stays out of this.
       windows: () => [mainWindow, ...traceWindows.values()].filter((window): window is BrowserWindow => !!window),
     })
   })
@@ -862,8 +634,6 @@ app.on('before-quit', () => {
   trayController = null
   terminalService?.killAll()
   previewService?.close()
-  petWindowController?.dispose()
-  petWindowController = null
   // Synchronous on quit so the Windows taskkill completes before the process
   // exits, otherwise the fire-and-forget kill can leave orphaned sidecars.
   getServerRuntime().stopAll(true)

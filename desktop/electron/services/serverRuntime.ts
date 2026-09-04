@@ -107,7 +107,6 @@ export class ElectronServerRuntime {
   private readonly deps: ServerRuntimeDeps
   private readonly resolveSystemProxy?: (url: string) => Promise<string>
   private readonly localAccessToken = randomBytes(32).toString('base64url')
-  private readonly petAccessToken = randomBytes(32).toString('base64url')
   private sidecarEnvPromise: Promise<NodeJS.ProcessEnv> | null = null
   private systemProxyBridge: SystemProxyBridgeLike | null = null
   private server: ActiveServer | null = null
@@ -152,10 +151,6 @@ export class ElectronServerRuntime {
 
   getLocalAccessToken(): string {
     return this.localAccessToken
-  }
-
-  getPetAccessToken(): string {
-    return this.petAccessToken
   }
 
   getActiveServerUrl(): string | null {
@@ -211,7 +206,7 @@ export class ElectronServerRuntime {
     const url = `http://${SERVER_CONTROL_HOST}:${port}`
     const logs: string[] = []
     let startState: ServerStartState | null = null
-    const env = this.withServerAccessTokens(await this.resolveSidecarBaseEnv())
+    const env = this.withLocalAccessToken(await this.resolveSidecarBaseEnv())
     this.assertCurrentGeneration(generation)
     const plan = createServerPlan({
       desktopRoot: this.desktopRoot,
@@ -334,13 +329,6 @@ export class ElectronServerRuntime {
     return {
       ...env,
       CC_HEIHEI_LOCAL_ACCESS_TOKEN: this.localAccessToken,
-    }
-  }
-
-  private withServerAccessTokens(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-    return {
-      ...this.withLocalAccessToken(env),
-      CC_HEIHEI_PET_ACCESS_TOKEN: this.petAccessToken,
     }
   }
 

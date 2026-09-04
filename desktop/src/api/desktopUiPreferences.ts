@@ -15,21 +15,10 @@ export type DesktopProfilePreferences = {
   avatarUpdatedAt: string | null
 }
 
-export type DesktopPetPreferences = {
-  enabled: boolean
-  selectedPetId: string
-  size: number
-  showTaskPanel: boolean
-  collapsed: boolean
-  motionEnabled: boolean
-  lastSessionId: string | null
-}
-
 export type DesktopUiPreferences = {
   schemaVersion: number
   sidebar: SidebarProjectPreferences
   profile: DesktopProfilePreferences
-  pet: DesktopPetPreferences
 }
 
 export type DesktopUiPreferencesResponse = {
@@ -37,22 +26,9 @@ export type DesktopUiPreferencesResponse = {
   exists: boolean
 }
 
-export type DesktopPetPreferencesResponse = {
-  exists: boolean
-  pet: DesktopPetPreferences
-}
-
-export type DesktopPetPreferencesUpdateResponse =
-  | { ok: true; preferences: DesktopUiPreferences }
-  | { ok: true; pet: DesktopPetPreferences }
-
 export const desktopUiPreferencesApi = {
   getPreferences() {
     return api.get<DesktopUiPreferencesResponse>('/api/desktop-ui/preferences')
-  },
-
-  getPetPreferences() {
-    return api.get<DesktopPetPreferencesResponse>('/api/desktop-ui/preferences/pet')
   },
 
   updateSidebarPreferences(sidebar: SidebarProjectPreferences) {
@@ -66,13 +42,6 @@ export const desktopUiPreferencesApi = {
     return api.put<{ ok: true; preferences: DesktopUiPreferences }>(
       '/api/desktop-ui/preferences/profile',
       profile,
-    )
-  },
-
-  updatePetPreferences(pet: Partial<DesktopPetPreferences>) {
-    return api.put<DesktopPetPreferencesUpdateResponse>(
-      '/api/desktop-ui/preferences/pet',
-      pet,
     )
   },
 

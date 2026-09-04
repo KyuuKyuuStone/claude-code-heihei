@@ -82,10 +82,6 @@ describe('css custom property usage', () => {
     const offenders: string[] = []
 
     for (const file of sourceFiles) {
-      // The pet window is an OS-level always-on-top surface with its own
-      // stacking context; it is not part of the in-app overlay scale.
-      if (file.includes('/features/pets/')) continue
-
       const lines = readFileSync(file, 'utf8').split('\n')
       lines.forEach((line, index) => {
         // `zIndex: 9999` and friends in inline styles.

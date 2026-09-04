@@ -297,7 +297,7 @@ describe('uiStore following the system appearance', () => {
   })
 
   it('does not revive the switch from a window whose store went stale', async () => {
-    // The pet window is long-lived and runs the same bootstrap with its own
+    // The trace window is long-lived and runs the same bootstrap with its own
     // store over the shared localStorage. When the main window turns the
     // switch off, this window's in-memory copy still says "on" — acting on it
     // would write the user's choice straight back out.

@@ -39,11 +39,6 @@
     <link rel="icon" href="/app-icon.png" type="image/png" />
     <!-- Fonts are self-hosted in /fonts/ and declared via @font-face in globals.css -->
     <script>
-      if (new URLSearchParams(window.location.search).get('petWindow') === '1') {
-        document.documentElement.dataset.windowKind = 'pet'
-      }
-    </script>
-    <script>
       /*
         Resolve the theme synchronously, before any stylesheet is parsed.
         The app bundle loads as a module and only reaches initializeTheme()
@@ -131,9 +126,6 @@
       html[data-theme="celadon"] { background: #F5F8F5; }
       html[data-theme="dark"] { background: #201D17; }
       html[data-theme="ink-blue"] { background: #1A1D24; }
-      html[data-window-kind="pet"],
-      html[data-window-kind="pet"] body,
-      html[data-window-kind="pet"] #root { background: transparent !important; }
       html, body, #root { min-height: 100%; margin: 0; }
     </style>
     <script>

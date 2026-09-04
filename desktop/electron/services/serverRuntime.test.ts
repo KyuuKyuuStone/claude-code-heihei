@@ -137,23 +137,18 @@ describe('ElectronServerRuntime', () => {
       .not.toBe(path.join(homedir(), '.claude'))
   })
 
-  it('keeps the pet capability independent and exposes it only to the server sidecar', async () => {
+  it('keeps the desktop access token out of the adapter sidecars', async () => {
     const runtime = createRuntime()
 
     await runtime.startServer()
 
     const localToken = runtime.getLocalAccessToken()
-    const petToken = runtime.getPetAccessToken()
     expect(localToken.length).toBeGreaterThanOrEqual(32)
-    expect(petToken.length).toBeGreaterThanOrEqual(32)
-    expect(petToken).not.toBe(localToken)
     expect(sidecarMocks.serverPlans[0]!.env.CC_HEIHEI_LOCAL_ACCESS_TOKEN).toBe(localToken)
-    expect(sidecarMocks.serverPlans[0]!.env.CC_HEIHEI_PET_ACCESS_TOKEN).toBe(petToken)
     for (const adapter of sidecarMocks.spawnSidecar.mock.calls
       .map(([plan]) => plan)
       .filter(plan => plan.args[0] === 'adapters')) {
       expect(adapter.env.CC_HEIHEI_LOCAL_ACCESS_TOKEN).toBe(localToken)
-      expect(adapter.env.CC_HEIHEI_PET_ACCESS_TOKEN).toBeUndefined()
     }
   })
 

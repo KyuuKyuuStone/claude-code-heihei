@@ -14,7 +14,7 @@ const desktopRoot = existsSync(path.resolve(process.cwd(), 'electron', 'main.ts'
 const mainSource = readFileSync(path.join(desktopRoot, 'electron', 'main.ts'), 'utf8')
 const previewServiceSource = mainSource.slice(
   mainSource.indexOf('function getPreviewService()'),
-  mainSource.indexOf('function getPetWindowController()'),
+  mainSource.indexOf('function currentWindow('),
 )
 const mainWindowSource = mainSource.slice(
   mainSource.indexOf('async function createMainWindow()'),
@@ -22,14 +22,6 @@ const mainWindowSource = mainSource.slice(
 )
 
 describe('Electron preview security boundary', () => {
-  it('does not give the pet preload the desktop master access token', () => {
-    const petPreloadSource = readFileSync(path.join(desktopRoot, 'electron', 'pet-preload.ts'), 'utf8')
-
-    expect(petPreloadSource).toContain('runtimeGetPetAccessToken')
-    expect(petPreloadSource).not.toContain('runtimeGetLocalAccessToken')
-    expect(mainSource).toContain('resolvePetServerAccess')
-  })
-
   it('uses a fresh in-memory session partition for every remote preview', () => {
     const firstPartition = createPreviewSessionPartition()
     const secondPartition = createPreviewSessionPartition()

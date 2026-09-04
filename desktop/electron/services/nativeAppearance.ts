@@ -59,7 +59,7 @@ type StoredAppearance = AppliedAppearance
 
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
 
-// Matches windows.ts / petWindow.ts, the other two writers into ~/.claude: on a
+// Matches windows.ts, the other writer into ~/.claude: on a
 // read-only or full disk this is written on every theme change, and an
 // undeduplicated error would repeat forever.
 const failedAppearanceWritePaths = new Set<string>()

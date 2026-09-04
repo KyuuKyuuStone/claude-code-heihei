@@ -129,7 +129,7 @@ const THEME_KEYS: readonly string[] = [
 /**
  * Subscribe to appearance changes made by *another* window.
  *
- * The pet window, the trace windows and the main window each run the renderer
+ * The trace windows and the main window each run the renderer
  * bootstrap with their own store instance over one shared localStorage. The
  * `storage` event only fires in the windows that did not perform the write,
  * which is exactly the set that needs to catch up.

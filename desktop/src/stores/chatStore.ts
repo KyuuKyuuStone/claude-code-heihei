@@ -272,7 +272,6 @@ type ChatStore = {
     options?: {
       prewarm?: boolean
       applyRuntimeSelection?: boolean
-      minimalBootstrap?: boolean
     },
   ) => void
   disconnectSession: (sessionId: string) => void
@@ -1140,16 +1139,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   getSession: (sessionId) => get().sessions[sessionId] ?? createDefaultSessionState(),
 
   connectToSession: (sessionId, options) => {
-    if (!options?.minimalBootstrap) {
-      void useCLITaskStore.getState().fetchSessionTasks(sessionId)
-    }
+    void useCLITaskStore.getState().fetchSessionTasks(sessionId)
 
     const existing = get().sessions[sessionId]
     if (existing && existing.connectionState !== 'disconnected') {
       if (
         existing.messages.length === 0 &&
-        (existing.historyStatus === 'idle' || existing.historyStatus === 'error') &&
-        !options?.minimalBootstrap
+        (existing.historyStatus === 'idle' || existing.historyStatus === 'error')
       ) {
         void get().loadHistory(sessionId)
       }
@@ -1205,20 +1201,18 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       wsManager.send(sessionId, { type: 'prewarm_session' })
     }
 
-    if (!options?.minimalBootstrap) {
-      get().loadHistory(sessionId)
-      sessionsApi.getSlashCommands(sessionId)
-        .then(({ commands }) => {
-          if (get().sessions[sessionId]) {
-            set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({ slashCommands: commands })) }))
-          }
-        })
-        .catch(() => {
-          if (get().sessions[sessionId]) {
-            set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({ slashCommands: [] })) }))
-          }
-        })
-    }
+    get().loadHistory(sessionId)
+    sessionsApi.getSlashCommands(sessionId)
+      .then(({ commands }) => {
+        if (get().sessions[sessionId]) {
+          set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({ slashCommands: commands })) }))
+        }
+      })
+      .catch(() => {
+        if (get().sessions[sessionId]) {
+          set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({ slashCommands: [] })) }))
+        }
+      })
   },
 
   disconnectSession: (sessionId) => {

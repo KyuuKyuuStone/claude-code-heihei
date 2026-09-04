@@ -173,7 +173,7 @@ export function initializeTheme() {
   stopSystemAppearanceWatch?.()
   stopSystemAppearanceWatch = subscribeSystemAppearance((appearance) => {
     // Read the preference from storage rather than this window's store. The
-    // pet and trace windows run the same bootstrap with their own store
+    // trace windows run the same bootstrap with their own store
     // instance over one shared localStorage, so after the main window changes
     // the setting their in-memory copy is stale — and acting on it here would
     // write the user's choice straight back out.
