@@ -188,17 +188,10 @@ const localModelBenchmark: Validator = value =>
   && typeof value.modelPath === 'string'
   && value.modelPath.length > 0
   && value.modelPath.length <= 4096
-  && typeof value.targetSpeed === 'number'
-  && Number.isFinite(value.targetSpeed)
-  && value.targetSpeed > 0
-  && value.targetSpeed <= 10000
   && typeof value.ctxSize === 'number'
   && Number.isInteger(value.ctxSize)
   && value.ctxSize >= 1024
   && value.ctxSize <= 1_000_000
-  && typeof value.usage === 'number'
-  && value.usage > 0
-  && value.usage <= 1
   && typeof value.threads === 'number'
 
 const boundsPayload: Validator = value =>
