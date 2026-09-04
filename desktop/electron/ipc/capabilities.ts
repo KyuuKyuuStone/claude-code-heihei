@@ -163,7 +163,7 @@ const localModelStart: Validator = value =>
   && !value.modelPath.includes('\0')
   && typeof value.ctxSize === 'number'
   && Number.isInteger(value.ctxSize)
-  && value.ctxSize >= 16000
+  && value.ctxSize >= 8192
   && value.ctxSize <= 1_000_000
   && typeof value.threads === 'number'
   && Number.isInteger(value.threads)
