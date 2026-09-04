@@ -58,10 +58,10 @@ export const Model1mSupportSchema = z.object({
   opus: z.boolean(),
 })
 
-export const AutoCompactWindowSchema = z.number().int().min(16000).max(10000000)
+export const AutoCompactWindowSchema = z.number().int().min(8192).max(10000000)
 export const ModelContextWindowsSchema = z.record(
   z.string().min(1),
-  z.number().int().min(16000).max(10000000),
+  z.number().int().min(8192).max(10000000),
 )
 export const ToolSearchEnabledSchema = z.boolean()
 export const DisableExperimentalBetasSchema = z.boolean()

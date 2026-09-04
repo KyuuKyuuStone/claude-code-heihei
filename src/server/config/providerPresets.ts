@@ -46,7 +46,7 @@ const ProviderPresetSchema = z.object({
   defaultEnv: z.record(z.string(), z.string()).optional(),
   modelContextWindows: z.record(
     z.string().min(1),
-    z.number().int().min(16000).max(10000000),
+    z.number().int().min(8192).max(10000000),
   ).optional(),
 })
 
