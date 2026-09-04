@@ -883,6 +883,12 @@ export function LocalModelSettings() {
                   : '——装不下，会溢出到内存明显变慢。建议选更小的上下文。'}
               </div>
             )}
+            {benchmarkOutput.contextTooSmall && (
+              <div className="mb-3 rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[var(--color-surface-container-low)] px-4 py-3 text-[12.5px] leading-5" role="alert">
+                <span className="font-semibold">上下文 {benchmarkCtxSize >= 1048576 ? '1M' : `${Math.round(benchmarkCtxSize / 1024)}K`} 太小</span>
+                ——Claude Code 的系统提示词 + 工具定义就要 ~30K tokens。这个上下文装不下，模型启动成功但真实请求会被拒。建议选至少 32K。
+              </div>
+            )}
             <p className="mb-3 text-[11px] text-[var(--color-text-tertiary)]">
               生成速度在 8K 上下文下实测（大上下文只影响 KV 缓存装不装得下，速度差异不大；跑大上下文速度测试会把缓存填满卡死）。
             </p>

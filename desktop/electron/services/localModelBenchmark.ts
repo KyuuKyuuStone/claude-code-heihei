@@ -52,6 +52,8 @@ export type BenchmarkRunResult = {
     /** 能不能装下 */
     fits: boolean
   }
+  /** 上下文太小装不下 Claude Code 的系统提示词（真实负载）时给出警告 */
+  contextTooSmall: boolean
   /** 硬件提示（非致命）：如 GPU 不可用已自动降级到 CPU */
   note: string | null
   error: string | null
@@ -305,6 +307,7 @@ export async function runBenchmark(
     steps: [],
     recommendedStep: null,
     contextFit: { kvBytesPerToken: null, kvCacheGB: null, availableVramGB: 0, fits: true },
+    contextTooSmall: false,
     note: null,
     error: null,
   }
@@ -340,6 +343,11 @@ export async function runBenchmark(
     availableVramGB,
     fits: kvCacheGB !== null ? kvCacheGB <= availableVramGB * 0.9 : true, // 留 10% 余量
   }
+
+  // Claude Code 的系统提示词 + 工具定义 + Skills 就要 ~30K tokens。
+  // 上下文小于这个值，模型启动成功但真实请求会被拒（29975 tokens 的请求在 8K 里放不下）。
+  const MIN_USABLE_CONTEXT = 32768
+  const contextTooSmall = input.ctxSize < MIN_USABLE_CONTEXT
 
   // 速度测试用小深度，够测出真实的 token 生成速度，又不会把弱硬件卡死。
   // 上下文可行性不依赖这里——它用上面的内存账算。
@@ -415,6 +423,7 @@ export async function runBenchmark(
         steps: results,
         recommendedStep: null,
         contextFit,
+        contextTooSmall,
         note: gpuNote,
         error: run.error,
       }
@@ -447,6 +456,7 @@ export async function runBenchmark(
     steps: results,
     recommendedStep,
     contextFit,
+    contextTooSmall,
     note: gpuNote,
     error: maxTg === 0 ? '跑分没有产出结果，请检查模型文件是否有效' : null,
   }
