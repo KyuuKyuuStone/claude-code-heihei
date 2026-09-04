@@ -52,6 +52,8 @@ export type BenchmarkRunResult = {
     /** 能不能装下 */
     fits: boolean
   }
+  /** 硬件提示（非致命）：如 GPU 不可用已自动降级到 CPU */
+  note: string | null
   error: string | null
 }
 
@@ -63,10 +65,12 @@ export type BenchmarkProgress = {
 
 export type BenchmarkProgressHandler = (progress: BenchmarkProgress) => void
 
-const BENCH_PROMPT_TOKENS = 512
-const BENCH_GEN_TOKENS = 128
-const BENCH_REPS = 2
-const BENCH_TIMEOUT_MS = 120_000
+const BENCH_PROMPT_TOKENS = 128
+const BENCH_GEN_TOKENS = 64
+const BENCH_REPS = 1
+const BENCH_TIMEOUT_MS = 90_000
+/** 探测 GPU 能不能真跑——用最小工作量，快 */
+const PROBE_TIMEOUT_MS = 30_000
 
 export function resolveLlamaBenchExecutable(desktopRoot: string): string {
   return path.join(desktopRoot, 'src-tauri', 'binaries', 'llama-server-vulkan', 'llama-bench.exe')
@@ -202,6 +206,7 @@ function runBenchOnce(
   ngl: string,
   threads: number,
   ctxSize: number,
+  timeoutMs: number = BENCH_TIMEOUT_MS,
 ): Promise<BenchParse> {
   return new Promise((resolve) => {
     const args = [
@@ -243,7 +248,7 @@ function runBenchOnce(
       stderr += chunk.toString('utf8')
     })
 
-    const timeout = setTimeout(() => finish({ tg: 0, pp: 0, paramsB: null, sizeMB: null, error: '跑分超时（模型或上下文太大）' }), BENCH_TIMEOUT_MS)
+    const timeout = setTimeout(() => finish({ tg: 0, pp: 0, paramsB: null, sizeMB: null, error: '跑分超时（模型或上下文太大）' }), timeoutMs)
     child.once('close', (code) => {
       clearTimeout(timeout)
       const parsed = parseBenchOutput(stdout)
@@ -275,6 +280,16 @@ function detectGpuFromBench(benchExePath: string): boolean {
   }
 }
 
+/**
+ * 真跑一次 GPU 推理，探测这张卡能不能真扛住（不是只列出来）。
+ * GTX 750 这类无 fp16 的老卡，`--list-devices` 能列出，但真跑大深度就崩。
+ * 用实际要用的 ngl 和深度探测，返回 true = GPU 可用。
+ */
+async function probeGpuUsable(modelPath: string, benchExePath: string, ngl: string, threads: number, depth: number): Promise<boolean> {
+  const result = await runBenchOnce(modelPath, benchExePath, ngl, threads, depth, PROBE_TIMEOUT_MS)
+  return result.tg > 0 && !result.crashed
+}
+
 /* ── 主流程：按用户复合目标（速度 + 上下文 + 使用率）实测，达不到就上调使用率 ── */
 
 export async function runBenchmark(
@@ -290,6 +305,7 @@ export async function runBenchmark(
     steps: [],
     recommendedStep: null,
     contextFit: { kvBytesPerToken: null, kvCacheGB: null, availableVramGB: 0, fits: true },
+    note: null,
     error: null,
   }
   if (!existsSync(benchExePath)) {
@@ -325,15 +341,26 @@ export async function runBenchmark(
     fits: kvCacheGB !== null ? kvCacheGB <= availableVramGB * 0.9 : true, // 留 10% 余量
   }
 
-  // 速度测试用中等深度，既能测出真实的 token 生成速度，又不会在弱硬件上把 KV 缓存填满卡死。
-  // GTX 750 这类无 fp16 的老显卡，深度太大（8K）跑分进程会崩溃；1024 是稳妥值。
-  const benchDepth = 1024
+  // 速度测试用小深度，够测出真实的 token 生成速度，又不会把弱硬件卡死。
+  // 上下文可行性不依赖这里——它用上面的内存账算。
+  const benchDepth = 512
 
   // 从用户选的使用率起步，达不到目标就往上加（直到 100%）
   const usageSteps: number[] = []
   for (let u = input.usage; u <= 1.0001; u += 0.2) {
     usageSteps.push(Math.min(1, Math.round(u * 100) / 100))
   }
+
+  // 先用「用户选的使用率」对应的 GPU 层数探测一次，看这张卡能不能真跑（不是只列出来）。
+  // GTX 750 这类无 fp16 的老卡，`--list-devices` 能列出，但真跑大深度就崩——探测失败就全程用 CPU。
+  const firstUsageThreads = Math.max(1, Math.round(input.threads * input.usage))
+  const firstUsageNgl = layers && layers > 0
+    ? String(Math.max(1, Math.round(layers * input.usage)))
+    : (input.usage >= 1 ? '-1' : String(Math.max(1, Math.round(input.usage * 99))))
+  const gpuUsable = hasGpu && await probeGpuUsable(input.modelPath, benchExePath, firstUsageNgl, firstUsageThreads, benchDepth)
+  const gpuNote = hasGpu && !gpuUsable
+    ? '检测到你的显卡跑不动这个模型（GPU 推理崩溃），已自动改用纯 CPU 测速。'
+    : null
 
   const results: BenchmarkStepResult[] = []
   let pp = 0
@@ -346,7 +373,7 @@ export async function runBenchmark(
     let ngl: string
     let threads: number
     let label: string
-    if (hasGpu) {
+    if (gpuUsable) {
       threads = Math.max(1, Math.round(input.threads * usage))
       if (layers && layers > 0) {
         ngl = String(Math.max(1, Math.round(layers * usage)))
@@ -367,17 +394,14 @@ export async function runBenchmark(
     if (run.paramsB !== null) modelParamsB = run.paramsB
     if (run.sizeMB !== null) modelSizeMB = run.sizeMB
 
-    // GPU 档崩溃（进程以非零码退出且无输出）：改用纯 CPU 重测这一档，别让整个跑分卡死。
-    // GTX 750 这类无 fp16 的老显卡跑 512 token 提示 + 高 GPU 层会触发 llama.cpp 崩溃。
-    if (run.crashed && hasGpu) {
+    // GPU 档崩溃（进程以非零码退出且无输出）：改用纯 CPU 重测这一档，别让跑分卡死。
+    // GTX 750 这类无 fp16 的老显卡跑大深度 + 高 GPU 层会触发 llama.cpp 崩溃。
+    if (run.crashed && gpuUsable) {
       const cpuRun = await runBenchOnce(input.modelPath, benchExePath, '0', threads, benchDepth)
       if (cpuRun.tg > 0) {
-        // CPU 能跑——把这一档记为 CPU 实测，并提示用户 GPU 加速不可用。
+        // CPU 能跑——把这一档记为 CPU 实测。
         run.tg = cpuRun.tg
         run.pp = cpuRun.pp
-        run.error = '此显卡跑不动 GPU 加速（崩溃），已自动改用纯 CPU 测速。'
-      } else {
-        // CPU 也崩，留原错误
       }
     }
 
@@ -391,6 +415,7 @@ export async function runBenchmark(
         steps: results,
         recommendedStep: null,
         contextFit,
+        note: gpuNote,
         error: run.error,
       }
     }
@@ -422,6 +447,7 @@ export async function runBenchmark(
     steps: results,
     recommendedStep,
     contextFit,
+    note: gpuNote,
     error: maxTg === 0 ? '跑分没有产出结果，请检查模型文件是否有效' : null,
   }
 }

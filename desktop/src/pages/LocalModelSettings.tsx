@@ -859,6 +859,11 @@ export function LocalModelSettings() {
 
         {!benchmarkRunning && benchmarkOutput && (
           <div className="space-y-2">
+            {benchmarkOutput.note && (
+              <div className="mb-3 rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[var(--color-surface-container-low)] px-4 py-3 text-[12.5px] leading-5" role="status">
+                {benchmarkOutput.note}
+              </div>
+            )}
             {benchmarkOutput.modelParamsB !== null && (
               <p className="mb-2 text-[12px] text-[var(--color-text-tertiary)]">
                 模型实测：{benchmarkOutput.modelParamsB.toFixed(2)}B 参数

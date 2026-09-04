@@ -192,6 +192,8 @@ export type LocalModelBenchmarkOutput = {
   steps: LocalModelBenchmarkStep[]
   recommendedStep: LocalModelBenchmarkStep | null
   contextFit: LocalModelBenchmarkContextFit
+  /** 硬件提示（非致命）：如 GPU 不可用已自动降级到 CPU */
+  note: string | null
   error: string | null
 }
 
