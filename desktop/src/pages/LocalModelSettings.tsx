@@ -355,6 +355,13 @@ export function LocalModelSettings() {
     )
   }, [benchmarkOutput, hardware])
 
+  // KV 缓存预算：GPU 可用按显存 90%（留 10% 余量），纯 CPU 按内存 55%（其余留给系统）
+  const contextBudgetGB = benchmarkOutput
+    ? (benchmarkOutput.contextFit.gpuUsable
+        ? benchmarkOutput.contextFit.availableVramGB * 0.9
+        : benchmarkOutput.contextFit.availableRamGB * 0.55)
+    : null
+
   const currentConfig = useMemo(
     () => configs.find((config) => config.id === currentConfigId) ?? null,
     [configs, currentConfigId],
@@ -865,7 +872,7 @@ export function LocalModelSettings() {
                 <span className="font-semibold text-[var(--color-text-primary)]">
                   {benchmarkOutput.mode === 'gpu' ? 'GPU 全量' : benchmarkOutput.mode === 'hybrid' ? 'GPU + CPU 混合' : '纯 CPU'}
                 </span>
-                运行
+                {' '}运行
                 {benchmarkOutput.mode === 'gpu' && '——模型全部层放显卡，速度最快。'}
                 {benchmarkOutput.mode === 'hybrid' && '——部分模型层放显卡、其余在 CPU，兼顾速度与显存。'}
                 {benchmarkOutput.mode === 'cpu' && (hardware?.gpu ? '——你的显卡跑不动这个模型，全部计算由 CPU 完成。' : '——无独显，全部计算由 CPU 完成。')}
@@ -883,30 +890,22 @@ export function LocalModelSettings() {
                 · 长文输入 {Math.round(benchmarkOutput.ppTokensPerSec)} t/s
               </p>
             )}
-            {benchmarkOutput.contextFit.kvCacheGB !== null && (
+            {benchmarkOutput.contextFit.kvCacheGB !== null && contextBudgetGB !== null && (
               <div className={`mb-3 rounded-[var(--radius-md)] border px-4 py-3 text-[12.5px] leading-5 ${benchmarkOutput.contextFit.fits ? 'border-[var(--color-border)] bg-[var(--color-surface-container-low)]' : 'border-[var(--color-warning)] bg-[var(--color-surface-container-low)]'}`}>
-                <span className="font-semibold">上下文 32K</span>
-                {' 的 KV 缓存约需 '}
-                <span className="font-semibold">{benchmarkOutput.contextFit.kvCacheGB.toFixed(2)} GB</span>
                 {benchmarkOutput.contextFit.gpuUsable
                   ? (
                     <>
-                      {'，您可用显存 '}
-                      <span className="font-semibold">
-                        {benchmarkOutput.contextFit.availableVramGB > 0 ? `${benchmarkOutput.contextFit.availableVramGB.toFixed(1)} GB` : '未知'}
-                      </span>
+                      上下文 32K 的 KV 缓存约需 <span className="font-semibold">{benchmarkOutput.contextFit.kvCacheGB.toFixed(2)} GB</span>，放在显存里：可用显存 {benchmarkOutput.contextFit.availableVramGB > 0 ? `${benchmarkOutput.contextFit.availableVramGB.toFixed(1)} GB` : '未知'}，其中约 <span className="font-semibold">{contextBudgetGB.toFixed(1)} GB</span> 可用（留 10% 余量）。
                     </>
                   )
                   : (
                     <>
-                      {'，GPU 不可用走内存，您有物理内存 '}
-                      <span className="font-semibold">{`${benchmarkOutput.contextFit.availableRamGB.toFixed(1)} GB`}</span>
-                      {'（按 55% 预算评估）'}
+                      上下文 32K 的 KV 缓存约需 <span className="font-semibold">{benchmarkOutput.contextFit.kvCacheGB.toFixed(2)} GB</span>。纯 CPU 模式下，KV 缓存放在内存里：物理内存 {benchmarkOutput.contextFit.availableRamGB.toFixed(1)} GB，其中约 <span className="font-semibold">{contextBudgetGB.toFixed(1)} GB</span> 可用（55% 预算，其余留给系统和其他应用）。
                     </>
                   )}
                 {benchmarkOutput.contextFit.fits
-                  ? '——装得下。'
-                  : '——装不下，会溢出变慢。建议换更小的模型或由规划自动下调上下文。'}
+                  ? '装得下，可以放心用 32K 上下文。'
+                  : '装不下，会溢出变慢。建议换更小的模型，应用方案时上下文会自动下调。'}
               </div>
             )}
             {benchmarkOutput.contextTooSmall && (
