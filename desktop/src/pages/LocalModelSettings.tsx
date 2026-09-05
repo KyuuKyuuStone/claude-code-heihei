@@ -344,14 +344,14 @@ export function LocalModelSettings() {
   const [benchmarkProgress, setBenchmarkProgress] = useState<LocalModelBenchmarkProgress | null>(null)
   const [benchmarkError, setBenchmarkError] = useState<string | null>(null)
 
-  // 跑分结果 + 当前硬件 → 按内存/显存规划的上下文推荐值（跑分标注 GPU 降级时 KV 落在内存，按内存预算）
+  // 跑分结果 + 当前硬件 → 按内存/显存规划的上下文推荐值（GPU 不可用时 KV 落在内存，按内存预算）
   const plannedContext = useMemo(() => {
     if (!benchmarkOutput) return null
     return planContextSize(
       benchmarkOutput.contextFit.kvBytesPerToken,
       benchmarkOutput.modelSizeMB,
-      hardware?.memoryGB ?? 16,
-      !benchmarkOutput.note ? (hardware?.gpu?.vramMB ?? 0) : 0,
+      benchmarkOutput.contextFit.availableRamGB,
+      benchmarkOutput.contextFit.gpuUsable ? (hardware?.gpu?.vramMB ?? 0) : 0,
     )
   }, [benchmarkOutput, hardware])
 
@@ -872,11 +872,25 @@ export function LocalModelSettings() {
                 <span className="font-semibold">上下文 32K</span>
                 {' 的 KV 缓存约需 '}
                 <span className="font-semibold">{benchmarkOutput.contextFit.kvCacheGB.toFixed(2)} GB</span>
-                {'，您可用显存 '}
-                <span className="font-semibold">{benchmarkOutput.contextFit.availableVramGB > 0 ? `${benchmarkOutput.contextFit.availableVramGB.toFixed(1)} GB` : '无独显（走内存）'}</span>
+                {benchmarkOutput.contextFit.gpuUsable
+                  ? (
+                    <>
+                      {'，您可用显存 '}
+                      <span className="font-semibold">
+                        {benchmarkOutput.contextFit.availableVramGB > 0 ? `${benchmarkOutput.contextFit.availableVramGB.toFixed(1)} GB` : '未知'}
+                      </span>
+                    </>
+                  )
+                  : (
+                    <>
+                      {'，GPU 不可用走内存，您有物理内存 '}
+                      <span className="font-semibold">{`${benchmarkOutput.contextFit.availableRamGB.toFixed(1)} GB`}</span>
+                      {'（按 55% 预算评估）'}
+                    </>
+                  )}
                 {benchmarkOutput.contextFit.fits
                   ? '——装得下。'
-                  : '——装不下，会溢出到内存明显变慢。建议选更小的上下文。'}
+                  : '——装不下，会溢出变慢。建议换更小的模型或由规划自动下调上下文。'}
               </div>
             )}
             {benchmarkOutput.contextTooSmall && (

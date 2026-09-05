@@ -171,6 +171,10 @@ export type LocalModelBenchmarkContextFit = {
   kvBytesPerToken: number | null
   kvCacheGB: number | null
   availableVramGB: number
+  /** 物理内存（GB）——纯 CPU 模式下 KV 缓存落在内存，按它算预算 */
+  availableRamGB: number
+  /** GPU 探测是否可用；false 时 fits 按内存预算算 */
+  gpuUsable: boolean
   fits: boolean
 }
 

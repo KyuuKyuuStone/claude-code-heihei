@@ -1,6 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { open } from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 
 /**
@@ -44,6 +45,10 @@ export type BenchmarkRunResult = {
     kvCacheGB: number | null
     /** 可用显存（GB，无独显则为 0） */
     availableVramGB: number
+    /** 物理内存（GB）——纯 CPU 模式下 KV 缓存落在内存，按它算预算 */
+    availableRamGB: number
+    /** GPU 可用时按显存预算算，纯 CPU 模式按内存预算算 */
+    gpuUsable: boolean
     /** 能不能装下 */
     fits: boolean
   }
@@ -301,7 +306,7 @@ export async function runBenchmark(
     maxTgTokensPerSec: 0,
     steps: [],
     recommendedStep: null,
-    contextFit: { kvBytesPerToken: null, kvCacheGB: null, availableVramGB: 0, fits: true },
+    contextFit: { kvBytesPerToken: null, kvCacheGB: null, availableVramGB: 0, availableRamGB: 0, gpuUsable: false, fits: true },
     contextTooSmall: false,
     note: null,
     error: null,
@@ -317,35 +322,13 @@ export async function runBenchmark(
   const ggufMeta = await readGgufMeta(input.modelPath)
   const layers = ggufMeta.layers
 
-  // 上下文可行性：KV 缓存大小 vs 可用显存（用内存账算，不用跑）
-  const kvBytes = kvBytesPerToken(ggufMeta)
-  const kvCacheGB = kvBytes !== null ? (input.ctxSize * kvBytes) / (1024 ** 3) : null
-  let availableVramGB = 0
-  if (hasGpu) {
-    try {
-      const result = spawnSync(benchExePath, ['--list-devices'], {
-        encoding: 'utf8',
-        timeout: 15_000,
-        windowsHide: true,
-      })
-      const match = /\((\d+)\s*MiB/.exec(result.stdout ?? '')
-      if (match?.[1]) availableVramGB = parseInt(match[1], 10) / 1024
-    } catch { /* 无显存信息就当 0 */ }
-  }
-  const contextFit = {
-    kvBytesPerToken: kvBytes,
-    kvCacheGB,
-    availableVramGB,
-    fits: kvCacheGB !== null ? kvCacheGB <= availableVramGB * 0.9 : true, // 留 10% 余量
-  }
-
   // Claude Code 的系统提示词 + 工具定义 + Skills 就要 ~30K tokens。
   // 上下文小于这个值，模型启动成功但真实请求会被拒（29975 tokens 的请求在 8K 里放不下）。
   const MIN_USABLE_CONTEXT = 32768
   const contextTooSmall = input.ctxSize < MIN_USABLE_CONTEXT
 
   // 速度测试用小深度，够测出真实的 token 生成速度，又不会把弱硬件卡死。
-  // 上下文可行性不依赖这里——它用上面的内存账算。
+  // 上下文可行性不依赖这里——它用下面的内存账算。
   const benchDepth = 512
 
   // 跑分固定测几档：CPU 50%、CPU 100%、GPU 可用时测 GPU。不需要用户选目标速度。
@@ -360,6 +343,34 @@ export async function runBenchmark(
   const gpuNote = hasGpu && !gpuUsable
     ? '检测到你的显卡跑不动这个模型（GPU 推理崩溃），已自动改用纯 CPU 测速。'
     : null
+
+  // 上下文可行性：KV 缓存大小 vs 预算。GPU 可用时 KV 落在显存，纯 CPU 模式
+  // 落在内存——拿显存说事会误导（GTX 750 显存 4GB 却跑不动 GPU 推理）。
+  const kvBytes = kvBytesPerToken(ggufMeta)
+  const kvCacheGB = kvBytes !== null ? (input.ctxSize * kvBytes) / (1024 ** 3) : null
+  let availableVramGB = 0
+  if (hasGpu) {
+    try {
+      const result = spawnSync(benchExePath, ['--list-devices'], {
+        encoding: 'utf8',
+        timeout: 15_000,
+        windowsHide: true,
+      })
+      const match = /\((\d+)\s*MiB/.exec(result.stdout ?? '')
+      if (match?.[1]) availableVramGB = parseInt(match[1], 10) / 1024
+    } catch { /* 无显存信息就当 0 */ }
+  }
+  const availableRamGB = os.totalmem() / 1024 ** 3
+  // 预算与渲染端 planContextSize 对齐：显存留 10% 余量，内存按 55% 算（要留给系统和其他应用）
+  const contextBudgetGB = gpuUsable ? availableVramGB * 0.9 : availableRamGB * 0.55
+  const contextFit = {
+    kvBytesPerToken: kvBytes,
+    kvCacheGB,
+    availableVramGB,
+    availableRamGB,
+    gpuUsable,
+    fits: kvCacheGB !== null ? kvCacheGB <= contextBudgetGB : true,
+  }
 
   const results: BenchmarkStepResult[] = []
   let pp = 0
