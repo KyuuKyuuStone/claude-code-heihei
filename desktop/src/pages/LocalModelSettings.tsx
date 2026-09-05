@@ -71,6 +71,8 @@ type AdvancedConfig = {
   maxPredict: string
   /** 自定义引擎目录（如官方 CUDA 版 llama.cpp），留空用内置引擎 */
   engineDir: string
+  /** 多模态投影文件（mmproj .gguf），配了视觉模型才能看图 */
+  mmprojPath: string
 }
 
 /** 一套完整的本地模型配置方案：模型文件 + 全部参数 */
@@ -95,6 +97,7 @@ const DEFAULT_ADVANCED: AdvancedConfig = {
   repeatPenalty: '1.0',
   maxPredict: '-1',
   engineDir: '',
+  mmprojPath: '',
 }
 
 function parsePositiveInt(value: string, fallback: number): number {
@@ -229,7 +232,7 @@ function FieldRow({ label, hint, children }: { label: string; hint?: string; chi
 }
 
 /** 细节参数编辑区（新建/修改方案 Modal 共用） */
-function AdvancedFields({ adv, onChange }: { adv: AdvancedConfig; onChange: <K extends keyof AdvancedConfig>(key: K, value: AdvancedConfig[K]) => void }) {
+function AdvancedFields({ adv, onChange, onPickMmproj }: { adv: AdvancedConfig; onChange: <K extends keyof AdvancedConfig>(key: K, value: AdvancedConfig[K]) => void; onPickMmproj: () => void }) {
   return (
     <div className="space-y-4">
       <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-[var(--color-text-tertiary)]">
@@ -237,6 +240,12 @@ function AdvancedFields({ adv, onChange }: { adv: AdvancedConfig; onChange: <K e
       </div>
       <FieldRow label="引擎目录" hint="留空用内置引擎。NVIDIA 显卡可从 llama.cpp 官方 Releases 下载 CUDA 版（见「下载模型」里的指引），填其解压目录">
         <Input value={adv.engineDir} onChange={(e) => onChange('engineDir', e.target.value)} placeholder="默认内置引擎" />
+      </FieldRow>
+      <FieldRow label="视觉投影文件" hint="多模态模型看图必需（mmproj-*.gguf，和模型在同一个下载页）。留空 = 纯文本对话；配了它，带视觉的模型就能看图">
+        <div className="flex items-center gap-2">
+          <Input value={adv.mmprojPath} onChange={(e) => onChange('mmprojPath', e.target.value)} placeholder="纯文本对话（不看图）" className="flex-1" />
+          <Button size="sm" variant="ghost" onClick={onPickMmproj}>选择文件</Button>
+        </div>
       </FieldRow>
       <FieldRow label="上下文窗口" hint="模型能记住的对话长度，越大越占内存">
         <Input type="number" value={adv.ctxSize} onChange={(e) => onChange('ctxSize', e.target.value)} min={16000} max={1000000} />
@@ -384,6 +393,14 @@ export function LocalModelSettings() {
     if (typeof result === 'string') setDraftModelPath(result)
   }
 
+  const pickDraftMmproj = async () => {
+    const result = await host.dialogs.open({
+      title: '选择 mmproj 视觉投影文件',
+      filters: [{ name: 'GGUF', extensions: ['gguf'] }],
+    })
+    if (typeof result === 'string') setDraftAdv((a) => ({ ...a, mmprojPath: result }))
+  }
+
   const saveConfig = () => {
     const name = draftName.trim()
     if (!name || !draftModelPath.trim()) return
@@ -522,6 +539,7 @@ export function LocalModelSettings() {
         repeatPenalty: parseFloatOr(currentConfig.repeatPenalty, 1.0),
         maxPredict: parseInt(currentConfig.maxPredict, 10),
         engineDir: currentConfig.engineDir?.trim() || undefined,
+        mmprojPath: currentConfig.mmprojPath?.trim() || undefined,
       })
       setStatus(next)
       if (next.state === 'running' && next.port !== null) {
@@ -744,7 +762,7 @@ export function LocalModelSettings() {
             </button>
             {draftShowAdvanced && (
               <div className="mt-4">
-                <AdvancedFields adv={draftAdv} onChange={(key, value) => setDraftAdv((a) => ({ ...a, [key]: value }))} />
+                <AdvancedFields adv={draftAdv} onChange={(key, value) => setDraftAdv((a) => ({ ...a, [key]: value }))} onPickMmproj={() => void pickDraftMmproj()} />
               </div>
             )}
           </div>

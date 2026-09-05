@@ -44,6 +44,8 @@ export type LocalModelStartInput = {
   maxPredict?: number
   /** Custom engine directory (e.g. an official CUDA build); empty = bundled engine. */
   engineDir?: string
+  /** Multimodal projector (mmproj) GGUF for vision models; empty = text-only. */
+  mmprojPath?: string
 }
 
 export type LocalModelState = 'stopped' | 'starting' | 'running' | 'error'
@@ -222,6 +224,7 @@ export class LocalModelService {
       '--jinja',
     ]
     if (input.batchSize !== undefined) args.push('--batch-size', String(input.batchSize))
+    if (input.mmprojPath) args.push('--mmproj', input.mmprojPath)
     if (input.cacheTypeK) args.push('--cache-type-k', input.cacheTypeK)
     if (input.cacheTypeV) args.push('--cache-type-v', input.cacheTypeV)
     if (input.flashAttn) args.push('--flash-attn', 'on')

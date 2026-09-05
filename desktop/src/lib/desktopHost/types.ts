@@ -139,6 +139,8 @@ export type LocalModelStartInput = {
   maxPredict?: number
   /** 自定义引擎目录（如官方 CUDA 版），留空用内置引擎 */
   engineDir?: string
+  /** 多模态投影文件（mmproj），配了视觉模型才能看图；留空纯文本 */
+  mmprojPath?: string
 }
 
 export type LocalModelStatus = {

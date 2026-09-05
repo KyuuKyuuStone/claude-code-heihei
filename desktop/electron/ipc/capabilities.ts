@@ -77,7 +77,7 @@ const terminalSessionId: Validator = value =>
 
 const localModelStart: Validator = value =>
   isRecord(value)
-  && hasOnlyKeys(value, ['modelPath', 'ctxSize', 'threads', 'nGpuLayers', 'batchSize', 'cacheTypeK', 'cacheTypeV', 'flashAttn', 'temperature', 'topK', 'topP', 'minP', 'repeatPenalty', 'maxPredict', 'engineDir'])
+  && hasOnlyKeys(value, ['modelPath', 'ctxSize', 'threads', 'nGpuLayers', 'batchSize', 'cacheTypeK', 'cacheTypeV', 'flashAttn', 'temperature', 'topK', 'topP', 'minP', 'repeatPenalty', 'maxPredict', 'engineDir', 'mmprojPath'])
   && typeof value.modelPath === 'string'
   && value.modelPath.length > 0
   && value.modelPath.length <= 4096
@@ -104,6 +104,7 @@ const localModelStart: Validator = value =>
   && (value.repeatPenalty === undefined || typeof value.repeatPenalty === 'number')
   && (value.maxPredict === undefined || typeof value.maxPredict === 'number')
   && (value.engineDir === undefined || (typeof value.engineDir === 'string' && value.engineDir.length <= 4096 && !value.engineDir.includes('\0')))
+  && (value.mmprojPath === undefined || (typeof value.mmprojPath === 'string' && value.mmprojPath.length <= 4096 && !value.mmprojPath.includes('\0')))
 
 const localModelBenchmark: Validator = value =>
   isRecord(value)
