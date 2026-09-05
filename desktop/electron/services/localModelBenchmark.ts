@@ -369,8 +369,9 @@ export async function runBenchmark(
     } catch { /* 无显存信息就当 0 */ }
   }
   const availableRamGB = os.totalmem() / 1024 ** 3
-  // 预算与渲染端 planContextSize 对齐：显存留 10% 余量，内存按 55% 算（要留给系统和其他应用）
-  const contextBudgetGB = gpuUsable ? availableVramGB * 0.9 : availableRamGB * 0.55
+  // 预算与渲染端 planContextSize 对齐：显存留 10% 余量；内存按 67% 算（作者实测甜点比例，
+  // 55% 过于保守——16GB 机器明明装得下 32K 却被误判偏小）
+  const contextBudgetGB = gpuUsable ? availableVramGB * 0.9 : availableRamGB * 0.67
   const contextFit = {
     kvBytesPerToken: kvBytes,
     kvCacheGB,

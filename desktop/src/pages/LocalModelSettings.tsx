@@ -203,8 +203,8 @@ function planContextSize(
   const FLOOR_CTX = 8192
   if (!kvBytesPerToken || kvBytesPerToken <= 0) return RECOMMENDED_CTX
   const budgetBytes = vramMB > 0
-    ? vramMB * 1024 * 1024 * 0.85
-    : memoryGB * 1024 ** 3 * 0.55
+    ? vramMB * 1024 * 1024 * 0.9
+    : memoryGB * 1024 ** 3 * 0.67
   const modelBytes = (modelSizeMB ?? 0) * 1024 * 1024
   const availableTokens = Math.floor((budgetBytes - modelBytes) / kvBytesPerToken)
   const planned = Math.floor(availableTokens / 4096) * 4096
@@ -355,7 +355,7 @@ export function LocalModelSettings() {
     )
   }, [benchmarkOutput, hardware])
 
-  // KV 缓存预算：GPU 可用按显存 90%（留 10% 余量），纯 CPU 按内存 55%（其余留给系统）
+  // KV 缓存预算：GPU 可用按显存 90%（留 10% 余量），纯 CPU 按内存 67%（甜点比例，与引擎侧一致）
   const contextBudgetGB = benchmarkOutput
     ? (benchmarkOutput.contextFit.gpuUsable
         ? benchmarkOutput.contextFit.availableVramGB * 0.9
@@ -900,7 +900,7 @@ export function LocalModelSettings() {
                   )
                   : (
                     <>
-                      上下文 32K 的 KV 缓存约需 <span className="font-semibold">{benchmarkOutput.contextFit.kvCacheGB.toFixed(2)} GB</span>。纯 CPU 模式下，KV 缓存放在内存里：物理内存 {benchmarkOutput.contextFit.availableRamGB.toFixed(1)} GB，其中约 <span className="font-semibold">{contextBudgetGB.toFixed(1)} GB</span> 可用（55% 预算，其余留给系统和其他应用）。
+                      上下文 32K 的 KV 缓存约需 <span className="font-semibold">{benchmarkOutput.contextFit.kvCacheGB.toFixed(2)} GB</span>。纯 CPU 模式下，KV 缓存放在内存里：物理内存 {benchmarkOutput.contextFit.availableRamGB.toFixed(1)} GB，其中约 <span className="font-semibold">{contextBudgetGB.toFixed(1)} GB</span> 可用（67% 预算，其余留给系统和其他应用）。
                     </>
                   )}
                 {benchmarkOutput.contextFit.fits
