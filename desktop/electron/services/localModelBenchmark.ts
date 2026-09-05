@@ -29,6 +29,9 @@ export type BenchmarkStepResult = {
   tgTokensPerSec: number
 }
 
+/** 本机最终采用的运行方式：纯 CPU / GPU 全量 / GPU+CPU 混合 */
+export type BenchmarkRunMode = 'cpu' | 'gpu' | 'hybrid'
+
 export type BenchmarkRunResult = {
   modelParamsB: number | null
   modelSizeMB: number | null
@@ -56,6 +59,8 @@ export type BenchmarkRunResult = {
   contextTooSmall: boolean
   /** 硬件提示（非致命）：如 GPU 不可用已自动降级到 CPU */
   note: string | null
+  /** 本机最终采用的运行方式 */
+  mode: BenchmarkRunMode
   error: string | null
 }
 
@@ -309,6 +314,7 @@ export async function runBenchmark(
     contextFit: { kvBytesPerToken: null, kvCacheGB: null, availableVramGB: 0, availableRamGB: 0, gpuUsable: false, fits: true },
     contextTooSmall: false,
     note: null,
+    mode: 'cpu',
     error: null,
   }
   if (!existsSync(benchExePath)) {
@@ -428,6 +434,7 @@ export async function runBenchmark(
         contextFit,
         contextTooSmall,
         note: gpuNote,
+        mode: gpuUsable ? 'hybrid' : 'cpu',
         error: run.error,
       }
     }
@@ -451,6 +458,13 @@ export async function runBenchmark(
 
   const maxTg = Math.max(0, ...results.map((r) => r.tgTokensPerSec))
 
+  // 运行方式：GPU 探测失败 = 纯 CPU；推荐档把所有层都放上显卡 = GPU 全量；其余 = 混合
+  const mode: BenchmarkRunMode = !gpuUsable
+    ? 'cpu'
+    : recommendedStep?.ngl === '-1'
+      ? 'gpu'
+      : 'hybrid'
+
   return {
     modelParamsB,
     modelSizeMB,
@@ -461,6 +475,7 @@ export async function runBenchmark(
     contextFit,
     contextTooSmall,
     note: gpuNote,
+    mode,
     error: maxTg === 0 ? '跑分没有产出结果，请检查模型文件是否有效' : null,
   }
 }

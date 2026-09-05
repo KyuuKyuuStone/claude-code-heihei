@@ -190,6 +190,8 @@ export type LocalModelBenchmarkOutput = {
   contextTooSmall: boolean
   /** 硬件提示（非致命）：如 GPU 不可用已自动降级到 CPU */
   note: string | null
+  /** 本机最终采用的运行方式：cpu = 纯 CPU，gpu = 显卡全量，hybrid = GPU+CPU 混合 */
+  mode: 'cpu' | 'gpu' | 'hybrid'
   error: string | null
 }
 

@@ -855,6 +855,22 @@ export function LocalModelSettings() {
 
         {!benchmarkRunning && benchmarkOutput && (
           <div className="space-y-2">
+            <div
+              className="mb-3 flex items-center gap-2.5 rounded-[var(--radius-md)] border border-[var(--color-primary-fixed-dim)] bg-[var(--color-brand-soft)] px-4 py-3 text-[13px] leading-5"
+              role="status"
+            >
+              <span className="material-symbols-outlined text-[18px] text-[var(--color-brand)]">memory</span>
+              <span>
+                本机采用
+                <span className="font-semibold text-[var(--color-text-primary)]">
+                  {benchmarkOutput.mode === 'gpu' ? 'GPU 全量' : benchmarkOutput.mode === 'hybrid' ? 'GPU + CPU 混合' : '纯 CPU'}
+                </span>
+                运行
+                {benchmarkOutput.mode === 'gpu' && '——模型全部层放显卡，速度最快。'}
+                {benchmarkOutput.mode === 'hybrid' && '——部分模型层放显卡、其余在 CPU，兼顾速度与显存。'}
+                {benchmarkOutput.mode === 'cpu' && (hardware?.gpu ? '——你的显卡跑不动这个模型，全部计算由 CPU 完成。' : '——无独显，全部计算由 CPU 完成。')}
+              </span>
+            </div>
             {benchmarkOutput.note && (
               <div className="mb-3 rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[var(--color-surface-container-low)] px-4 py-3 text-[12.5px] leading-5" role="status">
                 {benchmarkOutput.note}
