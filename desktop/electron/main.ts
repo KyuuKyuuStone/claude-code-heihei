@@ -1,5 +1,6 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, Notification, screen, session, WebContentsView } from 'electron'
 import { autoUpdater } from 'electron-updater'
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { ELECTRON_EVENT_CHANNELS, ELECTRON_INTERNAL_CHANNELS, ELECTRON_IPC_CHANNELS, type ElectronIpcChannel } from './ipc/channels'
 import {
@@ -22,7 +23,7 @@ import { ElectronUpdaterService, updaterSessionProxyConfig } from './services/up
 import { createUpdateSmokeUpdaterFromEnv } from './services/updateSmoke'
 import { ElectronTerminalService, type TerminalSpawnInput } from './services/terminal'
 import { LocalModelService, resolveLlamaServerExecutable, resolveVulkanExecutable, detectGpu, detectHardware, type LocalModelStartInput } from './services/localModelService'
-import { runBenchmark, resolveLlamaBenchExecutable, type BenchmarkRunInput } from './services/localModelBenchmark'
+import { runBenchmark, resolveLlamaBenchExecutable, probeGpuUsable, type BenchmarkRunInput } from './services/localModelBenchmark'
 import { ElectronPreviewService, type PreviewBounds } from './services/preview'
 import {
   configureLocalServerRequestAuth,
@@ -260,15 +261,47 @@ function getLocalModelService() {
   return localModelService
 }
 
-let cachedGpuDetection: boolean | null = null
-
-function resolveLocalModelExe(): string {
-  if (cachedGpuDetection === null) {
-    cachedGpuDetection = detectGpu(resolveVulkanExecutable(unpackedRoot()))
+/**
+ * Start the local model engine with a real GPU-usability guard.
+ *
+ * `--list-devices` listing a GPU is not enough: GTX 750-class cards without
+ * fp16 support list fine but die with `vk::Queue::submit: ErrorDeviceLost` the
+ * moment real generation starts — after the health check has already passed.
+ * So before handing a GPU request to the Vulkan build, run one tiny real
+ * inference via llama-bench; if it cannot complete, fall back to the CPU
+ * binary with `--n-gpu-layers 0` and tell the user in the engine log.
+ */
+async function startLocalModelWithGpuGuard(input: LocalModelStartInput) {
+  const cpuExe = resolveLlamaServerExecutable(unpackedRoot())
+  const vulkanExe = resolveVulkanExecutable(unpackedRoot())
+  const wantsGpu = input.nGpuLayers !== '0'
+  if (!wantsGpu) {
+    // CPU-only inference never needs the Vulkan build, even when a GPU exists.
+    return getLocalModelService().start({ ...input, nGpuLayers: '0' }, cpuExe)
   }
-  return cachedGpuDetection
-    ? resolveVulkanExecutable(unpackedRoot())
-    : resolveLlamaServerExecutable(unpackedRoot())
+  if (!existsSync(vulkanExe) || !detectGpu(vulkanExe)) {
+    return getLocalModelService().start(
+      { ...input, nGpuLayers: '0' },
+      cpuExe,
+      '未检测到可用显卡，已按纯 CPU 模式启动。',
+    )
+  }
+  const probeNgl = input.nGpuLayers === 'auto' || input.nGpuLayers === 'all' ? '-1' : input.nGpuLayers
+  const gpuUsable = await probeGpuUsable(
+    input.modelPath,
+    resolveLlamaBenchExecutable(unpackedRoot()),
+    probeNgl,
+    input.threads,
+    512,
+  )
+  if (gpuUsable) {
+    return getLocalModelService().start(input, vulkanExe)
+  }
+  return getLocalModelService().start(
+    { ...input, nGpuLayers: '0' },
+    cpuExe,
+    '检测到显卡无法完成 GPU 推理（会触发 ErrorDeviceLost 崩溃），已自动改用纯 CPU 模式，启动会变慢但可以正常对话。',
+  )
 }
 
 function getPreviewService() {
@@ -466,7 +499,7 @@ function registerIpcHandlers() {
   registerHandler(ELECTRON_IPC_CHANNELS.adaptersRestartSidecar, () => getServerRuntime().restartAdaptersSidecars())
   registerHandler(ELECTRON_IPC_CHANNELS.localModelStart, (_event, payload) => {
     const input = payload as LocalModelStartInput
-    return getLocalModelService().start(input, resolveLocalModelExe())
+    return startLocalModelWithGpuGuard(input)
   })
   registerHandler(ELECTRON_IPC_CHANNELS.localModelStop, () => getLocalModelService().stop())
   registerHandler(ELECTRON_IPC_CHANNELS.localModelStatus, () => getLocalModelService().status())

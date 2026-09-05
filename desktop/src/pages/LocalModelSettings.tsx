@@ -185,6 +185,32 @@ function tierBySpeed(tgTokensPerSec: number): LocalModelTier {
   return 'low'
 }
 
+/**
+ * 按机器实际内存/显存规划上下文推荐值，不是写死的。
+ *
+ * Claude Code 的真实负载（系统提示 + 工具定义 + Skills）需要 ≥32K 上下文，
+ * 所以 32K 是默认推荐；但 KV 缓存 + 模型权重必须装进预算——GPU 可用时按显存
+ * 算，纯 CPU 模式按内存算。装不下 32K 就按 4K 步进下调，下限 8K（低于 8K 连
+ * 引擎启动校验都过不了）。
+ */
+function planContextSize(
+  kvBytesPerToken: number | null,
+  modelSizeMB: number | null,
+  memoryGB: number,
+  vramMB: number,
+): number {
+  const RECOMMENDED_CTX = 32768
+  const FLOOR_CTX = 8192
+  if (!kvBytesPerToken || kvBytesPerToken <= 0) return RECOMMENDED_CTX
+  const budgetBytes = vramMB > 0
+    ? vramMB * 1024 * 1024 * 0.85
+    : memoryGB * 1024 ** 3 * 0.55
+  const modelBytes = (modelSizeMB ?? 0) * 1024 * 1024
+  const availableTokens = Math.floor((budgetBytes - modelBytes) / kvBytesPerToken)
+  const planned = Math.floor(availableTokens / 4096) * 4096
+  return Math.max(FLOOR_CTX, Math.min(RECOMMENDED_CTX, planned))
+}
+
 function loadConfigs(): LocalModelConfig[] {
   try {
     const raw = localStorage.getItem(CONFIGS_STORAGE_KEY)
@@ -317,6 +343,17 @@ export function LocalModelSettings() {
   const [benchmarkOutput, setBenchmarkOutput] = useState<LocalModelBenchmarkOutput | null>(null)
   const [benchmarkProgress, setBenchmarkProgress] = useState<LocalModelBenchmarkProgress | null>(null)
   const [benchmarkError, setBenchmarkError] = useState<string | null>(null)
+
+  // 跑分结果 + 当前硬件 → 按内存/显存规划的上下文推荐值（跑分标注 GPU 降级时 KV 落在内存，按内存预算）
+  const plannedContext = useMemo(() => {
+    if (!benchmarkOutput) return null
+    return planContextSize(
+      benchmarkOutput.contextFit.kvBytesPerToken,
+      benchmarkOutput.modelSizeMB,
+      hardware?.memoryGB ?? 16,
+      !benchmarkOutput.note ? (hardware?.gpu?.vramMB ?? 0) : 0,
+    )
+  }, [benchmarkOutput, hardware])
 
   const currentConfig = useMemo(
     () => configs.find((config) => config.id === currentConfigId) ?? null,
@@ -456,13 +493,15 @@ export function LocalModelSettings() {
     const speed = recommended.tgTokensPerSec
     const tier = tierBySpeed(speed)
     const tierConfig = TIER_CONFIGS[tier]
+    // 跑分标注了 GPU 降级（note 非空）说明 KV 缓存会落在内存里，按内存预算规划
+    const ctx = plannedContext ?? 32768
     const entry: LocalModelConfig = {
       id: `${Date.now()}`,
-      name: `${modelNameFromPath(benchmarkModelPath)} · ${tierConfig.label} · 32K · ${Math.round(speed)}t/s`,
+      name: `${modelNameFromPath(benchmarkModelPath)} · ${tierConfig.label} · ${Math.round(ctx / 1024)}K · ${Math.round(speed)}t/s`,
       modelPath: benchmarkModelPath,
       tier,
       ...DEFAULT_ADVANCED,
-      ctxSize: '32768',
+      ctxSize: String(ctx),
       threads: String(recommended.threads),
       nGpuLayers: recommended.ngl,
     }
@@ -579,9 +618,12 @@ export function LocalModelSettings() {
           </div>
           <div className="mt-4 border-t border-[var(--color-border)] pt-4 text-[13px] leading-6 text-[var(--color-text-secondary)]">
             按您的硬件推荐「<span className="font-semibold text-[var(--color-text-primary)]">{recommendedTier ? TIER_CONFIGS[recommendedTier].label : '—'}</span>」档
+            {plannedContext !== null
+              ? ` · 按内存规划的上下文：${Math.round(plannedContext / 1024)}K`
+              : ' · 点「跑分」实测这台机器跑当前模型的真实速度'}
             {benchmarkOutput && benchmarkOutput.modelParamsB !== null
               ? ` · 当前模型实测：${benchmarkOutput.modelParamsB.toFixed(2)}B 参数，生成 ${Math.round(benchmarkOutput.maxTgTokensPerSec)} t/s`
-              : ' · 点「跑分」实测这台机器跑当前模型的真实速度'}
+              : ''}
           </div>
         </Card>
       )}
@@ -875,6 +917,14 @@ export function LocalModelSettings() {
             {benchmarkOutput.recommendedStep ? (
               <p className="pt-2 text-[12px] leading-5 text-[var(--color-text-tertiary)]">
                 推荐：<span className="font-semibold text-[var(--color-text-secondary)]">{benchmarkOutput.recommendedStep.label}</span>——这是这台机器最快的配置。
+                {plannedContext !== null && (
+                  <>
+                    {'点「应用方案」将按你的内存规划 '}
+                    <span className="font-semibold text-[var(--color-text-secondary)]">{Math.round(plannedContext / 1024)}K</span>
+                    {' 上下文'}
+                    {plannedContext < 32768 ? '（不足 32K，Claude Code 真实负载可能放不下，建议换更小的模型）' : ''}。
+                  </>
+                )}
               </p>
             ) : benchmarkOutput.steps.length > 0 ? (
               <p className="pt-2 text-[12px] leading-5 text-[var(--color-warning)]" role="alert">

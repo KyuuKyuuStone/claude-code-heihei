@@ -282,7 +282,7 @@ function detectGpuFromBench(benchExePath: string): boolean {
  * GTX 750 这类无 fp16 的老卡，`--list-devices` 能列出，但真跑大深度就崩。
  * 用实际要用的 ngl 和深度探测，返回 true = GPU 可用。
  */
-async function probeGpuUsable(modelPath: string, benchExePath: string, ngl: string, threads: number, depth: number): Promise<boolean> {
+export async function probeGpuUsable(modelPath: string, benchExePath: string, ngl: string, threads: number, depth: number): Promise<boolean> {
   const result = await runBenchOnce(modelPath, benchExePath, ngl, threads, depth, PROBE_TIMEOUT_MS)
   return result.tg > 0 && !result.crashed
 }

@@ -183,7 +183,7 @@ export class LocalModelService {
     return isRunningStatus(this.state)
   }
 
-  async start(input: LocalModelStartInput, serverExePath: string): Promise<LocalModelStatus> {
+  async start(input: LocalModelStartInput, serverExePath: string, note?: string): Promise<LocalModelStatus> {
     if (this.isRunning()) {
       throw new Error('A local model engine is already running')
     }
@@ -198,6 +198,9 @@ export class LocalModelService {
     this.modelPath = input.modelPath
     this.error = null
     this.logLines = []
+    if (note) {
+      this.logLines.push(`[cc-heihei] ${note}`)
+    }
 
     let port: number
     try {
