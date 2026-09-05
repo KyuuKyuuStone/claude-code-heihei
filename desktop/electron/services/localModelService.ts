@@ -46,6 +46,12 @@ export type LocalModelStartInput = {
   engineDir?: string
   /** Multimodal projector (mmproj) GGUF for vision models; empty = text-only. */
   mmprojPath?: string
+  /** Reuse cached KV for the unchanged conversation prefix (--cache-reuse). */
+  cacheReuse?: boolean
+  /** Draft model for speculative decoding (--model-draft). */
+  draftModelPath?: string
+  /** Keep MoE expert weights on CPU for the first N layers (--n-cpu-moe). */
+  nCpuMoe?: string
 }
 
 export type LocalModelState = 'stopped' | 'starting' | 'running' | 'error'
@@ -56,6 +62,8 @@ export type LocalModelStatus = {
   modelPath: string | null
   error: string | null
   logTail: string
+  /** Parsed from engine logs, e.g. "33/37" — how many layers actually went to GPU. */
+  gpuSplit: string | null
 }
 
 const STARTUP_TIMEOUT_MS = 120_000
@@ -172,6 +180,7 @@ export class LocalModelService {
   private modelPath: string | null = null
   private error: string | null = null
   private logLines: string[] = []
+  private gpuSplit: string | null = null
 
   status(): LocalModelStatus {
     return {
@@ -180,6 +189,7 @@ export class LocalModelService {
       modelPath: this.modelPath,
       error: this.error,
       logTail: this.logLines.slice(-LOG_TAIL_LINES).join('\n'),
+      gpuSplit: this.gpuSplit,
     }
   }
 
@@ -201,16 +211,45 @@ export class LocalModelService {
     this.state = 'starting'
     this.modelPath = input.modelPath
     this.error = null
-    this.logLines = []
-    if (note) {
-      this.logLines.push(`[cc-heihei] ${note}`)
+    this.logLines = note ? [`[cc-heihei] ${note}`] : []
+    this.gpuSplit = null
+
+    // 内存不足自动降档：启动阶段进程直接退出（显存/内存装不下）时按梯度重试，
+    // 而不是把错误甩给用户——GPU 配置先退纯 CPU，再不够就砍半上下文。
+    // 超时（模型太大加载慢）不重试，重试只会更慢。
+    const attempts: Array<{ input: LocalModelStartInput, note: string | null }> = [{ input, note: null }]
+    if (input.nGpuLayers !== '0') {
+      attempts.push({
+        input: { ...input, nGpuLayers: '0' },
+        note: 'GPU 配置启动失败（多为显存装不下），已自动改用纯 CPU 重试。',
+      })
+    }
+    if (input.ctxSize > 8192) {
+      const halvedCtx = Math.max(8192, Math.floor(input.ctxSize / 2))
+      const base = attempts[attempts.length - 1]!.input
+      attempts.push({
+        input: { ...base, ctxSize: halvedCtx },
+        note: `仍然失败，已自动把上下文降到 ${Math.round(halvedCtx / 1024)}K 重试。`,
+      })
     }
 
+    for (let i = 0; i < attempts.length; i++) {
+      const attempt = attempts[i]!
+      if (attempt.note) this.logLines.push(`[cc-heihei] ${attempt.note}`)
+      const outcome = await this.launchOnce(attempt.input, serverExePath)
+      if (outcome.ok) return this.status()
+      if (!outcome.retryable) break
+    }
+    return this.fail(this.error ?? 'Local model engine failed to start')
+  }
+
+  private async launchOnce(input: LocalModelStartInput, serverExePath: string): Promise<{ ok: true } | { ok: false, retryable: boolean }> {
     let port: number
     try {
       port = await findFreePort()
     } catch (error) {
-      return this.fail(`Failed to allocate a port: ${error instanceof Error ? error.message : String(error)}`)
+      this.error = `Failed to allocate a port: ${error instanceof Error ? error.message : String(error)}`
+      return { ok: false, retryable: false }
     }
     this.port = port
 
@@ -225,6 +264,9 @@ export class LocalModelService {
     ]
     if (input.batchSize !== undefined) args.push('--batch-size', String(input.batchSize))
     if (input.mmprojPath) args.push('--mmproj', input.mmprojPath)
+    if (input.cacheReuse) args.push('--cache-reuse', '256')
+    if (input.draftModelPath) args.push('--model-draft', input.draftModelPath)
+    if (input.nCpuMoe) args.push('--n-cpu-moe', input.nCpuMoe)
     if (input.cacheTypeK) args.push('--cache-type-k', input.cacheTypeK)
     if (input.cacheTypeV) args.push('--cache-type-v', input.cacheTypeV)
     if (input.flashAttn) args.push('--flash-attn', 'on')
@@ -248,27 +290,27 @@ export class LocalModelService {
       if (this.logLines.length > LOG_TAIL_LINES * 4) {
         this.logLines = this.logLines.slice(-LOG_TAIL_LINES * 2)
       }
-    })
-
-    const exited = new Promise<number | null>((resolve) => {
-      child.once('exit', (code) => resolve(code))
+      // e.g. "offloaded 33/37 layers to GPU" — surfaces the real GPU/CPU split in the UI
+      const splitMatch = /offloaded\s+(\d+)\/(\d+)\s+layers?\s+to\s+GPU/i.exec(text)
+      if (splitMatch) this.gpuSplit = `${splitMatch[1]}/${splitMatch[2]}`
     })
 
     const deadline = Date.now() + STARTUP_TIMEOUT_MS
     while (Date.now() < deadline) {
       if (child.exitCode !== null) {
-        return this.fail(`Local model engine exited during startup (code ${child.exitCode})`)
+        this.error = `Local model engine exited during startup (code ${child.exitCode})`
+        return { ok: false, retryable: true }
       }
       const healthy = await healthProbe(port, HEALTH_POLL_MS * 4)
       if (healthy) {
         this.state = 'running'
-        return this.status()
+        return { ok: true }
       }
       await sleep(HEALTH_POLL_MS)
     }
 
-    void exited
-    return this.fail(`Local model engine timed out after ${STARTUP_TIMEOUT_MS / 1000}s`)
+    this.error = `Local model engine timed out after ${STARTUP_TIMEOUT_MS / 1000}s`
+    return { ok: false, retryable: false }
   }
 
   async stop(): Promise<void> {
@@ -278,6 +320,7 @@ export class LocalModelService {
     this.state = 'stopped'
     this.modelPath = null
     this.error = null
+    this.gpuSplit = null
 
     if (!child || child.exitCode !== null) return
 

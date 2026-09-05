@@ -281,7 +281,7 @@ export const browserHost: DesktopHost = {
       unsupported('Local model engine')
     },
     async status() {
-      return { state: 'stopped', port: null, modelPath: null, error: null, logTail: '' }
+      return { state: 'stopped', port: null, modelPath: null, error: null, logTail: '', gpuSplit: null }
     },
     async detectHardware() {
       unsupported('Local model engine')

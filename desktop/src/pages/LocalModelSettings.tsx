@@ -9,6 +9,7 @@ import { Modal } from '@/components/ui/Modal'
 import { SettingsPageHeader, SettingsSection, SettingsStat } from '@/components/settings/SettingsSection'
 import { getDesktopHost } from '../lib/desktopHost'
 import { useTranslation } from '../i18n'
+import { LOCAL_MODEL_CATALOG, CAPABILITY_LABELS } from '../constants/localModelCatalog'
 import type {
   LocalModelBenchmarkProgress,
   LocalModelHardware,
@@ -73,6 +74,12 @@ type AdvancedConfig = {
   engineDir: string
   /** 多模态投影文件（mmproj .gguf），配了视觉模型才能看图 */
   mmprojPath: string
+  /** 复用未变化前缀的 KV 缓存，长对话更快 */
+  cacheReuse: boolean
+  /** 投机解码草稿模型路径，留空不用 */
+  draftModelPath: string
+  /** MoE 专家权重放 CPU 的层数，小显存跑 MoE 模型用 */
+  nCpuMoe: string
 }
 
 /** 一套完整的本地模型配置方案：模型文件 + 全部参数 */
@@ -98,6 +105,9 @@ const DEFAULT_ADVANCED: AdvancedConfig = {
   maxPredict: '-1',
   engineDir: '',
   mmprojPath: '',
+  cacheReuse: true,
+  draftModelPath: '',
+  nCpuMoe: '',
 }
 
 function parsePositiveInt(value: string, fallback: number): number {
@@ -163,29 +173,46 @@ function hardwareStartPoint(hardware: LocalModelHardware | null): AdvancedConfig
 }
 
 /**
- * 按机器实际内存/显存规划上下文推荐值，不是写死的。
+ * 按机器实际内存/显存规划上下文推荐值 + KV 缓存类型，不是写死的。
  *
  * Claude Code 的真实负载（系统提示 + 工具定义 + Skills）需要 ≥32K 上下文，
- * 所以 32K 是默认推荐；但 KV 缓存 + 模型权重必须装进预算——GPU 可用时按显存
- * 算，纯 CPU 模式按内存算。装不下 32K 就按 4K 步进下调，下限 8K（低于 8K 连
- * 引擎启动校验都过不了）。
+ * 所以 32K 是默认推荐。装不下时学 Ollama 的推荐做法：先把 KV 缓存从 f16 换成
+ * q8_0（省一半内存，质量损失极小），还不够才按 4K 步进下调上下文，下限 8K。
  */
 function planContextSize(
   kvBytesPerToken: number | null,
   modelSizeMB: number | null,
   memoryGB: number,
   vramMB: number,
-): number {
+): { ctx: number; kvType: 'f16' | 'q8_0'; note: string | null } {
   const RECOMMENDED_CTX = 32768
   const FLOOR_CTX = 8192
-  if (!kvBytesPerToken || kvBytesPerToken <= 0) return RECOMMENDED_CTX
+  if (!kvBytesPerToken || kvBytesPerToken <= 0) return { ctx: RECOMMENDED_CTX, kvType: 'f16', note: null }
   const budgetBytes = vramMB > 0
     ? vramMB * 1024 * 1024 * 0.9
     : memoryGB * 1024 ** 3 * 0.67
   const modelBytes = (modelSizeMB ?? 0) * 1024 * 1024
-  const availableTokens = Math.floor((budgetBytes - modelBytes) / kvBytesPerToken)
-  const planned = Math.floor(availableTokens / 4096) * 4096
-  return Math.max(FLOOR_CTX, Math.min(RECOMMENDED_CTX, planned))
+  const maxTokens = (bytesPerToken: number) => {
+    const available = Math.floor((budgetBytes - modelBytes) / bytesPerToken)
+    return Math.floor(available / 4096) * 4096
+  }
+
+  if (maxTokens(kvBytesPerToken) >= RECOMMENDED_CTX) {
+    return { ctx: RECOMMENDED_CTX, kvType: 'f16', note: null }
+  }
+  // f16 装不下 32K → 换 q8_0 KV（体积减半）再试，而不是急着砍上下文
+  const q8Bytes = kvBytesPerToken / 2
+  if (maxTokens(q8Bytes) >= RECOMMENDED_CTX) {
+    return { ctx: RECOMMENDED_CTX, kvType: 'q8_0', note: '内存装不下 f16 KV 缓存，已自动改用 q8_0（省一半内存，质量损失极小）' }
+  }
+  const planned = Math.max(FLOOR_CTX, Math.min(RECOMMENDED_CTX, maxTokens(q8Bytes)))
+  return {
+    ctx: planned,
+    kvType: 'q8_0',
+    note: planned < RECOMMENDED_CTX
+      ? `内存预算内最多规划 ${Math.round(planned / 1024)}K 上下文（q8_0 KV）。低于 32K 时 Claude Code 真实负载可能放不下，建议换更小的模型`
+      : null,
+  }
 }
 
 function loadConfigs(): LocalModelConfig[] {
@@ -232,7 +259,7 @@ function FieldRow({ label, hint, children }: { label: string; hint?: string; chi
 }
 
 /** 细节参数编辑区（新建/修改方案 Modal 共用） */
-function AdvancedFields({ adv, onChange, onPickMmproj }: { adv: AdvancedConfig; onChange: <K extends keyof AdvancedConfig>(key: K, value: AdvancedConfig[K]) => void; onPickMmproj: () => void }) {
+function AdvancedFields({ adv, onChange, onPickMmproj, onPickDraft }: { adv: AdvancedConfig; onChange: <K extends keyof AdvancedConfig>(key: K, value: AdvancedConfig[K]) => void; onPickMmproj: () => void; onPickDraft: () => void }) {
   return (
     <div className="space-y-4">
       <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-[var(--color-text-tertiary)]">
@@ -246,6 +273,18 @@ function AdvancedFields({ adv, onChange, onPickMmproj }: { adv: AdvancedConfig; 
           <Input value={adv.mmprojPath} onChange={(e) => onChange('mmprojPath', e.target.value)} placeholder="纯文本对话（不看图）" className="flex-1" />
           <Button size="sm" variant="ghost" onClick={onPickMmproj}>选择文件</Button>
         </div>
+      </FieldRow>
+      <FieldRow label="长对话 KV 复用" hint="跳过每轮重复计算的历史前缀（--cache-reuse），Claude Code 这种长会话快很多。默认开启，遇到异常再关">
+        <Switch checked={adv.cacheReuse} onChange={(v) => onChange('cacheReuse', v)} label="长对话 KV 复用" labelHidden />
+      </FieldRow>
+      <FieldRow label="草稿模型（投机解码）" hint="进阶：选一个同家族更小的模型（如 0.6B 草稿配 8B 主模型），生成可提速 1.5~3 倍。不熟就留空">
+        <div className="flex items-center gap-2">
+          <Input value={adv.draftModelPath} onChange={(e) => onChange('draftModelPath', e.target.value)} placeholder="不使用投机解码" className="flex-1" />
+          <Button size="sm" variant="ghost" onClick={onPickDraft}>选择文件</Button>
+        </div>
+      </FieldRow>
+      <FieldRow label="MoE 专家权重 CPU 层数" hint="小显存跑 MoE 模型（名字带 A3B 之类）专用：填层数让专家权重留在内存。普通模型留空">
+        <Input value={adv.nCpuMoe} onChange={(e) => onChange('nCpuMoe', e.target.value)} placeholder="普通模型留空" />
       </FieldRow>
       <FieldRow label="上下文窗口" hint="模型能记住的对话长度，越大越占内存">
         <Input type="number" value={adv.ctxSize} onChange={(e) => onChange('ctxSize', e.target.value)} min={16000} max={1000000} />
@@ -308,6 +347,7 @@ export function LocalModelSettings() {
     modelPath: null,
     error: null,
     logTail: '',
+    gpuSplit: null,
   })
   const [busy, setBusy] = useState(false)
 
@@ -401,6 +441,14 @@ export function LocalModelSettings() {
     if (typeof result === 'string') setDraftAdv((a) => ({ ...a, mmprojPath: result }))
   }
 
+  const pickDraftModelFile = async (field: 'draftModelPath') => {
+    const result = await host.dialogs.open({
+      title: '选择草稿模型（小参数 GGUF）',
+      filters: [{ name: 'GGUF', extensions: ['gguf'] }],
+    })
+    if (typeof result === 'string') setDraftAdv((a) => ({ ...a, [field]: result }))
+  }
+
   const saveConfig = () => {
     const name = draftName.trim()
     if (!name || !draftModelPath.trim()) return
@@ -475,18 +523,21 @@ export function LocalModelSettings() {
     const recommended = benchmarkOutput.recommendedStep ?? benchmarkOutput.steps[benchmarkOutput.steps.length - 1]
     if (!recommended) return
     const speed = recommended.tgTokensPerSec
-    // 跑分标注了 GPU 降级（note 非空）说明 KV 缓存会落在内存里，按内存预算规划
-    const ctx = plannedContext ?? 32768
+    // 与跑分实测一致：推荐档的线程/GPU 层数；KV 类型按规划（装不下 f16 自动换 q8_0）；
+    // Flash Attention 只在 GPU 路径有意义
+    const ctx = plannedContext?.ctx ?? 32768
+    const kvType = plannedContext?.kvType ?? 'f16'
     const modeLabel = benchmarkOutput.mode === 'gpu' ? 'GPU 全量' : benchmarkOutput.mode === 'hybrid' ? 'GPU+CPU 混合' : '纯 CPU'
     const entry: LocalModelConfig = {
       id: `${Date.now()}`,
       name: `${modelNameFromPath(benchmarkModelPath)} · ${modeLabel} · ${Math.round(ctx / 1024)}K · ${Math.round(speed)}t/s`,
       modelPath: benchmarkModelPath,
-      // 与跑分实测一致：推荐档的线程/GPU 层数；Flash Attention 只在 GPU 路径有意义
       ...hardwareStartPoint(hardware),
       ctxSize: String(ctx),
       threads: String(recommended.threads),
       nGpuLayers: recommended.ngl,
+      cacheTypeK: kvType,
+      cacheTypeV: kvType,
       flashAttn: benchmarkOutput.mode !== 'cpu',
     }
     const next = [...configs, entry]
@@ -540,6 +591,9 @@ export function LocalModelSettings() {
         maxPredict: parseInt(currentConfig.maxPredict, 10),
         engineDir: currentConfig.engineDir?.trim() || undefined,
         mmprojPath: currentConfig.mmprojPath?.trim() || undefined,
+        cacheReuse: currentConfig.cacheReuse,
+        draftModelPath: currentConfig.draftModelPath?.trim() || undefined,
+        nCpuMoe: currentConfig.nCpuMoe?.trim() || undefined,
       })
       setStatus(next)
       if (next.state === 'running' && next.port !== null) {
@@ -607,7 +661,7 @@ export function LocalModelSettings() {
               ? '检测到独立显卡，引擎会实测确认可用后再用 GPU，跑不动自动退回纯 CPU。'
               : '无独立显卡，纯 CPU 运行。'}
             {plannedContext !== null
-              ? ` · 按内存规划的上下文：${Math.round(plannedContext / 1024)}K`
+              ? ` · 按内存规划的上下文：${Math.round(plannedContext.ctx / 1024)}K${plannedContext.kvType === 'q8_0' ? '（q8_0 KV）' : ''}`
               : ' · 点「跑分」实测这台机器跑当前模型的真实速度'}
             {benchmarkOutput && benchmarkOutput.modelParamsB !== null
               ? ` · 当前模型实测：${benchmarkOutput.modelParamsB.toFixed(2)}B 参数，生成 ${Math.round(benchmarkOutput.maxTgTokensPerSec)} t/s`
@@ -684,6 +738,8 @@ export function LocalModelSettings() {
           </span>
           <span className="text-[12px] text-[var(--color-text-tertiary)]">
             {currentConfig ? `方案：${currentConfig.name}` : '未选择方案'}
+            {status.state === 'running' && status.gpuSplit && status.gpuSplit.split('/')[0] !== '0' && ` · GPU 分层 ${status.gpuSplit}`}
+            {status.state === 'running' && (!status.gpuSplit || status.gpuSplit.split('/')[0] === '0') && ' · 纯 CPU'}
             {status.port !== null && status.state === 'running' && ` · 127.0.0.1:${status.port}`}
           </span>
           <div className="ml-auto flex items-center gap-2">
@@ -762,7 +818,12 @@ export function LocalModelSettings() {
             </button>
             {draftShowAdvanced && (
               <div className="mt-4">
-                <AdvancedFields adv={draftAdv} onChange={(key, value) => setDraftAdv((a) => ({ ...a, [key]: value }))} onPickMmproj={() => void pickDraftMmproj()} />
+                <AdvancedFields
+                  adv={draftAdv}
+                  onChange={(key, value) => setDraftAdv((a) => ({ ...a, [key]: value }))}
+                  onPickMmproj={() => void pickDraftMmproj()}
+                  onPickDraft={() => void pickDraftModelFile('draftModelPath')}
+                />
               </div>
             )}
           </div>
@@ -947,9 +1008,11 @@ export function LocalModelSettings() {
                 {plannedContext !== null && (
                   <>
                     {'点「应用方案」将按你的内存规划 '}
-                    <span className="font-semibold text-[var(--color-text-secondary)]">{Math.round(plannedContext / 1024)}K</span>
+                    <span className="font-semibold text-[var(--color-text-secondary)]">{Math.round(plannedContext.ctx / 1024)}K</span>
                     {' 上下文'}
-                    {plannedContext < 32768 ? '（不足 32K，Claude Code 真实负载可能放不下，建议换更小的模型）' : ''}。
+                    {plannedContext.kvType === 'q8_0' ? '（q8_0 KV 缓存）' : ''}
+                    {plannedContext.ctx < 32768 ? '（不足 32K，Claude Code 真实负载可能放不下，建议换更小的模型）' : ''}。
+                    {plannedContext.note && ` ${plannedContext.note}`}
                   </>
                 )}
               </p>
@@ -974,6 +1037,38 @@ export function LocalModelSettings() {
           </Button>
         )}
       >
+        {/* 精选模型清单（静态数据随应用打包，不连服务器；链接失效按名字去站点搜） */}
+        <div className="mb-5">
+          <div className="mb-2 flex items-baseline justify-between gap-2">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-[var(--color-text-tertiary)]">
+              精选模型（按这台机器的能力标注）
+            </div>
+            <div className="text-[11px] text-[var(--color-text-tertiary)]">认准 Q4_K_M 量化；链接失效就去站点搜名字</div>
+          </div>
+          <div className="space-y-2">
+            {LOCAL_MODEL_CATALOG.map((entry) => (
+              <div key={entry.name} className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[13.5px] font-semibold text-[var(--color-text-primary)]">{entry.name}</span>
+                  <span className="inline-flex shrink-0 items-center rounded-full bg-[var(--color-brand-soft)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-secondary)]">
+                    {CAPABILITY_LABELS[entry.capability]}
+                  </span>
+                  <span className="text-[11px] text-[var(--color-text-tertiary)]">{entry.params} · {entry.sizeGB}</span>
+                </div>
+                <p className="mt-1 text-[11.5px] leading-4 text-[var(--color-text-tertiary)]">{entry.note}</p>
+                <div className="mt-2 flex gap-2">
+                  <Button size="sm" variant="ghost" onClick={() => void host.shell.open(entry.huggingFace)} icon={<span className="material-symbols-outlined text-[15px]">open_in_new</span>}>
+                    Hugging Face
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => void host.shell.open(entry.modelScope)} icon={<span className="material-symbols-outlined text-[15px]">open_in_new</span>}>
+                    ModelScope（国内快）
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
         {/* 下载源网站 */}
         <div className="mb-5">
           <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.15em] text-[var(--color-text-tertiary)]">

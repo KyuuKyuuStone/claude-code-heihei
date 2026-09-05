@@ -77,7 +77,7 @@ const terminalSessionId: Validator = value =>
 
 const localModelStart: Validator = value =>
   isRecord(value)
-  && hasOnlyKeys(value, ['modelPath', 'ctxSize', 'threads', 'nGpuLayers', 'batchSize', 'cacheTypeK', 'cacheTypeV', 'flashAttn', 'temperature', 'topK', 'topP', 'minP', 'repeatPenalty', 'maxPredict', 'engineDir', 'mmprojPath'])
+  && hasOnlyKeys(value, ['modelPath', 'ctxSize', 'threads', 'nGpuLayers', 'batchSize', 'cacheTypeK', 'cacheTypeV', 'flashAttn', 'temperature', 'topK', 'topP', 'minP', 'repeatPenalty', 'maxPredict', 'engineDir', 'mmprojPath', 'cacheReuse', 'draftModelPath', 'nCpuMoe'])
   && typeof value.modelPath === 'string'
   && value.modelPath.length > 0
   && value.modelPath.length <= 4096
@@ -105,6 +105,9 @@ const localModelStart: Validator = value =>
   && (value.maxPredict === undefined || typeof value.maxPredict === 'number')
   && (value.engineDir === undefined || (typeof value.engineDir === 'string' && value.engineDir.length <= 4096 && !value.engineDir.includes('\0')))
   && (value.mmprojPath === undefined || (typeof value.mmprojPath === 'string' && value.mmprojPath.length <= 4096 && !value.mmprojPath.includes('\0')))
+  && (value.cacheReuse === undefined || typeof value.cacheReuse === 'boolean')
+  && (value.draftModelPath === undefined || (typeof value.draftModelPath === 'string' && value.draftModelPath.length <= 4096 && !value.draftModelPath.includes('\0')))
+  && (value.nCpuMoe === undefined || (typeof value.nCpuMoe === 'string' && value.nCpuMoe.length <= 16))
 
 const localModelBenchmark: Validator = value =>
   isRecord(value)

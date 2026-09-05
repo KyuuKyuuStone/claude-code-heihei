@@ -141,6 +141,12 @@ export type LocalModelStartInput = {
   engineDir?: string
   /** 多模态投影文件（mmproj），配了视觉模型才能看图；留空纯文本 */
   mmprojPath?: string
+  /** 复用未变化前缀的 KV 缓存（--cache-reuse），长对话更快 */
+  cacheReuse?: boolean
+  /** 投机解码草稿模型（--model-draft） */
+  draftModelPath?: string
+  /** MoE 专家权重放 CPU 的层数（--n-cpu-moe），小显存跑 MoE 模型用 */
+  nCpuMoe?: string
 }
 
 export type LocalModelStatus = {
@@ -149,6 +155,8 @@ export type LocalModelStatus = {
   modelPath: string | null
   error: string | null
   logTail: string
+  /** 从引擎日志解析的实际 GPU 分层，如 "33/37"；纯 CPU 或未解析到为 null */
+  gpuSplit: string | null
 }
 
 export type LocalModelHardware = {
