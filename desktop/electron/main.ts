@@ -270,8 +270,17 @@ function getLocalModelService() {
  * So before handing a GPU request to the Vulkan build, run one tiny real
  * inference via llama-bench; if it cannot complete, fall back to the CPU
  * binary with `--n-gpu-layers 0` and tell the user in the engine log.
+ *
+ * A custom engineDir (user-supplied CUDA build from llama.cpp releases) is
+ * used as-is: the user explicitly chose it, so no probing and no fallback.
  */
 async function startLocalModelWithGpuGuard(input: LocalModelStartInput) {
+  const customExe = input.engineDir
+    ? path.join(input.engineDir, 'llama-server.exe')
+    : null
+  if (customExe) {
+    return getLocalModelService().start(input, customExe)
+  }
   const cpuExe = resolveLlamaServerExecutable(unpackedRoot())
   const vulkanExe = resolveVulkanExecutable(unpackedRoot())
   const wantsGpu = input.nGpuLayers !== '0'

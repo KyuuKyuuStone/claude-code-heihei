@@ -74,8 +74,9 @@ export type BenchmarkProgressHandler = (progress: BenchmarkProgress) => void
 
 const BENCH_PROMPT_TOKENS = 128
 const BENCH_GEN_TOKENS = 64
-const BENCH_REPS = 1
-const BENCH_TIMEOUT_MS = 90_000
+/** 每档跑 2 次取平均——单次测量波动能到 ±20%（缓存/调度运气），一次定档不稳 */
+const BENCH_REPS = 2
+const BENCH_TIMEOUT_MS = 180_000
 /** 探测 GPU 能不能真跑——用最小工作量，快 */
 const PROBE_TIMEOUT_MS = 30_000
 
@@ -174,22 +175,24 @@ export function kvBytesPerToken(meta: GgufMeta): number | null {
 type BenchParse = { tg: number; pp: number; paramsB: number | null; sizeMB: number | null; error: string | null; crashed?: boolean }
 
 function parseBenchOutput(output: string): BenchParse {
-  let tg = 0
-  let pp = 0
+  // -r 2 时每个档位输出多行（每 rep 一行），全部收集求平均降噪
+  const tgValues: number[] = []
+  const ppValues: number[] = []
   for (const line of output.split(/\r?\n/)) {
     // tg/pp 行可能是 `tg128` 或带深度的 `tg128 @ d32768`，都认
     const tgMatch = /\btg\d+(?:\s*@\s*d\d+)?\s*\|\s*([\d.]+)/.exec(line)
-    if (tgMatch?.[1]) tg = parseFloat(tgMatch[1])
+    if (tgMatch?.[1]) tgValues.push(parseFloat(tgMatch[1]))
     const ppMatch = /\bpp\d+(?:\s*@\s*d\d+)?\s*\|\s*([\d.]+)/.exec(line)
-    if (ppMatch?.[1]) pp = parseFloat(ppMatch[1])
+    if (ppMatch?.[1]) ppValues.push(parseFloat(ppMatch[1]))
   }
+  const avg = (values: number[]) => (values.length > 0 ? values.reduce((a, b) => a + b, 0) / values.length : 0)
   // 兼容 MiB 和 GiB 两种体积格式（小模型 MiB、大模型 GiB）
   const paramsMatch = /\|\s*([\d.]+)\s*(MiB|GiB)\s*\|\s*([\d.]+)\s*([MB])\s*\|/.exec(output)
   const sizeValue = paramsMatch?.[1] ? parseFloat(paramsMatch[1]) : null
   const sizeUnit = paramsMatch?.[2]
   return {
-    tg,
-    pp,
+    tg: avg(tgValues),
+    pp: avg(ppValues),
     paramsB: paramsMatch?.[3] ? (paramsMatch[4] === 'B' ? parseFloat(paramsMatch[3]) : parseFloat(paramsMatch[3]) / 1000) : null,
     sizeMB: sizeValue !== null ? (sizeUnit === 'GiB' ? sizeValue * 1024 : sizeValue) : null,
     error: null,

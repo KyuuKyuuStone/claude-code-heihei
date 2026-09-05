@@ -6,7 +6,7 @@ import { Spinner } from '@/components/ui/Spinner'
 import { Switch } from '@/components/ui/Switch'
 import { StatusDot } from '@/components/ui/Badge'
 import { Modal } from '@/components/ui/Modal'
-import { SettingsPageHeader, SettingsSection, SettingsPill, SettingsStat } from '@/components/settings/SettingsSection'
+import { SettingsPageHeader, SettingsSection, SettingsStat } from '@/components/settings/SettingsSection'
 import { getDesktopHost } from '../lib/desktopHost'
 import { useTranslation } from '../i18n'
 import type {
@@ -48,62 +48,6 @@ const GGUF_DOWNLOAD_SITES = [
 const CONFIGS_STORAGE_KEY = 'cc-heihei-local-model-configs'
 const CURRENT_CONFIG_STORAGE_KEY = 'cc-heihei-local-model-current'
 
-export type LocalModelTier = 'low' | 'mid' | 'high' | 'super' | 'emperor'
-
-type TierConfig = {
-  label: string
-  ctxSize: number
-  threads: number
-  nGpuLayers: string
-  batchSize: number
-  hint: string
-}
-
-const TIER_CONFIGS: Record<LocalModelTier, TierConfig> = {
-  low: {
-    label: '低配',
-    ctxSize: 16384,
-    threads: 4,
-    nGpuLayers: 'auto',
-    batchSize: 512,
-    hint: '资源占用最低，纯 CPU 为主',
-  },
-  mid: {
-    label: '中配',
-    ctxSize: 32768,
-    threads: 4,
-    nGpuLayers: 'auto',
-    batchSize: 1024,
-    hint: 'GPU+CPU 混合，均衡取向',
-  },
-  high: {
-    label: '高配',
-    ctxSize: 65536,
-    threads: 8,
-    nGpuLayers: 'auto',
-    batchSize: 2048,
-    hint: 'GPU 为主，速度优先',
-  },
-  super: {
-    label: '超级',
-    ctxSize: 131072,
-    threads: 8,
-    nGpuLayers: 'auto',
-    batchSize: 2048,
-    hint: '大显存取向，适合更大模型',
-  },
-  emperor: {
-    label: '帝王',
-    ctxSize: 262144,
-    threads: 16,
-    nGpuLayers: 'all',
-    batchSize: 4096,
-    hint: '极限配置，榨干硬件',
-  },
-}
-
-const TIER_ORDER: LocalModelTier[] = ['low', 'mid', 'high', 'super', 'emperor']
-
 const STATE_DOT_TONE = {
   stopped: 'neutral',
   starting: 'info',
@@ -125,14 +69,15 @@ type AdvancedConfig = {
   minP: string
   repeatPenalty: string
   maxPredict: string
+  /** 自定义引擎目录（如官方 CUDA 版 llama.cpp），留空用内置引擎 */
+  engineDir: string
 }
 
-/** 一套完整的本地模型配置方案：模型文件 + 档位 + 全部参数 */
+/** 一套完整的本地模型配置方案：模型文件 + 全部参数 */
 export type LocalModelConfig = AdvancedConfig & {
   id: string
   name: string
   modelPath: string
-  tier: LocalModelTier
 }
 
 const DEFAULT_ADVANCED: AdvancedConfig = {
@@ -149,6 +94,7 @@ const DEFAULT_ADVANCED: AdvancedConfig = {
   minP: '0.05',
   repeatPenalty: '1.0',
   maxPredict: '-1',
+  engineDir: '',
 }
 
 function parsePositiveInt(value: string, fallback: number): number {
@@ -166,23 +112,51 @@ function modelNameFromPath(modelPath: string): string {
   return base.replace(/\.gguf$/i, '') || 'local-model'
 }
 
-function recommendTier(hw: LocalModelHardware): LocalModelTier {
-  const memGB = hw.memoryGB
-  const vramGB = hw.gpu ? hw.gpu.vramMB / 1024 : 0
-  if (memGB >= 64 || vramGB >= 24) return 'emperor'
-  if (memGB >= 32 || vramGB >= 12) return 'super'
-  if (memGB >= 16 || vramGB >= 8) return 'high'
-  if (memGB >= 8 || vramGB >= 4) return 'mid'
-  return 'low'
+/**
+ * 从模型文件名估算能力档，管理用户预期：小模型聊天没问题，但工具调用
+ * （agentic）是另一回事——不提前说清，用户会把"模型笨"误解成"软件不行"。
+ * 文件名认不出参数规模时如实说"未知"，让跑分数据说话。
+ */
+function describeModelCapability(modelPath: string): { label: string; hint: string } {
+  const base = modelNameFromPath(modelPath)
+  const name = base.toLowerCase()
+  // 去掉量化标签（Q4_K_M / IQ3_XS 等）再认参数规模
+  const cleaned = base.replace(/-?q\d[_a-z0-9]*|-?iq\d[_a-z0-9]*/gi, '')
+  const paramsMatch = /(\d+(?:\.\d+)?)\s*[eE]?[bB](?![a-zA-Z])/.exec(cleaned)
+  const paramsB = paramsMatch?.[1] ? parseFloat(paramsMatch[1]) : null
+
+  let label: string
+  let hint: string
+  if (paramsB === null) {
+    label = '能力未知'
+    hint = '没从文件名认出参数规模，请以跑分实测为准'
+  } else if (paramsB < 4) {
+    label = '适合聊天 · 轻任务'
+    hint = '日常问答够用，复杂工具调用容易翻车'
+  } else if (paramsB < 14) {
+    label = /coder|code/.test(name) ? '能扛工具调用' : '可尝试工具调用'
+    hint = /coder|code/.test(name)
+      ? '代码/工具调用方向的小钢炮'
+      : '简单工具任务可以，多步任务不要太指望'
+  } else {
+    label = '能扛工具调用'
+    hint = '参数够大，工具调用和多步任务比较稳'
+  }
+  // 多模态家族：本地看图需要 mmproj 投影文件，没配就是"看不见图"
+  if (/-vl|vision|llava|minicpm-v|gemma-3n|\d+e\d+b/i.test(base)) {
+    hint += '；疑似多模态模型，本地看图需要配套 mmproj 投影文件，否则看不见图片'
+  }
+  return { label, hint }
 }
 
-/** 实测生成速度 → 档位（跑出来的，不是写死的） */
-function tierBySpeed(tgTokensPerSec: number): LocalModelTier {
-  if (tgTokensPerSec >= 100) return 'emperor'
-  if (tgTokensPerSec >= 60) return 'super'
-  if (tgTokensPerSec >= 35) return 'high'
-  if (tgTokensPerSec >= 15) return 'mid'
-  return 'low'
+/** 按当前硬件给新建方案的参数起点（67% 线程甜点比例；无独显直接纯 CPU） */
+function hardwareStartPoint(hardware: LocalModelHardware | null): AdvancedConfig {
+  const cores = hardware?.cpuCores ?? 4
+  return {
+    ...DEFAULT_ADVANCED,
+    threads: String(Math.max(1, Math.round(cores * 0.67))),
+    nGpuLayers: hardware?.gpu ? 'auto' : '0',
+  }
 }
 
 /**
@@ -261,6 +235,9 @@ function AdvancedFields({ adv, onChange }: { adv: AdvancedConfig; onChange: <K e
       <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-[var(--color-text-tertiary)]">
         引擎参数（改完需重启引擎生效）
       </div>
+      <FieldRow label="引擎目录" hint="留空用内置引擎。NVIDIA 显卡可从 llama.cpp 官方 Releases 下载 CUDA 版（见「下载模型」里的指引），填其解压目录">
+        <Input value={adv.engineDir} onChange={(e) => onChange('engineDir', e.target.value)} placeholder="默认内置引擎" />
+      </FieldRow>
       <FieldRow label="上下文窗口" hint="模型能记住的对话长度，越大越占内存">
         <Input type="number" value={adv.ctxSize} onChange={(e) => onChange('ctxSize', e.target.value)} min={16000} max={1000000} />
       </FieldRow>
@@ -330,7 +307,6 @@ export function LocalModelSettings() {
   const [editingConfigId, setEditingConfigId] = useState<string | null>(null)
   const [draftName, setDraftName] = useState('')
   const [draftModelPath, setDraftModelPath] = useState('')
-  const [draftTier, setDraftTier] = useState<LocalModelTier>('mid')
   const [draftAdv, setDraftAdv] = useState<AdvancedConfig>({ ...DEFAULT_ADVANCED })
   const [draftShowAdvanced, setDraftShowAdvanced] = useState(false)
 
@@ -359,7 +335,7 @@ export function LocalModelSettings() {
   const contextBudgetGB = benchmarkOutput
     ? (benchmarkOutput.contextFit.gpuUsable
         ? benchmarkOutput.contextFit.availableVramGB * 0.9
-        : benchmarkOutput.contextFit.availableRamGB * 0.55)
+        : benchmarkOutput.contextFit.availableRamGB * 0.67)
     : null
 
   const currentConfig = useMemo(
@@ -367,7 +343,6 @@ export function LocalModelSettings() {
     [configs, currentConfigId],
   )
   const running = status.state === 'starting' || status.state === 'running'
-  const recommendedTier = hardware ? recommendTier(hardware) : null
 
   useEffect(() => {
     setConfigs(loadConfigs())
@@ -386,8 +361,7 @@ export function LocalModelSettings() {
     setEditingConfigId(null)
     setDraftName('')
     setDraftModelPath('')
-    setDraftTier(hardware ? recommendTier(hardware) : 'mid')
-    setDraftAdv({ ...DEFAULT_ADVANCED })
+    setDraftAdv(hardwareStartPoint(hardware))
     setDraftShowAdvanced(false)
     setShowConfigModal(true)
   }
@@ -396,23 +370,10 @@ export function LocalModelSettings() {
     setEditingConfigId(config.id)
     setDraftName(config.name)
     setDraftModelPath(config.modelPath)
-    setDraftTier(config.tier)
-    const { id: _id, name: _name, modelPath: _m, tier: _t, ...adv } = config
+    const { id: _id, name: _name, modelPath: _m, ...adv } = config
     setDraftAdv({ ...DEFAULT_ADVANCED, ...adv })
     setDraftShowAdvanced(false)
     setShowConfigModal(true)
-  }
-
-  const selectDraftTier = (next: LocalModelTier) => {
-    setDraftTier(next)
-    const config = TIER_CONFIGS[next]
-    setDraftAdv((a) => ({
-      ...a,
-      ctxSize: String(config.ctxSize),
-      threads: String(config.threads),
-      nGpuLayers: config.nGpuLayers,
-      batchSize: String(config.batchSize),
-    }))
   }
 
   const pickDraftModel = async () => {
@@ -430,7 +391,6 @@ export function LocalModelSettings() {
       id: editingConfigId ?? `${Date.now()}`,
       name,
       modelPath: draftModelPath.trim(),
-      tier: draftTier,
       ...draftAdv,
     }
     const next = editingConfigId
@@ -498,19 +458,19 @@ export function LocalModelSettings() {
     const recommended = benchmarkOutput.recommendedStep ?? benchmarkOutput.steps[benchmarkOutput.steps.length - 1]
     if (!recommended) return
     const speed = recommended.tgTokensPerSec
-    const tier = tierBySpeed(speed)
-    const tierConfig = TIER_CONFIGS[tier]
     // 跑分标注了 GPU 降级（note 非空）说明 KV 缓存会落在内存里，按内存预算规划
     const ctx = plannedContext ?? 32768
+    const modeLabel = benchmarkOutput.mode === 'gpu' ? 'GPU 全量' : benchmarkOutput.mode === 'hybrid' ? 'GPU+CPU 混合' : '纯 CPU'
     const entry: LocalModelConfig = {
       id: `${Date.now()}`,
-      name: `${modelNameFromPath(benchmarkModelPath)} · ${tierConfig.label} · ${Math.round(ctx / 1024)}K · ${Math.round(speed)}t/s`,
+      name: `${modelNameFromPath(benchmarkModelPath)} · ${modeLabel} · ${Math.round(ctx / 1024)}K · ${Math.round(speed)}t/s`,
       modelPath: benchmarkModelPath,
-      tier,
-      ...DEFAULT_ADVANCED,
+      // 与跑分实测一致：推荐档的线程/GPU 层数；Flash Attention 只在 GPU 路径有意义
+      ...hardwareStartPoint(hardware),
       ctxSize: String(ctx),
       threads: String(recommended.threads),
       nGpuLayers: recommended.ngl,
+      flashAttn: benchmarkOutput.mode !== 'cpu',
     }
     const next = [...configs, entry]
     setConfigs(next)
@@ -561,6 +521,7 @@ export function LocalModelSettings() {
         minP: parseFloatOr(currentConfig.minP, 0.05),
         repeatPenalty: parseFloatOr(currentConfig.repeatPenalty, 1.0),
         maxPredict: parseInt(currentConfig.maxPredict, 10),
+        engineDir: currentConfig.engineDir?.trim() || undefined,
       })
       setStatus(next)
       if (next.state === 'running' && next.port !== null) {
@@ -624,7 +585,9 @@ export function LocalModelSettings() {
               : <SettingsStat label="显卡" value="无独显" hint="纯 CPU 运行" />}
           </div>
           <div className="mt-4 border-t border-[var(--color-border)] pt-4 text-[13px] leading-6 text-[var(--color-text-secondary)]">
-            按您的硬件推荐「<span className="font-semibold text-[var(--color-text-primary)]">{recommendedTier ? TIER_CONFIGS[recommendedTier].label : '—'}</span>」档
+            {hardware?.gpu
+              ? '检测到独立显卡，引擎会实测确认可用后再用 GPU，跑不动自动退回纯 CPU。'
+              : '无独立显卡，纯 CPU 运行。'}
             {plannedContext !== null
               ? ` · 按内存规划的上下文：${Math.round(plannedContext / 1024)}K`
               : ' · 点「跑分」实测这台机器跑当前模型的真实速度'}
@@ -637,7 +600,7 @@ export function LocalModelSettings() {
 
       <SettingsSection
         title="配置方案"
-        description="一套方案 = 模型文件 + 配置档位（按硬件推测）+ 细节参数"
+        description="一套方案 = 模型文件 + 参数。参数起点按硬件自动填，跑分后一键应用实测最优值"
         action={(
           <Button size="base" onClick={openNewConfigModal} icon={<span className="material-symbols-outlined text-[16px]">add</span>}>
             新建方案
@@ -666,8 +629,13 @@ export function LocalModelSettings() {
                         </span>
                       )}
                     </div>
-                    <div className="mt-0.5 truncate text-[11.5px] text-[var(--color-text-tertiary)]">
-                      {modelNameFromPath(config.modelPath)} · {TIER_CONFIGS[config.tier]?.label ?? ''} · 上下文 {Math.round(parsePositiveInt(config.ctxSize, 32768) / 1024)}K
+                    <div className="mt-0.5 flex items-center gap-2 truncate text-[11.5px] text-[var(--color-text-tertiary)]">
+                      <span className="truncate">
+                        {modelNameFromPath(config.modelPath)} · 上下文 {Math.round(parsePositiveInt(config.ctxSize, 32768) / 1024)}K · {config.threads} 线程
+                      </span>
+                      <span className="inline-flex shrink-0 items-center rounded-full bg-[var(--color-surface-container-high)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-text-secondary)]">
+                        {describeModelCapability(config.modelPath).label}
+                      </span>
                     </div>
                   </div>
                   <button className="text-xs text-[var(--color-text-accent)] hover:underline" onClick={() => applyConfig(config)} type="button" disabled={isActive}>
@@ -685,7 +653,7 @@ export function LocalModelSettings() {
           </div>
         ) : (
           <p className="text-[12px] text-[var(--color-text-tertiary)]">
-            还没有保存的方案。点「新建方案」建一套（选模型文件 + 配置档位 + 细节参数），保存后点「应用」即可启用。
+            还没有保存的方案。点「新建方案」建一套（选模型文件，参数起点自动按硬件填好），保存后点「应用」即可启用。
           </p>
         )}
       </SettingsSection>
@@ -697,7 +665,7 @@ export function LocalModelSettings() {
             {t(`settings.localModel.state.${status.state}`)}
           </span>
           <span className="text-[12px] text-[var(--color-text-tertiary)]">
-            {currentConfig ? `方案：${currentConfig.name} · ${TIER_CONFIGS[currentConfig.tier]?.label ?? ''}` : '未选择方案'}
+            {currentConfig ? `方案：${currentConfig.name}` : '未选择方案'}
             {status.port !== null && status.state === 'running' && ` · 127.0.0.1:${status.port}`}
           </span>
           <div className="ml-auto flex items-center gap-2">
@@ -752,25 +720,15 @@ export function LocalModelSettings() {
               </Button>
             </div>
           </FieldRow>
-          <div>
-            <div className="mb-2 text-[13px] font-medium text-[var(--color-text-secondary)]">
-              配置档位
-              {hardware && (
-                <span className="ml-2 text-[11px] font-normal text-[var(--color-text-tertiary)]">
-                  （根据当前电脑推测：{TIER_CONFIGS[recommendTier(hardware)].label}）
-                </span>
-              )}
+          {draftModelPath.trim() && (
+            <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3 text-[12.5px] leading-5">
+              <span className="font-semibold text-[var(--color-text-primary)]">{describeModelCapability(draftModelPath).label}</span>
+              <span className="text-[var(--color-text-tertiary)]">——{describeModelCapability(draftModelPath).hint}</span>
             </div>
-            <div className="flex flex-wrap gap-2">
-              {TIER_ORDER.map((key) => (
-                <SettingsPill key={key} selected={draftTier === key} onClick={() => selectDraftTier(key)}>
-                  {TIER_CONFIGS[key].label}
-                </SettingsPill>
-              ))}
-            </div>
-            <p className="mt-2 text-[11.5px] text-[var(--color-text-tertiary)]">
-              {TIER_CONFIGS[draftTier].hint} · 上下文 {Math.round(TIER_CONFIGS[draftTier].ctxSize / 1024)}K · {TIER_CONFIGS[draftTier].threads} 线程
-            </p>
+          )}
+          <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3 text-[12.5px] leading-5 text-[var(--color-text-secondary)]">
+            已按当前硬件填好参数起点：{hardware ? `${Math.max(1, Math.round(hardware.cpuCores * 0.67))} 线程（67% 甜点比例）` : '默认参数'}、{hardware?.gpu ? 'GPU 自动分配' : '纯 CPU'}、32K 上下文。
+            想要更准的配置，保存后点 <span className="font-medium text-[var(--color-text-primary)]">跑分</span>，实测结果一键应用到方案。
           </div>
 
           <div className="border-t border-[var(--color-border)] pt-4">
@@ -890,6 +848,28 @@ export function LocalModelSettings() {
                 · 长文输入 {Math.round(benchmarkOutput.ppTokensPerSec)} t/s
               </p>
             )}
+            {(() => {
+              const capability = describeModelCapability(benchmarkModelPath)
+              return (
+                <p className="mb-2 text-[12px] text-[var(--color-text-tertiary)]">
+                  能力档：<span className="font-semibold text-[var(--color-text-secondary)]">{capability.label}</span>——{capability.hint}
+                </p>
+              )
+            })()}
+            {(() => {
+              const pp = benchmarkOutput.ppTokensPerSec
+              if (pp <= 0) return null
+              // Claude Code 真实负载的系统提示词 + 工具定义约 30K tokens，首字延迟由它决定
+              const seconds = 30000 / pp
+              const text = seconds >= 90 ? `约 ${Math.round(seconds / 60)} 分钟` : `约 ${Math.round(seconds)} 秒`
+              return (
+                <div className="mb-3 rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[var(--color-surface-container-low)] px-4 py-3 text-[12.5px] leading-5" role="status">
+                  <span className="font-semibold">首字延迟预估：{text}</span>
+                  ——Claude Code 每次请求带约 30K tokens 提示词（系统提示 + 工具定义），按长文输入 {Math.round(pp)} t/s 实测推算。
+                  {benchmarkOutput.mode === 'cpu' && ' 这是纯 CPU 的主要瓶颈；续轮对话引擎会复用已算过的 KV 缓存、只处理新增内容，会快很多。'}
+                </div>
+              )
+            })()}
             {benchmarkOutput.contextFit.kvCacheGB !== null && contextBudgetGB !== null && (
               <div className={`mb-3 rounded-[var(--radius-md)] border px-4 py-3 text-[12.5px] leading-5 ${benchmarkOutput.contextFit.fits ? 'border-[var(--color-border)] bg-[var(--color-surface-container-low)]' : 'border-[var(--color-warning)] bg-[var(--color-surface-container-low)]'}`}>
                 {benchmarkOutput.contextFit.gpuUsable
@@ -1005,6 +985,30 @@ export function LocalModelSettings() {
           </div>
         </div>
 
+        {/* NVIDIA CUDA 引擎指引（官方下载，不随应用打包——体积 1GB+） */}
+        <div className="mb-5 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.15em] text-[var(--color-text-tertiary)]">
+            NVIDIA 显卡加速（可选，CUDA 版引擎）
+          </div>
+          <p className="mb-2 text-[12.5px] leading-5 text-[var(--color-text-secondary)]">
+            有 NVIDIA 显卡且跑分显示 GPU 可用时，CUDA 版引擎比内置 Vulkan 版更快。体积较大（约 1 GB+），不随应用打包，请从官方下载：
+          </p>
+          <ol className="list-decimal space-y-1.5 pl-5 text-[12.5px] leading-5 text-[var(--color-text-secondary)]">
+            <li>打开 llama.cpp 官方 Releases 页，找名字形如 <code className="rounded bg-[var(--color-surface-container-high)] px-1 text-[11px]">llama-xxxx-bin-win-cuda-x64.zip</code> 的最新版，下载并解压。</li>
+            <li>回到「本地模型」，新建或修改方案，在「细节参数 → 引擎目录」填入解压出来的文件夹路径。</li>
+            <li>照常启动即可——应用会用你指定的引擎；删掉该路径随时回到内置引擎。</li>
+          </ol>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="mt-2"
+            onClick={() => void host.shell.open('https://github.com/ggml-org/llama.cpp/releases')}
+            icon={<span className="material-symbols-outlined text-[15px]">open_in_new</span>}
+          >
+            打开 llama.cpp Releases
+          </Button>
+        </div>
+
         {/* 使用大模型说明 */}
         <div className="mb-5 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
           <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.15em] text-[var(--color-text-tertiary)]">
@@ -1012,8 +1016,8 @@ export function LocalModelSettings() {
           </div>
           <ol className="list-decimal space-y-1.5 pl-5 text-[12.5px] leading-5 text-[var(--color-text-secondary)]">
             <li>去上面任一网站找到模型文件的 <span className="font-medium text-[var(--color-text-primary)]">GGUF 量化版</span>（如 <code className="rounded bg-[var(--color-surface-container-high)] px-1 text-[11px]">*Q4_K_M.gguf</code>），下载到本地文件夹。</li>
-            <li>回到「本地模型」点 <span className="font-medium text-[var(--color-text-primary)]">新建方案</span>，在「模型文件」里选中刚下载的 .gguf 文件。</li>
-            <li>按你的硬件挑一个配置档位（低配/中配/高配/超级/帝王），也可以点 <span className="font-medium text-[var(--color-text-primary)]">跑分</span> 让程序实测出最优配置。</li>
+            <li>回到「本地模型」点 <span className="font-medium text-[var(--color-text-primary)]">新建方案</span>，在「模型文件」里选中刚下载的 .gguf 文件——参数起点会按你的硬件自动填好。</li>
+            <li>点 <span className="font-medium text-[var(--color-text-primary)]">跑分</span> 让程序实测出这台机器的最优配置，一键应用到方案。</li>
             <li>保存方案后点 <span className="font-medium text-[var(--color-text-primary)]">应用</span>，再点 <span className="font-medium text-[var(--color-text-primary)]">启动</span> 让引擎跑起来。</li>
             <li>到对话输入框左下角切换成「本地模型」，即可离线使用。</li>
           </ol>

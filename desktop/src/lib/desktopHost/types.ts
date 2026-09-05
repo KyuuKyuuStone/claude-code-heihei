@@ -137,6 +137,8 @@ export type LocalModelStartInput = {
   minP?: number
   repeatPenalty?: number
   maxPredict?: number
+  /** 自定义引擎目录（如官方 CUDA 版），留空用内置引擎 */
+  engineDir?: string
 }
 
 export type LocalModelStatus = {

@@ -42,6 +42,8 @@ export type LocalModelStartInput = {
   repeatPenalty?: number
   /** Max tokens to predict (-1 = unlimited). */
   maxPredict?: number
+  /** Custom engine directory (e.g. an official CUDA build); empty = bundled engine. */
+  engineDir?: string
 }
 
 export type LocalModelState = 'stopped' | 'starting' | 'running' | 'error'
