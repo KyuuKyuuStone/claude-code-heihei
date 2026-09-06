@@ -68,7 +68,12 @@
 - 开发：`cd desktop && bun run electron:dev`
 - 打包：`cd desktop && bun run electron:build && node ./node_modules/electron-builder/out/cli/cli.js --publish never -c.directories.output=C:/xxw_p/cc-heihei-dist`
   - **输出目录必须在 ZCode 工作区外**（工作区内会被 ZCode 索引锁死 app.asar）
-- 发布：`bun run scripts/release.ts <版本号>`（会创建 commit + tag）
+- 发布：`bun run scripts/release.ts <版本号>`（改版本号 + commit + tag，**不改 package.json 之外的版本**）
+- **发版上传清单（缺一不可，漏了 latest.yml 旧版会检查不到更新）**：
+  1. `bun run scripts/release.ts x.y.z` → push main + tag
+  2. 用新版本号重新打包（脚本升版本在打包之后，先打的包文件名是旧版本）
+  3. `gh release create vX.Y.Z --title ... --notes-file release-notes/vX.Y.Z.md`
+  4. 上传三个文件：**exe + `latest.yml` + `exe.blockmap`**（后两个在打包输出目录；latest.yml 是 electron-updater 的版本元数据，blockmap 是增量更新差分）
 
 ## 交接给下一个 AI 的建议
 
