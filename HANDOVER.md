@@ -33,12 +33,13 @@
 1. 删除桌面宠物功能全部代码（桌面端；服务端 petAccessPolicy 等死代码有意保留）
 2. 本地模型大改版（见上节）+ 修复启动 ErrorDeviceLost + 跑分 IPC 校验修复确认
 3. 更新文档（docs/desktop/local-model.md、README 中英、本文件）
+4. **发布 v1.0.2**：Release 附 exe + latest.yml + blockmap（曾漏传 latest.yml 导致旧版检查不到更新，已补并写入发版清单）
 
 ## GitHub 信息
 
 - **仓库**：`https://github.com/KyuuKyuuStone/claude-code-heihei`
-- **当前版本**：`v1.0.1`（本地模型大改版未发版，重新打包后可发 v1.0.2）
-- **主分支**：`main`
+- **当前版本**：`v1.0.2`（2026-09-06 发布，Latest；v1.0.1 的安装包含跑分 IPC bug 和宠物代码，建议用户升级）
+- **主分支**：`main`（与 GitHub 完全同步，工作区干净）
 
 ## 当前状态
 
@@ -48,11 +49,11 @@
 - llama.cpp b10786（比上游 release v0.3.0 新）
 
 ### 已知问题 / 待办
-- **发版**：v1.0.1 安装包是旧代码（含跑分 IPC bug 和宠物），打包后可发 v1.0.2
 - **桌面端 vitest 有约 38 个历史失败**（generalSettings/BrandSeal/主题等，main 上就有；CI 只测 adapters+docs 所以没暴露）——改桌面代码时先跑基线对比
 - **GTX 750 机器**：GPU 加速不可用（无 fp16），跑分自动降级 CPU 是预期行为
 - **服务端宠物死代码**：`src/server/petAccessPolicy.ts`、localAccessAuth 的 pet token、desktop-ui 偏好 pet 端点、sessions.ts 的 PET_SESSION_LIMIT——桌面端已不调用，可择期清理
 - **线程 67% vs 物理核**：待找有 NVIDIA 的机器 A/B 实测
+- **本地模型的图片输入**：mmproj 支持已上线但用户尚未实测看图效果；纯 CPU 处理一张图要几分钟属预期
 
 ### 关键文件位置
 - **本地模型设置页**：`desktop/src/pages/LocalModelSettings.tsx`（能力档/上下文规划/跑分报告都在这）
@@ -93,5 +94,5 @@
 ---
 
 *交接时间：2026-09-06*
-*当前版本：v1.0.1（本地模型大改版完成，待发 v1.0.2）*
-*交接状态：本地模型策略定型（实测诚实派），代码已推 GitHub*
+*当前版本：v1.0.2（已发布，Latest）*
+*交接状态：本地模型策略定型（实测诚实派），全部工作已推 GitHub，工作区干净，可随时接手新任务*
