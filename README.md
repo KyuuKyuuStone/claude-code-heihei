@@ -66,7 +66,7 @@ Claude Code Heihei is a **Windows desktop Claude Code workspace**. It adds a **s
 
 ### Local models (new)
 
-Run **GGUF models directly on your own machine** — no internet, no API key, nothing leaves your computer. The app bundles the [llama.cpp](https://github.com/ggml-org/llama.cpp) runtime and detects your GPU (Vulkan, cross NVIDIA / AMD / Intel) to recommend a config tier. A one-click **benchmark** measures your real hardware and finds the tier that hits your target speed with the least resource use, and estimates whether a context size fits your VRAM. Perfect for modest student machines.
+Run **GGUF models directly on your own machine** — no internet, no API key, nothing leaves your computer. The app bundles the [llama.cpp](https://github.com/ggml-org/llama.cpp) runtime and supports pure CPU and GPU inference (Vulkan, cross NVIDIA / AMD / Intel). A one-click **benchmark** really probes your hardware: the GPU must survive a live inference probe (weak cards fall back to CPU automatically), 67%/100% usage tiers are measured twice each and the fastest wins. The report tells you the run mode (pure CPU / full GPU / hybrid), a first-token latency estimate, and the KV-cache bill. Config presets auto-fill from your hardware, context size is planned against your memory (falling back to q8_0 KV cache when f16 doesn't fit), vision models work with an mmproj projector, and NVIDIA users can plug in the official CUDA build. Perfect for modest student machines.
 
 ### More
 

@@ -66,7 +66,7 @@ Claude Code Heihei 是一个 **Windows 桌面端 Claude Code 工作台**。它�
 
 ### 本地大模型（新增）
 
-直接在你**自己的电脑上跑 GGUF 模型**——不联网、不要 API Key、数据不出本机。应用内置 [llama.cpp](https://github.com/ggml-org/llama.cpp) 内核，自动识别显卡（Vulkan，跨 NVIDIA / AMD / Intel）并按硬件推荐配置档位；一键**跑分**实测你的真实硬件，找到「达到目标速度、资源占用最小」的档位，并估算某个上下文大小装不装得下显存。特别适合普通学生电脑。
+直接在你**自己的电脑上跑 GGUF 模型**——不联网、不要 API Key、数据不出本机。应用内置 [llama.cpp](https://github.com/ggml-org/llama.cpp) 内核，支持纯 CPU 与 GPU（Vulkan，跨 NVIDIA / AMD / Intel）。一键**跑分**真探测你的硬件：GPU 能不能扛住实测说了算（跑不动自动退纯 CPU）、67%/100% 两档实测取最快，报告给出运行方式结论（纯 CPU / GPU 全量 / 混合）、首字延迟预估和 KV 缓存账单。配置方案参数按硬件自动填好，上下文按内存规划（装不下自动换 q8_0 KV 缓存），多模态模型支持配 mmproj 看图，N 卡可外接官方 CUDA 引擎提速。特别适合普通学生电脑。
 
 ### 其他
 

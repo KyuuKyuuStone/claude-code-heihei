@@ -8,84 +8,77 @@
 
 核心技术栈：
 - **桌面壳**：Electron + React + Vite
-- **本地推理**：llama.cpp（GGUF 模型，CPU + Vulkan）
+- **本地推理**：llama.cpp（GGUF 模型，CPU + Vulkan 双构建）
 - **构建**：bun 1.3.14 + TypeScript
 - **CI**：GitHub Actions（`ci.yml` + `deploy-pages.yml`）
 
+## 本地模型功能现状（2026-09-06 大改版）
+
+这一版把本地模型策略做成了「实测诚实派」：
+
+- **档位体系已砍**（低配~帝王没有了，别找回来）：新建方案按硬件自动填参数起点（67% 线程甜点比例、无独显纯 CPU、32K 上下文），跑分实测一键应用
+- **跑分**：GPU 真探测（实跑一次推理，GTX 750 这类无 fp16 老卡自动退纯 CPU，不会启动后崩 ErrorDeviceLost）；67%/100% 两档每档测 2 次取平均；报告给运行方式结论（纯 CPU/GPU 全量/混合）、能力档、首字延迟预估（30K 提示词 ÷ 实测 pp 速度）、KV 缓存账单
+- **上下文规划**：f16 装不下 32K 先自动换 q8_0 KV（学 Ollama），还不够才降上下文；内存预算按 67%
+- **OOM 自动降档重试**：GPU 配置启动失败退纯 CPU 重试 → 上下文砍半重试；超时不重试
+- **多模态**：方案可配 mmproj 投影文件（--mmproj），配了才能看图
+- **长对话加速**：默认带 --cache-reuse 256
+- **自定义引擎目录**：N 卡用户可外接 llama.cpp 官方 CUDA 版（不随应用打包，1GB+ 太大）
+- **精选模型清单**：`desktop/src/constants/localModelCatalog.ts` 静态文件随应用打包（用户否决了应用内下载器——服务器和维护负担承受不起），5 款官方模型 + HF/ModelScope 直链
+- 进阶参数：投机解码草稿模型（--model-draft）、MoE 专家权重 CPU 层数（--n-cpu-moe）
+
+**用户拍板的红线**：67% 是甜点比例（线程、内存预算都按它）；不做应用内下载器；CUDA 不打包让用户官方下载；跑分别加回用户选目标速度。
+
 ## 我做的工作（本会话）
 
-这次会话我做了三件事：
-
-### 1. 本地模型功能（已有，我在此基础上做了改进）
-- 本地模型设置页 `desktop/src/pages/LocalModelSettings.tsx`
-- 跑分服务 `desktop/electron/services/localModelBenchmark.ts`
-- 本地模型服务 `desktop/electron/services/localModelService.ts`
-- 修复了跑分「没有产出结果」的问题（GTX 750 无 fp16 会崩 GPU，加了探测 + 降级到 CPU）
-- 修复了启动校验的上下文下限（16000 → 8192）
-- 修复了服务端 Zod 校验的上下文下限（16000 → 8192）
-- 简化了跑分交互（去掉了目标速度/上下文/使用率的选择，改成自动测机器能力并推荐配置）
-
-### 2. 下载模型中心
-- 把「下载模型」按钮改成了内置下载中心（GGUF 网站跳转 + 介绍 + 使用说明）
-- 删掉了「推荐的大模型」清单（用户决定不维护，让用户自己去论坛找）
-- 更新了 5 个语言文件
-
-### 3. 站点和文档
-- 更新了 GitHub 首页 README（加了本地模型介绍）
-- 更新了站点首页（加了本地模型截图展示）
-- 删掉了站点里已不存在的功能文档（IM 接入、桌面宠物、定时任务、H5 远程）
-- 新增了本地模型文档（开始使用 + 原理分析）
+1. 删除桌面宠物功能全部代码（桌面端；服务端 petAccessPolicy 等死代码有意保留）
+2. 本地模型大改版（见上节）+ 修复启动 ErrorDeviceLost + 跑分 IPC 校验修复确认
+3. 更新文档（docs/desktop/local-model.md、README 中英、本文件）
 
 ## GitHub 信息
 
 - **仓库**：`https://github.com/KyuuKyuuStone/claude-code-heihei`
-- **当前版本**：`v1.0.1`（本地模型 + 下载中心 + 截图展示）
+- **当前版本**：`v1.0.1`（本地模型大改版未发版，重新打包后可发 v1.0.2）
 - **主分支**：`main`
-- **最近提交**：
-  - `9d1205a` fix(local-model): 跑分 IPC 校验去掉已移除的 targetSpeed/usage 字段
-  - `a5f41a8` refactor(local-model): 简化跑分交互——不再让用户选目标速度/上下文/使用率
-  - `7bf821c` fix(local-model): 跑分时警告上下文太小装不下 Claude Code 真实负载
-  - `3fc232c` fix(local-model): 降低 provider 校验的上下文下限到 8192
-  - `6c482c6` fix(local-model): 降低启动校验的上下文下限到 8192
-  - `08bc959` fix(local-model): 跑分 GPU 崩溃时自动降级到 CPU 并提示用户
-  - `2e3cecf` fix(local-model): 跑分在弱显卡上崩溃时降级到 CPU
-  - `e096840` docs(site): 首页与 README 加入本地模型截图展示
-  - `0e85ac8` docs(site): 新增本地模型文档，移除已移除的 IM/宠物/定时/H5 页面
-  - `f0ca490` feat(local-model): 本地大模型支持（GGUF 直接运行 + 跑分 + 下载模型中心）
 
 ## 当前状态
 
 ### 能工作的
-- 本地模型功能（设置页、跑分、启动、下载中心）都能用
-- 跑分简化了（只选模型，自动测机器能力）
-- 站点和 README 都更新了本地模型介绍
-- llama.cpp 已更新到 b10786（最新）
+- 本地模型全流程（设置页、跑分、启动、下载中心、多模态、自定义引擎）都能用
+- 站点和 README 已更新本地模型介绍
+- llama.cpp b10786（比上游 release v0.3.0 新）
 
 ### 已知问题 / 待办
-- **llama.cpp 更新**：当前二进制是 b10786，但 v1.0.1 发布的安装包里是 b10686。如果要发 v1.0.2，需要重新打包。
-- **跑分 IPC 校验**：刚修复（`9d1205a`），跑分弹窗的 IPC 校验报错应该没了。
-- **GTX 750 机器**：跑分现在能正常出结果（CPU 降级），但要注意这类无 fp16 的老卡 GPU 加速不可用。
+- **发版**：v1.0.1 安装包是旧代码（含跑分 IPC bug 和宠物），打包后可发 v1.0.2
+- **桌面端 vitest 有约 38 个历史失败**（generalSettings/BrandSeal/主题等，main 上就有；CI 只测 adapters+docs 所以没暴露）——改桌面代码时先跑基线对比
+- **GTX 750 机器**：GPU 加速不可用（无 fp16），跑分自动降级 CPU 是预期行为
+- **服务端宠物死代码**：`src/server/petAccessPolicy.ts`、localAccessAuth 的 pet token、desktop-ui 偏好 pet 端点、sessions.ts 的 PET_SESSION_LIMIT——桌面端已不调用，可择期清理
+- **线程 67% vs 物理核**：待找有 NVIDIA 的机器 A/B 实测
 
 ### 关键文件位置
-- **本地模型设置页**：`desktop/src/pages/LocalModelSettings.tsx`
+- **本地模型设置页**：`desktop/src/pages/LocalModelSettings.tsx`（能力档/上下文规划/跑分报告都在这）
 - **跑分服务**：`desktop/electron/services/localModelBenchmark.ts`
-- **本地模型服务**：`desktop/electron/services/localModelService.ts`
+- **本地模型服务**：`desktop/electron/services/localModelService.ts`（OOM 重试/GPU 分层解析）
+- **精选模型清单**：`desktop/src/constants/localModelCatalog.ts`
+- **GPU 探测守卫**：`desktop/electron/main.ts` 的 `startLocalModelWithGpuGuard`
 - **IPC 校验**：`desktop/electron/ipc/capabilities.ts`
 - **服务端 Zod 校验**：`src/server/types/provider.ts`、`src/server/config/providerPresets.ts`
 - **桌面端类型**：`desktop/src/lib/desktopHost/types.ts`
 
 ### 构建和运行
 - 开发：`cd desktop && bun run electron:dev`
-- 打包：`cd desktop && bun run electron:package`（会构建 Windows 安装包）
+- 打包：`cd desktop && bun run electron:build && node ./node_modules/electron-builder/out/cli/cli.js --publish never -c.directories.output=C:/xxw_p/cc-heihei-dist`
+  - **输出目录必须在 ZCode 工作区外**（工作区内会被 ZCode 索引锁死 app.asar）
 - 发布：`bun run scripts/release.ts <版本号>`（会创建 commit + tag）
 
 ## 交接给下一个 AI 的建议
 
-1. **先读这份文档**，理解项目状态和当前版本（v1.0.1）。
+1. **先读这份文档**，理解项目状态。
 2. **本地模型是核心**——别动 llama.cpp 二进制（`desktop/src-tauri/binaries/`），除非更新版本。
-3. **跑分已简化**——只选模型，自动测机器能力。别加回用户选择。
-4. **发版时注意**——llama.cpp 二进制版本和安装包要一致。
-5. **GTX 750 这类老卡**——GPU 加速不可用，跑分会自动降级到 CPU。这是预期行为。
+3. **67% 甜点比例是用户定的**——线程起点、内存预算、跑分档位都用它，别改。
+4. **别恢复档位体系/应用内下载器**——用户明确否决过。
+5. **改桌面代码先跑测试基线**——桌面 vitest 有历史失败，先 `git stash` 跑一遍干净基线再对比。
+6. **发版时注意**——llama.cpp 二进制版本和安装包要一致；打包输出目录放工作区外。
+7. **push 前必须用户实测批准**——用户说「可以更新了」才能推。
 
 ## 联系方式
 
@@ -94,6 +87,6 @@
 
 ---
 
-*交接时间：2026-09-04*
-*当前版本：v1.0.1*
-*交接状态：本地模型功能完整，站点已更新，准备发 v1.0.2*
+*交接时间：2026-09-06*
+*当前版本：v1.0.1（本地模型大改版完成，待发 v1.0.2）*
+*交接状态：本地模型策略定型（实测诚实派），代码已推 GitHub*
