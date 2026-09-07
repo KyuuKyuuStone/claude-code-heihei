@@ -8,6 +8,7 @@ import { StatusDot } from '@/components/ui/Badge'
 import { Modal } from '@/components/ui/Modal'
 import { SettingsPageHeader, SettingsSection, SettingsStat } from '@/components/settings/SettingsSection'
 import { getDesktopHost } from '../lib/desktopHost'
+import { planContextSize } from '../lib/localModelPlan'
 import { useTranslation } from '../i18n'
 import { LOCAL_MODEL_CATALOG, CAPABILITY_LABELS } from '../constants/localModelCatalog'
 import type {
@@ -169,49 +170,6 @@ function hardwareStartPoint(hardware: LocalModelHardware | null): AdvancedConfig
     ...DEFAULT_ADVANCED,
     threads: String(Math.max(1, Math.round(cores * 0.67))),
     nGpuLayers: hardware?.gpu ? 'auto' : '0',
-  }
-}
-
-/**
- * 按机器实际内存/显存规划上下文推荐值 + KV 缓存类型，不是写死的。
- *
- * Claude Code 的真实负载（系统提示 + 工具定义 + Skills）需要 ≥32K 上下文，
- * 所以 32K 是默认推荐。装不下时学 Ollama 的推荐做法：先把 KV 缓存从 f16 换成
- * q8_0（省一半内存，质量损失极小），还不够才按 4K 步进下调上下文，下限 8K。
- */
-function planContextSize(
-  kvBytesPerToken: number | null,
-  modelSizeMB: number | null,
-  memoryGB: number,
-  vramMB: number,
-): { ctx: number; kvType: 'f16' | 'q8_0'; note: string | null } {
-  const RECOMMENDED_CTX = 32768
-  const FLOOR_CTX = 8192
-  if (!kvBytesPerToken || kvBytesPerToken <= 0) return { ctx: RECOMMENDED_CTX, kvType: 'f16', note: null }
-  const budgetBytes = vramMB > 0
-    ? vramMB * 1024 * 1024 * 0.9
-    : memoryGB * 1024 ** 3 * 0.67
-  const modelBytes = (modelSizeMB ?? 0) * 1024 * 1024
-  const maxTokens = (bytesPerToken: number) => {
-    const available = Math.floor((budgetBytes - modelBytes) / bytesPerToken)
-    return Math.floor(available / 4096) * 4096
-  }
-
-  if (maxTokens(kvBytesPerToken) >= RECOMMENDED_CTX) {
-    return { ctx: RECOMMENDED_CTX, kvType: 'f16', note: null }
-  }
-  // f16 装不下 32K → 换 q8_0 KV（体积减半）再试，而不是急着砍上下文
-  const q8Bytes = kvBytesPerToken / 2
-  if (maxTokens(q8Bytes) >= RECOMMENDED_CTX) {
-    return { ctx: RECOMMENDED_CTX, kvType: 'q8_0', note: '内存装不下 f16 KV 缓存，已自动改用 q8_0（省一半内存，质量损失极小）' }
-  }
-  const planned = Math.max(FLOOR_CTX, Math.min(RECOMMENDED_CTX, maxTokens(q8Bytes)))
-  return {
-    ctx: planned,
-    kvType: 'q8_0',
-    note: planned < RECOMMENDED_CTX
-      ? `内存预算内最多规划 ${Math.round(planned / 1024)}K 上下文（q8_0 KV）。低于 32K 时 Claude Code 真实负载可能放不下，建议换更小的模型`
-      : null,
   }
 }
 

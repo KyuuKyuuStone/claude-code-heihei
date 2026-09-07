@@ -32,6 +32,32 @@ export type BenchmarkStepResult = {
 /** 本机最终采用的运行方式：纯 CPU / GPU 全量 / GPU+CPU 混合 */
 export type BenchmarkRunMode = 'cpu' | 'gpu' | 'hybrid'
 
+/**
+ * 运行方式判定：GPU 探测失败 = 纯 CPU；推荐档把所有层都放上显卡 = GPU 全量；
+ * 其余 = 混合。
+ *
+ * 注意"所有层"有两种表达：显式 '-1'，或已知 GGUF 层数时 100% 档算出的
+ * 具体数字（如 28 层模型的 '28'）。只认 '-1' 会把真·全 GPU 误判成
+ * "GPU + CPU 混合"（RTX 5070 Ti 实测踩过：108 t/s 全 GPU 却标成混合）。
+ */
+export function resolveBenchmarkRunMode(
+  gpuUsable: boolean,
+  recommendedNgl: string | null | undefined,
+  ggufLayers: number | null,
+): BenchmarkRunMode {
+  if (!gpuUsable) return 'cpu'
+  if (recommendedNgl === '-1') return 'gpu'
+  if (
+    ggufLayers !== null
+    && ggufLayers > 0
+    && /^\d+$/.test(recommendedNgl ?? '')
+    && Number(recommendedNgl) >= ggufLayers
+  ) {
+    return 'gpu'
+  }
+  return 'hybrid'
+}
+
 export type BenchmarkRunResult = {
   modelParamsB: number | null
   modelSizeMB: number | null
@@ -440,7 +466,7 @@ export async function runBenchmark(
         contextFit,
         contextTooSmall,
         note: gpuNote,
-        mode: gpuUsable ? 'hybrid' : 'cpu',
+        mode: resolveBenchmarkRunMode(gpuUsable, recommendedStep?.ngl, ggufMeta.layers),
         error: run.error,
       }
     }
@@ -464,13 +490,6 @@ export async function runBenchmark(
 
   const maxTg = Math.max(0, ...results.map((r) => r.tgTokensPerSec))
 
-  // 运行方式：GPU 探测失败 = 纯 CPU；推荐档把所有层都放上显卡 = GPU 全量；其余 = 混合
-  const mode: BenchmarkRunMode = !gpuUsable
-    ? 'cpu'
-    : recommendedStep?.ngl === '-1'
-      ? 'gpu'
-      : 'hybrid'
-
   return {
     modelParamsB,
     modelSizeMB,
@@ -481,7 +500,7 @@ export async function runBenchmark(
     contextFit,
     contextTooSmall,
     note: gpuNote,
-    mode,
+    mode: resolveBenchmarkRunMode(gpuUsable, recommendedStep?.ngl, ggufMeta.layers),
     error: maxTg === 0 ? '跑分没有产出结果，请检查模型文件是否有效' : null,
   }
 }
