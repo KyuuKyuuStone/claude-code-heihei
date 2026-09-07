@@ -3,7 +3,7 @@ import { api } from './client'
 export type DoctorReportItem = {
   id: string
   label: string
-  kind: 'json' | 'jsonl' | 'directory'
+  kind: 'json' | 'jsonl' | 'directory' | 'collab_shell' | 'collab_skill'
   scope: 'user' | 'project'
   path: string
   protected: boolean

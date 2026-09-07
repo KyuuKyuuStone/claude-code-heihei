@@ -2549,4 +2549,12 @@ export const zh: Record<TranslationKey, string> = {
   'servant.modal.descriptionPlaceholder': '用自然語言描述這個角色是什麼，如「繪畫師，擅長水彩風格插畫」',
   'servant.modal.descriptionHint': '派活時會隨任務一起發給員工會話',
   'servant.modal.create': '建立',
+  'servant.modal.sectionRole': '角色',
+  'servant.modal.sectionRuntime': '執行設定',
+  'servant.modal.sectionIdentity': '身份',
+  'servant.modal.identityHint': '「服務其他會話」：允許主管發現此會話並派活；「任命為主管」：可向本專案員工派活，每個專案僅一名',
+  'servant.modal.provider': '服務商',
+  'servant.modal.model': '大模型',
+  'servant.modal.effort': '思考強度',
+  'servant.modal.runtimeHint': '員工會話將以此模型與思考強度無人值守運行，並以免審批（bypassPermissions）模式執行任務',
 }

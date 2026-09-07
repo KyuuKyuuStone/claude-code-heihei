@@ -2547,6 +2547,14 @@ export const en = {
   'servant.modal.descriptionPlaceholder': 'Describe what this role is in natural language, e.g. "Illustrator, good at watercolor-style artwork"',
   'servant.modal.descriptionHint': 'Sent to the worker session along with the task when dispatched',
   'servant.modal.create': 'Create',
+  'servant.modal.sectionRole': 'Role',
+  'servant.modal.sectionRuntime': 'Runtime',
+  'servant.modal.sectionIdentity': 'Identity',
+  'servant.modal.identityHint': 'Serve: lets the supervisor discover this session and dispatch tasks to it; Supervisor: can dispatch to servants of this project, one per project',
+  'servant.modal.provider': 'Provider',
+  'servant.modal.model': 'Model',
+  'servant.modal.effort': 'Thinking effort',
+  'servant.modal.runtimeHint': 'The servant session runs unattended with this model and thinking effort, in bypass-permissions mode',
 } as const
 
 export type TranslationKey = keyof typeof en

@@ -76,6 +76,27 @@ describe('servantStore', () => {
     expect(useServantStore.getState().bySessionId['sess-1']?.role).toBe('后端')
   })
 
+  it('forwards runtime model/effort fields to the API unchanged', async () => {
+    apiSetMock.mockResolvedValue({})
+    apiListMock.mockResolvedValue({ servants: [makeServant()] })
+
+    await useServantStore.getState().setServant('sess-1', {
+      role: '后端',
+      enabled: true,
+      runtimeProviderId: null,
+      runtimeModelId: 'claude-sonnet-4',
+      effortLevel: 'high',
+    })
+
+    expect(apiSetMock).toHaveBeenCalledWith('sess-1', {
+      role: '后端',
+      enabled: true,
+      runtimeProviderId: null,
+      runtimeModelId: 'claude-sonnet-4',
+      effortLevel: 'high',
+    })
+  })
+
   it('removes a servant', async () => {
     useServantStore.setState({ bySessionId: { 'sess-1': makeServant() } })
     apiRemoveMock.mockResolvedValue({ ok: true })

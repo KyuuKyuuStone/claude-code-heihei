@@ -27,6 +27,10 @@ export type ServantInput = {
   description?: string
   enabled: boolean
   supervisor?: boolean
+  /** 协作弹窗选择的运行时：写入会话元数据，员工被自动拉起时生效 */
+  runtimeProviderId?: string | null
+  runtimeModelId?: string
+  effortLevel?: string
 }
 
 export const servantsApi = {

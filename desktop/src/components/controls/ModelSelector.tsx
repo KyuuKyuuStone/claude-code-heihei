@@ -1,38 +1,22 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { OFFICIAL_MODELS } from '../../constants/modelCatalog'
-import {
-  OPENAI_OFFICIAL_MODELS,
-  OPENAI_OFFICIAL_PROVIDER_ID,
-} from '../../constants/openaiOfficialProvider'
 import { useTranslation } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
 import { useProviderStore } from '../../stores/providerStore'
 import { DRAFT_RUNTIME_SELECTION_KEY, useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import { useSettingsStore } from '../../stores/settingsStore'
-import type { SavedProvider } from '../../types/provider'
 import type { RuntimeSelection } from '../../types/runtime'
-import type { ModelInfo, ReasoningEffortLevel } from '../../types/settings'
+import type { ReasoningEffortLevel } from '../../types/settings'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useMobileViewport } from '../../hooks/useMobileViewport'
 import { isDesktopRuntime } from '../../lib/desktopRuntime'
 import { resolveDefaultRuntimeSelection } from '../../lib/runtimeSelection'
+import { buildProviderChoices } from '../../lib/modelChoices'
 import { useHeiheiOAuthStore } from '../../stores/heiheiOAuthStore'
 import { useHeiheiOpenAIOAuthStore } from '../../stores/heiheiOpenAIOAuthStore'
 import { useHeiheiGrokOAuthStore } from '../../stores/heiheiGrokOAuthStore'
-import {
-  GROK_OFFICIAL_MODELS,
-  GROK_OFFICIAL_PROVIDER_ID,
-} from '../../constants/grokOfficialProvider'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
 import { ReasoningEffortPopover } from './ReasoningEffortPopover'
-
-type ProviderChoice = {
-  providerId: string | null
-  providerName: string
-  isDefault: boolean
-  models: ModelInfo[]
-}
 
 type Props = {
   value?: string
@@ -62,120 +46,6 @@ const DROPDOWN_GAP = 8
 const VIEWPORT_MARGIN = 16
 const DROPDOWN_MAX_HEIGHT = 420
 const DROPDOWN_MIN_HEIGHT = 180
-
-function officialChoices(
-  providerId: string | null,
-  models: ModelInfo[],
-  isDefault: boolean,
-  officialName: string,
-): ProviderChoice {
-  return {
-    providerId,
-    providerName: officialName,
-    isDefault,
-    models,
-  }
-}
-
-function mergeOfficialModels(availableModels: ModelInfo[]): ModelInfo[] {
-  const merged = [...OFFICIAL_MODELS]
-  const knownIds = new Set(merged.map(model => model.id))
-  for (const model of availableModels) {
-    if (!knownIds.has(model.id)) {
-      knownIds.add(model.id)
-      merged.push(model)
-    }
-  }
-  return merged
-}
-
-function buildProviderModels(
-  provider: SavedProvider,
-  labels: Record<'main' | 'haiku' | 'sonnet' | 'opus', string>,
-): ModelInfo[] {
-  const entries: Array<{ id: string; label: string }> = [
-    { id: provider.models.main.trim(), label: labels.main },
-    { id: provider.models.haiku.trim(), label: labels.haiku },
-    { id: provider.models.sonnet.trim(), label: labels.sonnet },
-    { id: provider.models.opus.trim(), label: labels.opus },
-  ]
-
-  const byId = new Map<string, { id: string; labels: string[] }>()
-  for (const entry of entries) {
-    if (!entry.id) continue
-    const existing = byId.get(entry.id)
-    if (existing) {
-      if (!existing.labels.includes(entry.label)) {
-        existing.labels.push(entry.label)
-      }
-      continue
-    }
-    byId.set(entry.id, { id: entry.id, labels: [entry.label] })
-  }
-
-  return [...byId.values()].map((entry) => ({
-    id: entry.id,
-    name: entry.id,
-    description: entry.labels.join(' · '),
-    context: '',
-  }))
-}
-
-function buildProviderChoices(
-  providers: SavedProvider[],
-  activeId: string | null,
-  availableModels: ModelInfo[],
-  officialName: string,
-  openAIOfficialName: string,
-  grokOfficialName: string,
-  labels: Record<'main' | 'haiku' | 'sonnet' | 'opus', string>,
-  claudeOfficialLoggedIn: boolean,
-  openAIOfficialLoggedIn: boolean,
-  grokOfficialLoggedIn: boolean,
-): ProviderChoice[] {
-  const claudeOfficialModels = activeId === null && availableModels.length > 0
-    ? mergeOfficialModels(availableModels)
-    : OFFICIAL_MODELS
-  const openAIOfficialModels = activeId === OPENAI_OFFICIAL_PROVIDER_ID && availableModels.length > 0
-    ? availableModels
-    : OPENAI_OFFICIAL_MODELS
-  const grokOfficialModels = activeId === GROK_OFFICIAL_PROVIDER_ID && availableModels.length > 0
-    ? availableModels
-    : GROK_OFFICIAL_MODELS
-
-  const choices: ProviderChoice[] = []
-
-  if (claudeOfficialLoggedIn) {
-    choices.push(officialChoices(null, claudeOfficialModels, activeId === null, officialName))
-  }
-  if (openAIOfficialLoggedIn) {
-    choices.push(officialChoices(
-      OPENAI_OFFICIAL_PROVIDER_ID,
-      openAIOfficialModels,
-      activeId === OPENAI_OFFICIAL_PROVIDER_ID,
-      openAIOfficialName,
-    ))
-  }
-  if (grokOfficialLoggedIn) {
-    choices.push(officialChoices(
-      GROK_OFFICIAL_PROVIDER_ID,
-      grokOfficialModels,
-      activeId === GROK_OFFICIAL_PROVIDER_ID,
-      grokOfficialName,
-    ))
-  }
-
-  for (const provider of providers) {
-    choices.push({
-      providerId: provider.id,
-      providerName: provider.name,
-      isDefault: activeId === provider.id,
-      models: buildProviderModels(provider, labels),
-    })
-  }
-
-  return choices
-}
 
 export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function ModelSelector({
   value,

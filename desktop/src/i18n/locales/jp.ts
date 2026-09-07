@@ -2549,4 +2549,12 @@ export const jp: Record<TranslationKey, string> = {
   'servant.modal.descriptionPlaceholder': 'このロールを自然言語で説明（例：「イラストレーター、水彩風の挿絵が得意」）',
   'servant.modal.descriptionHint': '割り当て時にタスクと一緒にワーカーセッションへ送られます',
   'servant.modal.create': '作成',
+  'servant.modal.sectionRole': 'ロール',
+  'servant.modal.sectionRuntime': '実行設定',
+  'servant.modal.sectionIdentity': '身份',
+  'servant.modal.identityHint': '「他セッションに仕える」：スーパーバイザーがこのセッションを発見してタスクを割り当て可能に、「スーパーバイザーに任命」：同一プロジェクトのワーカーに割り当て可能（各プロジェクト1名）',
+  'servant.modal.provider': 'プロバイダー',
+  'servant.modal.model': 'モデル',
+  'servant.modal.effort': '思考レベル',
+  'servant.modal.runtimeHint': '従業員セッションはこのモデルと思考レベルで無人実行され、承認不要（bypassPermissions）モードでタスクを遂行します',
 }

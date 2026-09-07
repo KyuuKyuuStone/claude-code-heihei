@@ -2549,4 +2549,12 @@ export const kr: Record<TranslationKey, string> = {
   'servant.modal.descriptionPlaceholder': '이 역할이 무엇인지 자연어로 설명(예: "일러스트레이터, 수채화 스타일 삽화에 능함")',
   'servant.modal.descriptionHint': '할당 시 작업과 함께 작업자 세션에 전달됩니다',
   'servant.modal.create': '만들기',
+  'servant.modal.sectionRole': '역할',
+  'servant.modal.sectionRuntime': '실행 설정',
+  'servant.modal.sectionIdentity': '신원',
+  'servant.modal.identityHint': '서비스: 슈퍼바이저가 이 세션을 발견하고 작업을 할당; 슈퍼바이저: 이 프로젝트의 워커에게 할당(프로젝트당 1명)',
+  'servant.modal.provider': '공급자',
+  'servant.modal.model': '모델',
+  'servant.modal.effort': '사고 강도',
+  'servant.modal.runtimeHint': '워커 세션은 이 모델과 사고 강도로 무인 실행되며, 승인 없이(bypassPermissions) 작업을 수행합니다',
 }
