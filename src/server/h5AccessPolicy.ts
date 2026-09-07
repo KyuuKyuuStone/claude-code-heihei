@@ -6,7 +6,9 @@ export type H5RequestContext = {
   internalSdkAuthorized?: boolean
 }
 
-const LOCAL_DESKTOP_ORIGINS = new Set(['file://'])
+// 与 cors.ts 的本地桌面源白名单保持同一份（含 dev 模式渲染层源，见
+// cors.ts 中 getLocalDesktopOrigins 的注释）
+import { isLocalDesktopOrigin } from './middleware/cors.js'
 const PROXY_TRACE_HEADERS = [
   'forwarded',
   'x-forwarded-for',
@@ -186,7 +188,7 @@ function isLocalDesktopOrNavigationOrigin(
   context: H5RequestContext,
 ): boolean {
   if (!origin) return !isCrossSiteSubresource(request.headers)
-  if (LOCAL_DESKTOP_ORIGINS.has(origin)) return true
+  if (isLocalDesktopOrigin(origin)) return true
 
   // A configured process credential distinguishes the Electron renderer from
   // arbitrary pages served by another loopback process. Keep tokenless

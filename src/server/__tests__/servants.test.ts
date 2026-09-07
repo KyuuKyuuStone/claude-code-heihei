@@ -164,6 +164,43 @@ describe('ServantService', () => {
     })
     expect(updated.supervisor).toBe(true)
   })
+
+  it('should persist runtime model and effort to session metadata', async () => {
+    await service.setServant(sessionId, {
+      enabled: true,
+      runtimeProviderId: 'provider-1',
+      runtimeModelId: 'kimi-k2',
+      effortLevel: 'high',
+    })
+
+    const launchInfo = await sessionService.getSessionLaunchInfo(sessionId)
+    expect(launchInfo.runtimeProviderId).toBe('provider-1')
+    expect(launchInfo.runtimeModelId).toBe('kimi-k2')
+    expect(launchInfo.effortLevel).toBe('high')
+    expect(launchInfo.permissionMode).toBe('bypassPermissions')
+  })
+
+  it('should persist runtime fields even when the servant is disabled', async () => {
+    await service.setServant(sessionId, {
+      enabled: false,
+      runtimeProviderId: null,
+      runtimeModelId: 'gpt-5',
+      effortLevel: 'low',
+    })
+
+    const launchInfo = await sessionService.getSessionLaunchInfo(sessionId)
+    expect(launchInfo.runtimeProviderId).toBeNull()
+    expect(launchInfo.runtimeModelId).toBe('gpt-5')
+    expect(launchInfo.effortLevel).toBe('low')
+    // 未启用时不写 bypassPermissions
+    expect(launchInfo.permissionMode).toBeUndefined()
+  })
+
+  it('should ignore an unsupported effort level', async () => {
+    await service.setServant(sessionId, { enabled: true, effortLevel: 'ultra' })
+    const launchInfo = await sessionService.getSessionLaunchInfo(sessionId)
+    expect(launchInfo.effortLevel).toBeUndefined()
+  })
 })
 
 // ─── Servants API tests ─────────────────────────────────────────────────────

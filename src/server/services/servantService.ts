@@ -104,7 +104,7 @@ export class ServantService {
     return data.servants.find((s) => s.sessionId === sessionId) ?? null
   }
 
-  /** 设置/更新会话的协作身份 */
+  /** 设置/更新会话的协作身份；runtime* 字段一并写入会话元数据（模型/思考强度） */
   async setServant(
     sessionId: string,
     input: {
@@ -112,6 +112,9 @@ export class ServantService {
       description?: string
       enabled: boolean
       supervisor?: boolean
+      runtimeProviderId?: string | null
+      runtimeModelId?: string
+      effortLevel?: string
     },
   ): Promise<ServantEntry> {
     if (!sessionId || !sessionId.trim()) {
@@ -173,19 +176,37 @@ export class ServantService {
     await this.writeFile(data)
 
     // 员工会话要被主管无人值守地驱动：权限模式必须放行，否则员工会停在
-    // 权限确认上无人批准，随后被"等待权限会话"的有界清理策略杀掉
-    if (entry.enabled) {
+    // 权限确认上无人批准，随后被"等待权限会话"的有界清理策略杀掉。
+    // 协作弹窗指定的模型/思考强度（runtime* 字段）也在这里写入会话元数据——
+    // 必须先落盘再触发履新消息/派活拉起，员工首次启动就用上选定配置。
+    const runtimeMetadata: {
+      runtimeProviderId?: string | null
+      runtimeModelId?: string
+      effortLevel?: string
+    } = {}
+    if (input.runtimeProviderId !== undefined) {
+      runtimeMetadata.runtimeProviderId = input.runtimeProviderId
+    }
+    if (input.runtimeModelId !== undefined) {
+      runtimeMetadata.runtimeModelId = input.runtimeModelId
+    }
+    if (input.effortLevel !== undefined) {
+      runtimeMetadata.effortLevel = input.effortLevel
+    }
+    const hasRuntimeUpdate = Object.keys(runtimeMetadata).length > 0
+    if (entry.enabled || hasRuntimeUpdate) {
       try {
         const workDir = await sessionService.getSessionWorkDir(sessionId)
         if (workDir) {
           await sessionService.appendSessionMetadata(sessionId, {
             workDir,
-            permissionMode: 'bypassPermissions',
+            ...(entry.enabled ? { permissionMode: 'bypassPermissions' as const } : {}),
+            ...runtimeMetadata,
           })
         }
       } catch (err) {
         console.error(
-          `[ServantService] Failed to set permissionMode for ${sessionId}:`,
+          `[ServantService] Failed to set session metadata for ${sessionId}:`,
           err,
         )
       }

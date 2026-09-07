@@ -17,6 +17,7 @@ import type {
 import * as os from 'node:os'
 import {
   ConversationStartupError,
+  cliExitSeverity,
   conversationService,
 } from '../services/conversationService.js'
 import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
@@ -870,11 +871,21 @@ async function handlePrewarmSession(ws: ServerWebSocket<WebSocketData>) {
     })
     .catch((err) => {
       prewarmPendingSessions.delete(sessionId)
-      console.warn(
-        `[WS] Prewarm failed for ${sessionId}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      )
+      const message = `[WS] Prewarm failed for ${sessionId}: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+      // SIGTERM/SIGKILL 级退出码（如预热空闲回收器 stopSession）是设计内的
+      // 正常回收：console.warn 会被诊断采集镜像成 warn 并写入 runtime-errors，
+      // 会把回收伪装成"启动失败"误导排障，因此降级为 console.log。
+      const isBenignExit =
+        err instanceof ConversationStartupError &&
+        err.exitCode !== undefined &&
+        cliExitSeverity(err.exitCode) === 'info'
+      if (isBenignExit) {
+        console.log(message)
+      } else {
+        console.warn(message)
+      }
     })
 }
 

@@ -80,10 +80,15 @@ describe('DoctorService', () => {
     const report = await service.getReport()
 
     expect(report.items.length).toBeGreaterThan(0)
-    expect(report.items.every((item) => item.status === 'not_configured')).toBe(true)
+    // 协作体检项（collab_*）反映的是本机 shell/CLI 环境，与"用户是否配置过
+    // 可选功能"无关，在全新安装上同样可能为 ok，因此不参与本断言。
+    const featureItems = report.items.filter(
+      (item) => item.kind !== 'collab_shell' && item.kind !== 'collab_skill',
+    )
+    expect(featureItems.every((item) => item.status === 'not_configured')).toBe(true)
     expect(report.summary).toEqual(expect.objectContaining({
       total: report.items.length,
-      neutralCount: report.items.length,
+      neutralCount: featureItems.filter((item) => item.status === 'not_configured').length,
       missingCount: 0,
       invalidCount: 0,
     }))

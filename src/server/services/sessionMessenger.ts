@@ -59,6 +59,8 @@ export class SessionMessenger {
           ...(launchInfo?.runtimeModelId
             ? { model: launchInfo.runtimeModelId }
             : {}),
+          // 员工无人值守拉起也要用上协作弹窗选定的思考强度
+          ...(launchInfo?.effortLevel ? { effort: launchInfo.effortLevel } : {}),
         },
       )
 

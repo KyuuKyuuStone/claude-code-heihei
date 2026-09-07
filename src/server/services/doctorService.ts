@@ -6,8 +6,13 @@ import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { AGENT_SKILLS_DIR, isAgentSkillsDirectoryEnabled } from '../../skills/skillRoots.js'
 import { ProvidersIndexSchema } from '../types/provider.js'
 import { diagnosticsService } from './diagnosticsService.js'
+import {
+  collabEnvironmentService,
+  type ShellCheck,
+  type SkillCheck,
+} from './collabEnvironmentService.js'
 
-export type DoctorItemKind = 'json' | 'jsonl' | 'directory'
+export type DoctorItemKind = 'json' | 'jsonl' | 'directory' | 'collab_shell' | 'collab_skill'
 export type DoctorItemStatus = 'ok' | 'not_configured' | 'missing' | 'invalid_json' | 'invalid_jsonl' | 'invalid_schema' | 'unreadable'
 export type DoctorSkipReason = 'protected'
 
@@ -73,6 +78,11 @@ type DoctorServiceOptions = {
   configDir?: string
   homeDir?: string
   projectRoot?: string
+  /** 协作环境检查的测试注入点；默认使用 collabEnvironmentService */
+  collabChecks?: {
+    checkShell?: () => ShellCheck
+    checkSkill?: () => Promise<SkillCheck>
+  }
 }
 
 type DoctorTarget = {
@@ -90,17 +100,28 @@ export class DoctorService {
   private readonly homeDir: string
   private readonly projectRoot?: string
   private readonly usesConfigDirOverride: boolean
+  private readonly collabChecks: {
+    checkShell: () => ShellCheck
+    checkSkill: () => Promise<SkillCheck>
+  }
 
   constructor(options: DoctorServiceOptions = {}) {
     this.configDir = options.configDir || getClaudeConfigHomeDir()
     this.homeDir = options.homeDir || inferHomeDir(this.configDir)
     this.projectRoot = options.projectRoot
     this.usesConfigDirOverride = Boolean(options.configDir || process.env.CLAUDE_CONFIG_DIR)
+    this.collabChecks = {
+      checkShell: options.collabChecks?.checkShell ?? (() => collabEnvironmentService.checkShell()),
+      checkSkill:
+        options.collabChecks?.checkSkill ??
+        (() => collabEnvironmentService.checkWorkOrchestratorSkill()),
+    }
   }
 
   async getReport(): Promise<DoctorReport> {
     const targets = await this.buildTargets()
     const items = await Promise.all(targets.map((target) => this.inspectTarget(target)))
+    items.push(...(await this.inspectCollaboration()))
     const protectedSkips = items
       .filter((item) => item.protected)
       .map((item) => ({
@@ -278,6 +299,55 @@ export class DoctorService {
       default:
         return this.inspectMissingTarget(target)
     }
+  }
+
+  /**
+   * 协作（会话上下级）环境检查：shell 可用性与内置 CLI 的 work-orchestrator
+   * 技能。这两项是会话协作可用性的前提——shell 缺失会让 Bash 工具与 curl
+   * 派活全部失效；CLI 缺技能时履新消息必须内联协议而不是空头承诺。
+   */
+  private async inspectCollaboration(): Promise<DoctorReportItem[]> {
+    const shell = this.collabChecks.checkShell()
+    let skill: SkillCheck
+    try {
+      skill = await this.collabChecks.checkSkill()
+    } catch {
+      // 体检绝不能因单项检查失败而整体失败：无法判断时按外部 CLI 处理
+      skill = { available: null }
+    }
+
+    return [
+      {
+        id: 'collab-shell',
+        label: 'Collaboration shell (Git Bash on Windows)',
+        kind: 'collab_shell',
+        scope: 'user',
+        path: this.sanitizeText(shell.bashPath ?? '(shell not found)'),
+        protected: true,
+        exists: shell.ok,
+        status: shell.ok ? 'ok' : 'missing',
+        bytes: 0,
+        ...(shell.hint && !shell.ok ? { error: this.sanitizeText(shell.hint) } : {}),
+      },
+      {
+        id: 'collab-skill',
+        label: 'Collaboration skill (work-orchestrator in CLI)',
+        kind: 'collab_skill',
+        scope: 'user',
+        path: this.sanitizeText(skill.cliFile ?? '(external CLI, not verifiable)'),
+        protected: true,
+        exists: skill.available !== false,
+        status:
+          skill.available === true ? 'ok' : skill.available === null ? 'not_configured' : 'missing',
+        bytes: 0,
+        ...(skill.available === false
+          ? {
+              error:
+                'The CLI in use does not include the work-orchestrator skill. Update the desktop app; supervisor orientation messages will inline the dispatch protocol as a fallback.',
+            }
+          : {}),
+      },
+    ]
   }
 
   private async inspectJsonTarget(target: DoctorTarget): Promise<DoctorReportItem> {

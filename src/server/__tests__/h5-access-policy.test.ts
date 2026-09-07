@@ -121,6 +121,41 @@ describe('h5AccessPolicy', () => {
     expect(shouldRequireH5Token({ request, url: new URL(request.url), h5Enabled: true, context: localContext })).toBe(false)
   })
 
+  test('trusts the configured dev renderer origin even when a process credential is configured', () => {
+    // electron:dev 渲染层从 ELECTRON_RENDERER_URL 加载：CORS 预检无法携带
+    // 本地访问令牌，若按普通浏览器 Origin 拦截，dev 模式全部 API 必挂。
+    const original = process.env.ELECTRON_RENDERER_URL
+    process.env.ELECTRON_RENDERER_URL = 'http://localhost:1420'
+    const desktopContext = {
+      clientAddress: '127.0.0.1',
+      localAccessTokenConfigured: true,
+      localAccessAuthorized: false,
+    }
+    try {
+      for (const pathname of ['/api/status', '/api/settings/user']) {
+        const request = req(`http://127.0.0.1:3456${pathname}`, {
+          headers: { Origin: 'http://localhost:1420' },
+        })
+        expect(classifyH5Request(request, new URL(request.url), desktopContext)).toBe('local-trusted')
+        expect(shouldBlockDisabledH5Access({
+          request,
+          url: new URL(request.url),
+          h5Enabled: false,
+          explicitAuthRequired: false,
+          context: desktopContext,
+        })).toBe(false)
+      }
+      // 其他 loopback 端口不在白名单，维持拦截
+      const otherPort = req('http://127.0.0.1:3456/api/status', {
+        headers: { Origin: 'http://localhost:5173' },
+      })
+      expect(classifyH5Request(otherPort, new URL(otherPort.url), desktopContext)).toBe('h5-browser')
+    } finally {
+      if (original === undefined) delete process.env.ELECTRON_RENDERER_URL
+      else process.env.ELECTRON_RENDERER_URL = original
+    }
+  })
+
   test('does not trust adapter requests from non-loopback browser origins', () => {
     const request = req('http://127.0.0.1:3456/api/adapters', {
       headers: { Origin: 'https://phone.example' },

@@ -9,4 +9,4 @@ if (startupStdout) {
   })
 }
 
-process.exitCode = 1
+process.exitCode = Number(process.env.MOCK_SDK_STARTUP_EXIT_CODE || 1)

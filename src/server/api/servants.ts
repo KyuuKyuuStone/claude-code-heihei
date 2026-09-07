@@ -13,6 +13,12 @@
 import { servantService } from '../services/servantService.js'
 import { sessionMessenger } from '../services/sessionMessenger.js'
 import { sessionService } from '../services/sessionService.js'
+import { collabEnvironmentService } from '../services/collabEnvironmentService.js'
+import { dispatchMailboxService } from '../services/dispatchMailboxService.js'
+import {
+  DISPATCH_PROTOCOL_MD,
+  WORK_ORCHESTRATOR_SKILL_NAME,
+} from '../../collaboration/dispatchProtocol.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 
 export async function handleServantsApi(
@@ -45,6 +51,10 @@ export async function handleServantsApi(
         description: body.description as string | undefined,
         enabled: body.enabled as boolean,
         supervisor: body.supervisor as boolean | undefined,
+        // 协作弹窗选择的模型/思考强度：写入会话元数据，员工被自动拉起时生效
+        runtimeProviderId: body.runtimeProviderId as string | null | undefined,
+        runtimeModelId: body.runtimeModelId as string | undefined,
+        effortLevel: body.effortLevel as string | undefined,
       })
       const host = req.headers.get('host') || '127.0.0.1'
 
@@ -52,8 +62,10 @@ export async function handleServantsApi(
       // 了解员工（角色与特性），然后等待用户命令。
       // 失败不阻塞任命本身（身份已落盘）。
       if (entry.supervisor && !previous?.supervisor) {
-        void sessionMessenger
-          .deliver(targetId, buildSupervisorOrientation(), host)
+        void buildSupervisorOrientationAfterEnvCheck()
+          .then((orientation) =>
+            sessionMessenger.deliver(targetId, orientation, host),
+          )
           .catch((error) => {
             console.error(
               `[Servants] Failed to deliver supervisor orientation to ${targetId}:`,
@@ -82,12 +94,15 @@ export async function handleServantsApi(
           })
         void notifySupervisorOfNewWorker(entry, host)
       }
+      // 花名册变化后收敛文件信箱监听目录（新增/移除员工的项目）
+      void dispatchMailboxService.sync()
       return Response.json({ servant: entry })
     }
 
     // ── DELETE /api/servant-sessions/:sessionId ─────────────────────────
     if (method === 'DELETE' && sessionId) {
       await servantService.removeServant(decodeURIComponent(sessionId))
+      void dispatchMailboxService.sync()
       return Response.json({ ok: true })
     }
 
@@ -157,8 +172,19 @@ async function parseJsonBody(req: Request): Promise<Record<string, unknown>> {
   }
 }
 
-function buildSupervisorOrientation(): string {
-  return [
+export type SupervisorOrientationEnv = {
+  /** null = 外部 CLI 无法判断，按缺失处理（内联协议兜底） */
+  skillAvailable: boolean | null
+  shellOk: boolean
+}
+
+/**
+ * 主管履新消息。不再无条件承诺"技能已对你生效"——技能是否存在由
+ * collabEnvironmentService 实测：确认存在才引用技能，否则内联完整派活协议；
+ * shell 不可用时明确告知主管改走文件信箱通道（2026-09 外部用户事故教训）。
+ */
+export function buildSupervisorOrientation(env: SupervisorOrientationEnv): string {
+  const lines = [
     '【系统】你已被任命为本项目的主管。',
     '你的职责：接收用户命令 → 拆解任务 → 派给本项目的员工会话 → 验收汇报 → 继续安排，直到用户需求完成。',
     '',
@@ -166,8 +192,42 @@ function buildSupervisorOrientation(): string {
     'curl -s "$CC_HEIHEI_DESKTOP_SERVER_URL/api/servant-sessions?forSession=$CC_HEIHEI_SESSION_ID"',
     '',
     '看完后用一两句话向用户报告你有哪些员工可用，然后等待用户命令。',
-    '派活、收汇报、验收的具体做法遵循 work-orchestrator 技能；该技能已对你生效。',
-  ].join('\n')
+  ]
+
+  if (env.skillAvailable) {
+    lines.push(
+      `派活、收汇报、验收的具体做法遵循 ${WORK_ORCHESTRATOR_SKILL_NAME} 技能；已确认你的 CLI 内置该技能（可用 /${WORK_ORCHESTRATOR_SKILL_NAME} 随时查看完整规范）。`,
+    )
+  } else {
+    lines.push(
+      `无法确认你的 CLI 是否内置 ${WORK_ORCHESTRATOR_SKILL_NAME} 技能（可能因版本较旧或使用外部 CLI），派活请直接按以下内联协议执行：`,
+      '',
+      DISPATCH_PROTOCOL_MD,
+    )
+  }
+
+  if (!env.shellOk) {
+    lines.push(
+      '',
+      '警告：本机未检测到可用的 Bash（Git Bash）。你的 Bash 工具很可能无法执行任何命令，' +
+        '派活与汇报请直接使用上面协议中的「文件信箱」通道（只需 Write/Read 工具，不依赖 Bash），' +
+        '并提示用户在「设置 → 诊断」运行环境体检。',
+    )
+  }
+
+  return lines.join('\n')
+}
+
+/** 组装履新消息前的环境实测：结果只影响消息文案，失败不阻塞任命。 */
+async function buildSupervisorOrientationAfterEnvCheck(): Promise<string> {
+  const [skill, shell] = await Promise.all([
+    collabEnvironmentService.checkWorkOrchestratorSkill().catch(() => ({ available: null as boolean | null })),
+    Promise.resolve(collabEnvironmentService.checkShell()),
+  ])
+  return buildSupervisorOrientation({
+    skillAvailable: skill.available,
+    shellOk: shell.ok,
+  })
 }
 
 function buildWorkerOrientation(role?: string, description?: string): string {

@@ -243,6 +243,8 @@ export class ConversationStartupError extends Error {
       | 'CLI_SPAWN_FAILED'
       | 'SESSION_DELETED',
     readonly retryable = false,
+    /** 触发启动失败的 CLI 退出码；用于把 SIGTERM/SIGKILL 类回收与真崩溃区分开 */
+    readonly exitCode?: number,
   ) {
     super(message)
     this.name = 'ConversationStartupError'
@@ -507,12 +509,16 @@ export class ConversationService {
         return this.startSession(sessionId, workDir, sdkUrl, options)
       }
 
-      console.error(
+      // console.error/warn 会被诊断采集镜像成 error/warn 事件，信息级回收
+      // （预热空闲回收的 SIGTERM）必须走 console.log，避免污染 runtime-errors
+      const startupSeverity = cliExitSeverity(startupExitCode)
+      const logStartupExit = startupSeverity === 'error' ? console.error : console.log
+      logStartupExit(
         `[ConversationService] CLI exited with code ${startupExitCode} for ${sessionId}: ${startupError.message}`,
       )
       void diagnosticsService.recordEvent({
         type: 'cli_start_failed',
-        severity: 'error',
+        severity: startupSeverity,
         sessionId,
         summary: startupError.message,
         details: {
@@ -1879,12 +1885,35 @@ export class ConversationService {
     }
 
     const normalizedDetail = detail.trim()
+    if (normalizedDetail) {
+      return new ConversationStartupError(
+        `CLI exited during startup (code ${exitCode}): ${normalizedDetail}`,
+        'CLI_START_FAILED',
+        true,
+        exitCode,
+      )
+    }
+
+    // SIGTERM/SIGKILL 且无任何输出：进程是被外部停止的（典型：预热会话在
+    // 首次使用前被空闲回收器 stopSession 回收），不是崩溃。按 info 上报，
+    // 不进 runtime-errors.log，避免把设计内回收伪装成"启动失败"误导排障
+    // （2026-09 外部用户据此误判员工会话 prewarm 故障）。
+    if (cliExitSeverity(exitCode) === 'info') {
+      const signal = exitCode === 143 ? 'SIGTERM' : 'SIGKILL'
+      return new ConversationStartupError(
+        `CLI was stopped before startup completed (code ${exitCode}, ${signal}); ` +
+          'commonly the prewarm idle reaper reclaiming an unused prewarmed session. This is not a crash.',
+        'CLI_START_FAILED',
+        true,
+        exitCode,
+      )
+    }
+
     return new ConversationStartupError(
-      normalizedDetail
-        ? `CLI exited during startup (code ${exitCode}): ${normalizedDetail}`
-        : `CLI exited during startup with code ${exitCode}; no CLI stderr/stdout or SDK error payload was captured before exit.`,
+      `CLI exited during startup with code ${exitCode}; no CLI stderr/stdout or SDK error payload was captured before exit.`,
       'CLI_START_FAILED',
       true,
+      exitCode,
     )
   }
 

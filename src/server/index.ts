@@ -21,6 +21,7 @@ import { sessionService } from './services/sessionService.js'
 import { localIndexCoordinator } from './services/localIndex/coordinator.js'
 import { searchContentCoordinator } from './services/localIndex/searchContentCoordinator.js'
 import { conversationService } from './services/conversationService.js'
+import { dispatchMailboxService } from './services/dispatchMailboxService.js'
 import { OPENAI_CODEX_REDIRECT_PATH } from '../services/openaiAuth/client.js'
 import { ensureDesktopCliLauncherInstalled } from './services/desktopCliLauncherService.js'
 import { enableConfigs } from '../utils/config.js'
@@ -595,6 +596,10 @@ export function startServer(port = PORT, host = HOST) {
   // Start the cron scheduler to execute scheduled tasks
   cronScheduler.start()
 
+  // Start the dispatch mailbox: file-based fallback channel for session
+  // dispatch/report when a session's Bash is unusable (e.g. no Git Bash).
+  dispatchMailboxService.start(serverPort)
+
   void ensureDesktopCliLauncherInstalled().catch((error) => {
     console.error(
         '[desktop-cli-launcher] failed to install bundled launcher:',
@@ -615,6 +620,7 @@ export async function stopServerRuntimeForShutdown(
 ): Promise<void> {
   teamWatcher.stop()
   cronScheduler.stop()
+  dispatchMailboxService.stop()
   backgroundIndexStartupController?.abort()
   const pendingIndexStartup = backgroundIndexStartup
   await Promise.all([
