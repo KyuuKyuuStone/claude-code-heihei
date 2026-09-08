@@ -62,7 +62,7 @@ export async function handleServantsApi(
       // 了解员工（角色与特性），然后等待用户命令。
       // 失败不阻塞任命本身（身份已落盘）。
       if (entry.supervisor && !previous?.supervisor) {
-        void buildSupervisorOrientationAfterEnvCheck()
+        void buildSupervisorOrientationAfterEnvCheck(targetId, `http://${host}`)
           .then((orientation) =>
             sessionMessenger.deliver(targetId, orientation, host),
           )
@@ -83,7 +83,7 @@ export async function handleServantsApi(
         void sessionMessenger
           .deliver(
             targetId,
-            buildWorkerOrientation(entry.role, entry.description),
+            buildWorkerOrientation(entry.role, entry.description, targetId, `http://${host}`),
             host,
           )
           .catch((error) => {
@@ -176,6 +176,27 @@ export type SupervisorOrientationEnv = {
   /** null = 外部 CLI 无法判断，按缺失处理（内联协议兜底） */
   skillAvailable: boolean | null
   shellOk: boolean
+  /** 注入消息的随身档案：会话 ID 与服务端地址（环境变量缺失时模型无手段获取） */
+  sessionId?: string
+  serverUrl?: string
+}
+
+/** 随身档案 + 两条硬规则：环境变量/Bash 不可用时，模型凭消息文本本身就能完成汇报与自救 */
+function buildPocketCardLines(sessionId?: string, serverUrl?: string): string[] {
+  const lines: string[] = []
+  if (sessionId || serverUrl) {
+    lines.push('随身档案（Bash 或环境变量不可用时，以下值照常可用）：')
+    if (sessionId) {
+      lines.push(`- 你的会话 ID：${sessionId}（汇报时 fromSessionId / 回邮地址用它）`)
+    }
+    if (serverUrl) {
+      lines.push(`- 桌面服务地址：${serverUrl}（HTTP 通道以此为准，以它为可靠来源）`)
+    }
+    lines.push('- 文件信箱：<工作目录>/.heihei/dispatch/report-<序号>.json（Bash 不可用时的汇报通道）')
+  }
+  lines.push('两条硬规则：① 汇报/派活的 HTTP 请求禁止内联中文——Windows 控制台按 GBK 编码会导致服务端收到乱码，必须把 JSON 写入文件后用 --data-binary @file 提交，或走文件信箱；② computer-use 系列工具在无人值守的协作会话中不可用（审批需要桌面连接），不要尝试。')
+  lines.push('工具找不到时（ToolSearch 报 "No matching deferred tools found"）：关键词搜索可能失效，直接用精确名加载——查询 select:Bash,Read,Write,Glob,Grep,Skill。')
+  return lines
 }
 
 /**
@@ -206,6 +227,8 @@ export function buildSupervisorOrientation(env: SupervisorOrientationEnv): strin
     )
   }
 
+  lines.push('', ...buildPocketCardLines(env.sessionId, env.serverUrl))
+
   if (!env.shellOk) {
     lines.push(
       '',
@@ -219,7 +242,7 @@ export function buildSupervisorOrientation(env: SupervisorOrientationEnv): strin
 }
 
 /** 组装履新消息前的环境实测：结果只影响消息文案，失败不阻塞任命。 */
-async function buildSupervisorOrientationAfterEnvCheck(): Promise<string> {
+async function buildSupervisorOrientationAfterEnvCheck(sessionId: string, serverUrl: string): Promise<string> {
   const [skill, shell] = await Promise.all([
     collabEnvironmentService.checkWorkOrchestratorSkill().catch(() => ({ available: null as boolean | null })),
     Promise.resolve(collabEnvironmentService.checkShell()),
@@ -227,10 +250,17 @@ async function buildSupervisorOrientationAfterEnvCheck(): Promise<string> {
   return buildSupervisorOrientation({
     skillAvailable: skill.available,
     shellOk: shell.ok,
+    sessionId,
+    serverUrl,
   })
 }
 
-function buildWorkerOrientation(role?: string, description?: string): string {
+function buildWorkerOrientation(
+  role: string | undefined,
+  description: string | undefined,
+  sessionId: string,
+  serverUrl: string,
+): string {
   const roleLine = role
     ? `你的角色：${role}${description ? `——${description}` : ''}`
     : '你的角色：协作员工（未填写具体角色）'
@@ -239,7 +269,9 @@ function buildWorkerOrientation(role?: string, description?: string): string {
     roleLine,
     '等待主管派活：主管派来的任务会自动出现在你的会话里。',
     '收到派活任务后，立即开始执行，先回复一句确认（如"收到，开始执行"）再干活，不要等待用户确认。',
-    '完工后按派活消息里的要求，用一条命令向主管汇报（写一句话结果 + 产出文件路径）。',
+    '完工后按派活消息里的要求向主管汇报（写一句话结果 + 产出文件路径）。',
+    '',
+    ...buildPocketCardLines(sessionId, serverUrl),
   ].join('\n')
 }
 

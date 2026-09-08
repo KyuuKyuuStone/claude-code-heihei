@@ -75,6 +75,8 @@ describe('ServantService', () => {
     expect(servants[0].enabled).toBe(true)
     expect(servants[0].title).toBeDefined()
     expect(servants[0].running).toBe(false)
+    // 主管区分"执行中"与"假活"的依据：会话最后一次活动时间
+    expect(servants[0].lastActivityAt).toBeDefined()
   })
 
   it('should exclude disabled servants from the roster', async () => {
@@ -347,6 +349,10 @@ describe('Servants API', () => {
     expect(deliverMock.mock.calls[0][0]).toBe(sessionId)
     expect(deliverMock.mock.calls[0][1]).toContain('协作员工')
     expect(deliverMock.mock.calls[0][1]).toContain('写作')
+    // 随身档案：环境变量/Bash 不可用时，凭消息文本即可完成汇报与自救
+    expect(deliverMock.mock.calls[0][1]).toContain(sessionId)
+    expect(deliverMock.mock.calls[0][1]).toContain('select:Bash,Read,Write')
+    expect(deliverMock.mock.calls[0][1]).toContain('computer-use')
 
     // 再次保存（已是员工）：不重复触发
     const again = await handleServantsApi(

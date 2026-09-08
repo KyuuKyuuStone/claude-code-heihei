@@ -453,6 +453,9 @@ export const ToolSearchTool = buildTool({
       ) {
         text += `. Some MCP servers are still connecting: ${content.pending_mcp_servers.join(', ')}. Their tools will become available shortly — try searching again.`
       }
+      // 关键词索引可能不完整（会话早期偶发持续缺失）：精确名 select: 直连
+      // 始终可用，必须让模型知道这条自救路径，否则它会断言"工具不存在"并绕行
+      text += ' Tip: keyword search may be incomplete — load tools by exact name instead with a "select:" query, e.g. select:Bash,Read,Write,Glob,Grep,Skill.'
       return {
         type: 'tool_result',
         tool_use_id: toolUseID,

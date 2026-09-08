@@ -11,6 +11,8 @@ export type ServantInfo = {
   title: string
   workDir?: string
   running: boolean
+  /** 会话最后一次活动时间（transcript 修改时间）——主管区分"执行中"与"假活" */
+  lastActivityAt?: string
 }
 
 export type ServantEntry = {

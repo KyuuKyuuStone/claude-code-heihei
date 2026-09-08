@@ -37,7 +37,7 @@ curl -s "$CC_HEIHEI_DESKTOP_SERVER_URL/api/servant-sessions?forSession=$CC_HEIHE
 \`\`\`json
 {
   "targetSessionId": "<员工sessionId>",
-  "content": "【上级派活】你的角色：<员工的role>——<员工的description>（你的会话 ID：<员工sessionId>）\\n\\n任务：<背景与交付物，写清楚>\\n\\n收到后立即开始执行，先回复一句确认（如"收到，开始执行"）再干活，不要等待确认。\\n\\n完工后必须汇报：优先用下面的 HTTP 命令（content 写一句话结果+产出文件路径）：\\ncurl -s -X POST \\"$CC_HEIHEI_DESKTOP_SERVER_URL/api/session-messages\\" -H \\"Content-Type: application/json\\" -d '{\\"targetSessionId\\":\\"<主管会话ID>\\",\\"content\\":\\"【汇报】<一句话结果+产出路径>\\"}'\\n若你的 Bash 不可用，改用文件信箱：用 Write 把 {\\"targetSessionId\\":\\"<主管会话ID>\\",\\"content\\":\\"【汇报】<一句话结果+产出路径>\\",\\"fromSessionId\\":\\"<你的会话ID>\\"} 写到 <工作目录>/.heihei/dispatch/report-<序号>.json，服务端会自动投递。\\n汇报后任务即告结束。",
+  "content": "【上级派活】你的角色：<员工的role>——<员工的description>（你的会话 ID：<员工sessionId>）\\n\\n任务：<背景与交付物，写清楚>\\n\\n收到后立即开始执行，先回复一句确认（如"收到，开始执行"）再干活，不要等待确认。\\n\\n完工后必须汇报，**不要用 curl 内联中文（Windows 控制台会把中文按 GBK 编码发出，服务端收到乱码）**，统一用写文件方式：用 Write 把 {\\"targetSessionId\\":\\"<主管会话ID>\\",\\"content\\":\\"【汇报】<一句话结果+产出路径>\\",\\"fromSessionId\\":\\"<你的会话ID>\\"} 写到 <工作目录>/report-payload.json，再用 Bash 执行：curl -s -X POST \\"$CC_HEIHEI_DESKTOP_SERVER_URL/api/session-messages\\" -H \\"Content-Type: application/json\\" --data-binary @report-payload.json && rm -f report-payload.json；若你的 Bash 也不可用，直接用 Write 把同样的 JSON 写到 <工作目录>/.heihei/dispatch/report-<序号>.json，服务端会自动投递。\\n汇报后任务即告结束。",
   "fromSessionId": "<你的会话ID>"
 }
 \`\`\`
@@ -78,12 +78,26 @@ curl -s -X POST "$CC_HEIHEI_DESKTOP_SERVER_URL/api/session-messages" \\
 - 员工汇报会以一条「【汇报】」消息出现在你的会话里，**收到后你必须响应**：验收结果，然后向用户总结交付，或把返工意见再用第二步派回同一个员工。
 - 多件活可并行派给不同员工，也可串行：一件验收通过再派下一件。
 
+### 假活检查（派活后 3~5 分钟主动做一次）
+
+\`{"ok":true}\` 只代表消息**投递**成功，不代表员工真的在干活。派活几分钟后查一次花名册，用 \`lastActivityAt\`（员工会话最后一次活动时间）区分"执行中"与"假活"：
+
+\`\`\`bash
+curl -s "$CC_HEIHEI_DESKTOP_SERVER_URL/api/servant-sessions?forSession=$CC_HEIHEI_SESSION_ID"
+\`\`\`
+
+- 员工的 \`lastActivityAt\` 在派活之后有更新 = 已开工，继续等汇报；
+- 一直没更新 = 员工可能卡住（工具缺失/权限等待），**发一条带排障线索的催促**，不要只施压。催促模板要点：① 用 ToolSearch 查询 \`select:Bash,Read,Write,Glob,Grep\` 精确加载核心工具（关键词搜索失效时这是唯一有效路径）；② 汇报改用文件信箱（写 JSON 到 \`.heihei/dispatch/report-<序号>.json\`）；③ 汇报命令不要内联中文。
+- 员工长期（10 分钟以上）无活动且催促无回应：告知用户该员工会话可能异常，建议用户在 UI 点开该会话查看现场。
+
 ## 故障自检（派活/汇报失败时按序执行）
 
 1. Bash 输出 \`?????\` 或命令毫无效果 = shell 不可用：放弃 curl，全程改用「文件信箱」通道（只需 Write/Read 工具）。
-2. 环境变量检查：\`$CC_HEIHEI_DESKTOP_SERVER_URL\` 与 \`$CC_HEIHEI_SESSION_ID\` 应在你的 Bash 里可用（\`echo\` 验证）。HTTP 通道依赖这两个变量。
-3. 端口疑似过期时，用 Read 查看桌面服务状态文件 \`~/.claude/desktop-server-state.json\` 的 \`lastPort\` 字段取真实端口；文件信箱通道不依赖端口。
-4. 所有通道都失败时，明确告诉用户"协作环境异常"及失败原因，请用户在应用的「设置 → 诊断」里运行环境体检。
+2. 工具找不到时（ToolSearch 报 "No matching deferred tools found"）：**关键词搜索可能失效，直接用精确名加载**——ToolSearch 查询 \`select:Bash,Read,Write,Glob,Grep,Skill\`。
+3. 环境变量检查：\`$CC_HEIHEI_DESKTOP_SERVER_URL\` 与 \`$CC_HEIHEI_SESSION_ID\` 应在你的 Bash 里可用（\`echo\` 验证）。HTTP 通道依赖这两个变量；这两个值也写在你的上岗消息里。
+4. 端口疑似过期时，用 Read 查看桌面服务状态文件 \`~/.claude/desktop-server-state.json\` 的 \`lastPort\` 字段取真实端口；文件信箱通道不依赖端口。
+5. computer-use 系列工具在无人值守的协作会话中不可用（审批需要桌面连接）：**不要尝试**，别在这条路上浪费轮次。
+6. 所有通道都失败时，明确告诉用户"协作环境异常"及失败原因，请用户在应用的「设置 → 诊断」里运行环境体检。
 
 ## 规则
 

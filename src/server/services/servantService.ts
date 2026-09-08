@@ -35,6 +35,8 @@ export type ServantInfo = ServantEntry & {
   workDir?: string
   /** CLI 是否正在运行 */
   running: boolean
+  /** 会话最后一次活动时间（transcript 文件修改时间）——主管用它区分"执行中"与"假活" */
+  lastActivityAt?: string
 }
 
 type ServantsFile = {
@@ -93,6 +95,7 @@ export class ServantService {
           title: session.title,
           workDir: session.workDir,
           running: conversationService.hasSession(entry.sessionId),
+          ...(session.modifiedAt ? { lastActivityAt: session.modifiedAt } : {}),
         }
       })
       .sort((a, b) => b.updatedAt - a.updatedAt)
