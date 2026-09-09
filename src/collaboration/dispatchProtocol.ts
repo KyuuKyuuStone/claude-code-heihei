@@ -99,6 +99,13 @@ curl -s "$CC_HEIHEI_DESKTOP_SERVER_URL/api/servant-sessions?forSession=$CC_HEIHE
 5. computer-use 系列工具在无人值守的协作会话中不可用（审批需要桌面连接）：**不要尝试**，别在这条路上浪费轮次。
 6. 所有通道都失败时，明确告诉用户"协作环境异常"及失败原因，请用户在应用的「设置 → 诊断」里运行环境体检。
 
+## 员工管理（都是现成端点，不用猜路径）
+
+- **修改角色特性 / 禁用员工**：用 **PUT**（不是 PATCH）\`/api/servant-sessions/<员工sessionId>\`，body：\`{"description":"补充约束","enabled":true}\`（enabled 必填，带上当前值；\`false\` 即停接新活）。
+- **中断员工正在跑的任务**：POST \`/api/sessions/<员工sessionId>/interrupt\`（保留会话与历史）。⚠️ 不要用 \`DELETE /api/sessions/<id>\`——那会删除整个会话，不可逆。
+- **广播**：POST \`/api/session-messages\`，body：\`{"broadcast":true,"content":"停工待命","fromSessionId":"<你的会话ID>"}\`，一条消息发给本项目全部员工。
+- **端点名录**：GET \`$CC_HEIHEI_DESKTOP_SERVER_URL/api\` 可列出全部可用端点，拿不准路径就查它。
+
 ## 规则
 
 - 只向花名册里 \`enabled\` 的会话派活。

@@ -14,7 +14,8 @@
  *   GET    /api/sessions/:id/turn-checkpoints/diff — 获取绑定到指定 checkpoint 的 diff
  *   POST   /api/sessions            — 创建新会话
  *   POST   /api/sessions/batch-delete — 批量删除会话
- *   DELETE /api/sessions/:id        — 删除会话
+ *   POST   /api/sessions/:id/interrupt — 中断当前运行（保留会话与历史）
+ *   DELETE /api/sessions/:id        — 删除会话（不可逆；只想中断请用 interrupt）
  *   PATCH  /api/sessions/:id        — 重命名会话
  */
 
@@ -22,7 +23,7 @@ import * as path from 'node:path'
 import { sessionService } from '../services/sessionService.js'
 import { conversationService } from '../services/conversationService.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
-import { closeSessionConnection, getSlashCommands } from '../ws/handler.js'
+import { closeSessionConnection, getSlashCommands, interruptSessionRuntime } from '../ws/handler.js'
 import { listSkillSlashCommands, type SkillSlashCommand } from './skills.js'
 import { WorkspaceService } from '../services/workspaceService.js'
 import {
@@ -196,6 +197,32 @@ export async function handleSessionsApi(
         )
       }
       return await getSessionInspection(req, sessionId, url)
+    }
+
+    // -----------------------------------------------------------------------
+    // Sub-resource routes: /api/sessions/:id/interrupt
+    // 中断当前运行（SDK 优雅中断 + 3s 强杀兜底），保留会话与历史。
+    // 与 WS 的 stop_generation 共用 interruptSessionRuntime。
+    // -----------------------------------------------------------------------
+    if (subResource === 'interrupt') {
+      if (req.method !== 'POST') {
+        return Response.json(
+          { error: 'METHOD_NOT_ALLOWED', message: `Method ${req.method} not allowed` },
+          { status: 405 }
+        )
+      }
+      const workDir = await sessionService.getSessionWorkDir(sessionId)
+      if (!workDir) {
+        throw ApiError.notFound(`Session not found: ${sessionId}`)
+      }
+      const { stopped } = interruptSessionRuntime(sessionId)
+      return Response.json({
+        ok: true,
+        stopped,
+        message: stopped
+          ? 'Interrupt requested'
+          : 'Session has no running turn (already idle)',
+      })
     }
 
     if (subResource === 'workspace') {

@@ -5878,4 +5878,40 @@ describe('Sessions API', () => {
     expect(status.state).toBe('idle')
     expect(status.activityState).toBe('idle')
   })
+
+  it('POST /api/sessions/:id/interrupt returns ok for an existing idle session', async () => {
+    const workDir = await fs.mkdtemp(path.join(tmpDir, 'api-interrupt-'))
+    const createRes = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workDir }),
+    })
+    const { sessionId } = (await createRes.json()) as { sessionId: string }
+
+    // 空闲会话：stopped=false（没有进行中的轮次），但端点本身 200
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/interrupt`, { method: 'POST' })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok: boolean; stopped: boolean }
+    expect(body.ok).toBe(true)
+    expect(body.stopped).toBe(false)
+  })
+
+  it('POST /api/sessions/:id/interrupt returns 404 for an unknown session', async () => {
+    const res = await fetch(`${baseUrl}/api/sessions/no-such-session/interrupt`, { method: 'POST' })
+    expect(res.status).toBe(404)
+  })
+
+  it('GET /api returns the endpoint catalog', async () => {
+    const { handleApiRequest } = await import('../router.js')
+    const res = await handleApiRequest(
+      new Request('http://localhost/api'),
+      new URL('http://localhost/api'),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { endpoints: Array<{ method: string; path: string }> }
+    const paths = body.endpoints.map((endpoint) => endpoint.path)
+    expect(paths).toContain('/api/servant-sessions?forSession={sessionId}')
+    expect(paths).toContain('/api/session-messages')
+    expect(paths).toContain('/api/sessions/{sessionId}/interrupt')
+  })
 })

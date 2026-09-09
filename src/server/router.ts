@@ -35,6 +35,11 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
   const path = url.pathname
   const segments = path.split('/').filter(Boolean) // ['api', 'sessions', ...]
 
+  // GET /api — 端点名录：让会话内的 AI（和排障的人）不用穷举猜路径
+  if (req.method === 'GET' && (path === '/api' || path === '/api/')) {
+    return Response.json(buildApiCatalog())
+  }
+
   // Route to appropriate handler based on the second segment
   const resource = segments[1]
 
@@ -147,5 +152,64 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
         { error: 'Not Found', message: `Unknown API resource: ${resource}` },
         { status: 404 }
       )
+  }
+}
+
+/**
+ * GET /api 端点名录：协作会话里的 AI（主管/员工）和排障的人可以一次拿到
+ * 可用端点清单，替代"穷举试错猜路径"。只收录会话协作与核心会话管理相关
+ * 的稳定端点；完整能力仍以各资源端点为准。
+ */
+function buildApiCatalog() {
+  return {
+    name: 'Claude Code Heihei Desktop API',
+    hint: '所有路径相对服务根地址。带 {sessionId} 的路径需替换为真实会话 ID。',
+    endpoints: [
+      {
+        method: 'GET',
+        path: '/api',
+        description: '本名录',
+      },
+      {
+        method: 'GET',
+        path: '/api/servant-sessions?forSession={sessionId}',
+        description: '员工花名册（本项目的员工，含 role/description/running/lastActivityAt）',
+      },
+      {
+        method: 'PUT',
+        path: '/api/servant-sessions/{sessionId}',
+        description: '设置/更新协作身份；body: {role?, description?, enabled, supervisor?, runtimeProviderId?, runtimeModelId?, effortLevel?}。禁用员工用 enabled:false，修改角色特性直接改 description',
+      },
+      {
+        method: 'DELETE',
+        path: '/api/servant-sessions/{sessionId}',
+        description: '移除协作身份（不删除会话本身）',
+      },
+      {
+        method: 'POST',
+        path: '/api/session-messages',
+        description: '会话间消息投递（派活/汇报共用）；body: {targetSessionId, content, fromSessionId?}。中文必须写 JSON 文件后 --data-binary @file 提交；body 用 {broadcast:true, content, fromSessionId} 可发给本项目全部员工',
+      },
+      {
+        method: 'POST',
+        path: '/api/sessions/{sessionId}/interrupt',
+        description: '中断该会话当前运行（保留会话与历史）。停止员工空转用这个，不要用 DELETE',
+      },
+      {
+        method: 'DELETE',
+        path: '/api/sessions/{sessionId}',
+        description: '⚠️ 删除整个会话（含历史），不可逆。只想停止运行请用 POST /api/sessions/{sessionId}/interrupt',
+      },
+      {
+        method: 'GET',
+        path: '/api/sessions/{sessionId}',
+        description: '会话详情（含 modifiedAt 最后活动时间）',
+      },
+      {
+        method: 'GET',
+        path: '/api/doctor/report?cwd={workDir}',
+        description: '环境体检（shell/协作技能/配置文件完整性）',
+      },
+    ],
   }
 }

@@ -1253,8 +1253,12 @@ async function restartSessionWithRuntimeConfig(
   }
 }
 
-function handleStopGeneration(ws: ServerWebSocket<WebSocketData>) {
-  const { sessionId } = ws.data
+/**
+ * 中断会话当前运行：SDK 优雅中断 + 3 秒强杀兜底，保留会话与历史。
+ * WS（stop_generation）与 REST（POST /api/sessions/:id/interrupt）共用。
+ * 返回 stopped=false 表示当前没有进行中的轮次（会话空闲或未运行）。
+ */
+export function interruptSessionRuntime(sessionId: string): { stopped: boolean } {
   const stoppedTurn = activeUserTurns.get(sessionId)
   console.log(`[WS] Stop generation requested for session: ${sessionId}`)
 
@@ -1263,7 +1267,10 @@ function handleStopGeneration(ws: ServerWebSocket<WebSocketData>) {
   terminalSessionChatStates.delete(sessionId)
   interruptedSessionChats.add(sessionId)
 
-  if (stoppedTurn && conversationService.hasSession(sessionId)) {
+  const stopped = Boolean(
+    stoppedTurn && conversationService.hasSession(sessionId),
+  )
+  if (stopped) {
     // First try graceful interrupt via SDK control message
     conversationService.sendInterrupt(sessionId)
 
@@ -1280,6 +1287,12 @@ function handleStopGeneration(ws: ServerWebSocket<WebSocketData>) {
     }, 3_000)
   }
 
+  return { stopped }
+}
+
+function handleStopGeneration(ws: ServerWebSocket<WebSocketData>) {
+  const { sessionId } = ws.data
+  interruptSessionRuntime(sessionId)
   sendMessage(ws, { type: 'status', state: 'idle' })
 }
 

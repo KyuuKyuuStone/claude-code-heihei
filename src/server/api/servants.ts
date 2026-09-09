@@ -125,6 +125,12 @@ export async function handleSessionMessagesApi(
     // ── POST /api/session-messages ──────────────────────────────────────
     if (req.method === 'POST') {
       const body = await parseJsonBody(req)
+
+      // 广播：一条消息发给本项目全部 enabled 员工（不含发送者自己）
+      if (body.broadcast === true) {
+        return await handleBroadcast(req, body)
+      }
+
       const targetSessionId = body.targetSessionId as string
       const fromSessionId = body.fromSessionId as string | undefined
 
@@ -163,6 +169,44 @@ export async function handleSessionMessagesApi(
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
+
+/** 广播：body {broadcast:true, content, fromSessionId} → 本项目全部 enabled 员工 */
+async function handleBroadcast(req: Request, body: Record<string, unknown>): Promise<Response> {
+  const fromSessionId = typeof body.fromSessionId === 'string' ? body.fromSessionId.trim() : ''
+  const content = typeof body.content === 'string' ? body.content : ''
+  if (!fromSessionId) {
+    throw ApiError.badRequest('Field "fromSessionId" is required for broadcast')
+  }
+  if (!content.trim()) {
+    throw ApiError.badRequest('Field "content" is required for broadcast')
+  }
+
+  const targets = (await servantService.listServants({
+    includeAll: true,
+    forSessionId: fromSessionId,
+  })).filter((servant) => servant.enabled && servant.sessionId !== fromSessionId)
+  if (targets.length === 0) {
+    throw ApiError.notFound('No enabled servants in this project to broadcast to')
+  }
+
+  const host = req.headers.get('host') || '127.0.0.1'
+  const results = await Promise.allSettled(
+    targets.map((target) => sessionMessenger.deliver(target.sessionId, content, host)),
+  )
+  const failed = targets
+    .filter((_, index) => {
+      const result = results[index]
+      return result?.status === 'rejected' || result?.value !== true
+    })
+    .map((target) => target.sessionId)
+  if (failed.length === targets.length) {
+    throw ApiError.internal('Broadcast failed for all targets')
+  }
+  return Response.json(
+    { ok: true, broadcast: true, delivered: targets.length - failed.length, ...(failed.length > 0 ? { failed } : {}) },
+    { status: 201 },
+  )
+}
 
 async function parseJsonBody(req: Request): Promise<Record<string, unknown>> {
   try {
@@ -290,9 +334,14 @@ async function notifySupervisorOfNewWorker(
     const roleText = entry.role
       ? `${entry.role}（${entry.description || '未填写特性'}）`
       : '未命名角色'
+    // 附上 sessionId 与 workDir：花名册按项目隔离过滤，若主管查不到这位员工，
+    // 一眼能核对是不是工作目录不同（而不是登记丢失）
+    const workDir = await sessionService
+      .getSessionWorkDir(entry.sessionId)
+      .catch(() => null)
     await sessionMessenger.deliver(
       supervisor.sessionId,
-      `【系统】新员工已加入本项目：${roleText}。花名册已更新，你现在可以给这位员工派活了。`,
+      `【系统】新员工已加入本项目：${roleText}。会话 ID：${entry.sessionId}${workDir ? `，工作目录：${workDir}` : ''}。花名册已更新，你现在可以给这位员工派活了；若花名册里查不到它，多半是其工作目录与你的项目不同（项目隔离），而非登记丢失。`,
       host,
     )
   } catch (error) {

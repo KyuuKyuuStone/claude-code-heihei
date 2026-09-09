@@ -461,6 +461,59 @@ describe('Session Messages API', () => {
     expect([201, 400]).toContain(missingTarget.status)
   })
 
+  it('should broadcast to enabled servants in the project, skipping disabled and sender', async () => {
+    const mod = await import('../api/servants.js')
+    const handleServantsApi = mod.handleServantsApi
+    const service = new ServantService()
+    const supervisor = await sessionService.createSession(tmpDir)
+    const workerA = await sessionService.createSession(tmpDir)
+    const workerB = await sessionService.createSession(tmpDir)
+    const workerOff = await sessionService.createSession(tmpDir)
+    await service.setServant(supervisor.sessionId, { enabled: true, supervisor: true })
+    await service.setServant(workerA.sessionId, { role: '前端', enabled: true })
+    await service.setServant(workerB.sessionId, { role: '测试', enabled: true })
+    await service.setServant(workerOff.sessionId, { enabled: false })
+
+    const res = await handleSessionMessagesApi(
+      new Request('http://localhost/api/session-messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          broadcast: true,
+          content: '停工待命',
+          fromSessionId: supervisor.sessionId,
+        }),
+      }),
+      new URL('http://localhost/api/session-messages'),
+      ['api', 'session-messages'],
+    )
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.delivered).toBe(2)
+    const targets = deliverMock.mock.calls.map((call) => call[0])
+    expect(targets).toContain(workerA.sessionId)
+    expect(targets).toContain(workerB.sessionId)
+    expect(targets).not.toContain(workerOff.sessionId)
+    expect(targets).not.toContain(supervisor.sessionId)
+  })
+
+  it('should 404 a broadcast when no enabled servants exist', async () => {
+    const res = await handleSessionMessagesApi(
+      new Request('http://localhost/api/session-messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          broadcast: true,
+          content: '停工',
+          fromSessionId: 'someone',
+        }),
+      }),
+      new URL('http://localhost/api/session-messages'),
+      ['api', 'session-messages'],
+    )
+    expect(res.status).toBe(404)
+  })
+
   it('should block cross-project dispatch to a servant', async () => {
     // mock 的 deliver 返回 true；跨项目检查在 deliver 之前
     const { sessionService: realSessionService } = await import(
