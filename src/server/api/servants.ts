@@ -209,8 +209,19 @@ async function handleBroadcast(req: Request, body: Record<string, unknown>): Pro
 }
 
 async function parseJsonBody(req: Request): Promise<Record<string, unknown>> {
+  const raw = new Uint8Array(await req.arrayBuffer())
+  if (raw.length === 0) return {}
+  let text: string
   try {
-    return (await req.json()) as Record<string, unknown>
+    text = new TextDecoder('utf-8', { fatal: true }).decode(raw)
+  } catch {
+    // Windows 终端的 curl -d 内联中文按 GBK 编码发出（2026-09-10 实战复盘：
+    // 存量会话的旧模板仍是这种写法）。严格 UTF-8 解码失败即按 GBK 解码，
+    // 让旧习惯的汇报也能被正确接收。
+    text = new TextDecoder('gbk').decode(raw)
+  }
+  try {
+    return JSON.parse(text) as Record<string, unknown>
   } catch {
     throw ApiError.badRequest('Invalid JSON body')
   }
@@ -252,6 +263,7 @@ export function buildSupervisorOrientation(env: SupervisorOrientationEnv): strin
   const lines = [
     '【系统】你已被任命为本项目的主管。',
     '你的职责：接收用户命令 → 拆解任务 → 派给本项目的员工会话 → 验收汇报 → 继续安排，直到用户需求完成。',
+    '**默认工作方式：收到任务的第一反应是拆解并派活。只有用户点名要你亲自做、或没有合适的员工时才自己动手**——用户设置主管就是为了让你编排，不要先自己干。',
     '',
     '现在请立即执行第一步——查看你的员工花名册（角色与角色特性）：',
     'curl -s "$CC_HEIHEI_DESKTOP_SERVER_URL/api/servant-sessions?forSession=$CC_HEIHEI_SESSION_ID"',

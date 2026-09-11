@@ -1,8 +1,14 @@
 import type { ModelInfo } from '../types/settings'
 
-export const OFFICIAL_DEFAULT_MODEL_ID = 'claude-opus-4-8'
+export const OFFICIAL_DEFAULT_MODEL_ID = 'claude-fable-5-1'
 
 export const OFFICIAL_MODELS: ModelInfo[] = [
+  {
+    id: 'claude-fable-5-1',
+    name: 'Fable 5.1',
+    description: 'Newest Fable: biggest gains in agentic coding and long-running workflows',
+    context: '1m',
+  },
   {
     id: 'claude-fable-5',
     name: 'Fable 5',

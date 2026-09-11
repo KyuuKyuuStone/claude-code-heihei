@@ -4,7 +4,7 @@ import { useSessionRuntimeStore } from './sessionRuntimeStore'
 
 const EXPECTED_GROK_SELECTION = {
   providerId: 'grok-official',
-  modelId: 'grok-4.5',
+  modelId: 'grok-4.6',
   effortLevel: 'high',
 }
 

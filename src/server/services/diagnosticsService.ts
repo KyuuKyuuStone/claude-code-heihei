@@ -98,6 +98,8 @@ export class DiagnosticsService {
   private originalConsoleError: typeof console.error | null = null
   private originalConsoleWarn: typeof console.warn | null = null
   private lastRetentionSweepAt = 0
+  /** 主诊断文件追加失败（被外部进程锁住等）时的时间戳；null = 正常。用于限频告警 */
+  private lastAppendFailureAt: number | null = null
   private writeQueue: Promise<void> = Promise.resolve()
 
   getLogDir(): string {
@@ -114,6 +116,22 @@ export class DiagnosticsService {
 
   getRuntimeErrorsPath(): string {
     return path.join(this.getLogDir(), 'runtime-errors.log')
+  }
+
+  /** 主诊断文件被锁时的降级旁路文件（按天分文件，避免旁路无限膨胀） */
+  private getFallbackDiagnosticsPath(now: number): string {
+    const day = new Date(now).toISOString().slice(0, 10)
+    return path.join(this.getLogDir(), `diagnostics-fallback-${day}.jsonl`)
+  }
+
+  private getFallbackRuntimeErrorsPath(now: number): string {
+    const day = new Date(now).toISOString().slice(0, 10)
+    return path.join(this.getLogDir(), `runtime-errors-fallback-${day}.log`)
+  }
+
+  private formatFallbackLine(event: DiagnosticEvent): string {
+    // 与主文件同格式，另附 note 便于区分来源
+    return JSON.stringify({ ...event, degraded: true }) + '\n'
   }
 
   getElectronHostPath(): string {
@@ -171,12 +189,34 @@ export class DiagnosticsService {
     return operation
   }
 
-  private async writeEvent(event: DiagnosticEvent): Promise<DiagnosticWriteResult> {
-    try {
+  private async writeEvent(event: DiagnosticEvent): Promise<DiagnosticWriteResult> {    try {
       await this.ensureLogDir()
-      await this.appendPrivateFile(this.getDiagnosticsPath(), JSON.stringify(event) + '\n')
-      if (event.severity === 'warn' || event.severity === 'error') {
-        await this.appendPrivateFile(this.getRuntimeErrorsPath(), this.formatRuntimeLogEntry(event))
+      const line = JSON.stringify(event) + '\n'
+      try {
+        await this.appendPrivateFile(this.getDiagnosticsPath(), line)
+        if (event.severity === 'warn' || event.severity === 'error') {
+          await this.appendPrivateFile(this.getRuntimeErrorsPath(), this.formatRuntimeLogEntry(event))
+        }
+        this.lastAppendFailureAt = null
+      } catch (appendError) {
+        // 主诊断文件被外部进程锁住时（编辑器开着 20MB 的 jsonl、索引器占用等），
+        // append 会持续失败——旧实现静默吞掉，日志"停写一天"无人察觉
+        // （2026-09-09~10 用户机器实测）。降级写旁路文件，并在 stdout 留痕
+        // （sidecar stdout 会进 electron-host.log，那里始终可写）。
+        // 注意：不能用 console.warn/error——它们会被 installConsoleCapture
+        // 镜像回 recordEvent，形成写失败循环。
+        const now = Date.now()
+        if (this.lastAppendFailureAt === null || now - this.lastAppendFailureAt > 60_000) {
+          console.log(
+            `[Diagnostics] primary log append failed, degrading to fallback file: ${appendError instanceof Error ? appendError.message : String(appendError)}`,
+          )
+          this.lastAppendFailureAt = now
+        }
+        const fallbackLine = this.formatFallbackLine(event)
+        await this.appendPrivateFile(this.getFallbackDiagnosticsPath(now), fallbackLine)
+        if (event.severity === 'warn' || event.severity === 'error') {
+          await this.appendPrivateFile(this.getFallbackRuntimeErrorsPath(now), this.formatRuntimeLogEntry(event))
+        }
       }
       await this.enforceRetention().catch(() => {})
       return { ok: true, event }

@@ -88,7 +88,8 @@ describe('ModelSelector', () => {
 
     await clickByRole(/Opus 4\.7/i)
 
-    expect(screen.getByRole('button', { name: /Fable 5/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Fable 5\.1 Newest Fable/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Fable 5 Highest capability/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Opus 4\.8/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Sonnet 5/ })).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: /Opus 4\.7/ }).length).toBeGreaterThan(0)
@@ -633,11 +634,11 @@ describe('ModelSelector', () => {
     render(<ModelSelector runtimeKey="session-stale-grok" />)
 
     expect(screen.queryByText('grok-build')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Grok 4.5, Grok Official' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'grok-4.6, Grok Official' })).toBeInTheDocument()
     await waitFor(() => {
       expect(useSessionRuntimeStore.getState().selections['session-stale-grok']).toEqual({
         providerId: 'grok-official',
-        modelId: 'grok-4.5',
+        modelId: 'grok-4.6',
         effortLevel: 'high',
       })
     })

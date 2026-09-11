@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/Button'
 import { IconButton } from '@/components/ui/IconButton'
 import { useTranslation } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
+import { useServantStore } from '../../stores/servantStore'
 import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useSessionStore } from '../../stores/sessionStore'
@@ -618,6 +619,30 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
       workDir || undefined,
       createOptions,
     )
+    // 空会话若是协作会话（主管/员工），把协作身份与运行配置过继到新会话——
+    // 否则改一次工作目录就会连身份一起删掉旧会话，员工在花名册里"消失"
+    // （2026-09-10 实测）。先登记新会话身份，再删除旧会话，避免花名册竞态。
+    const servantEntry = useServantStore.getState().bySessionId[oldId]
+    if (servantEntry) {
+      const oldSession = sessionStore.sessions.find((session) => session.id === oldId)
+      try {
+        await useServantStore.getState().setServant(newId, {
+          role: servantEntry.role,
+          description: servantEntry.description,
+          enabled: servantEntry.enabled,
+          supervisor: servantEntry.supervisor,
+          ...(oldSession?.runtimeProviderId !== undefined || oldSession?.runtimeModelId
+            ? {
+                runtimeProviderId: oldSession?.runtimeProviderId,
+                ...(oldSession?.runtimeModelId ? { runtimeModelId: oldSession.runtimeModelId } : {}),
+                ...(oldSession?.effortLevel ? { effortLevel: oldSession.effortLevel } : {}),
+              }
+            : {}),
+        })
+      } catch {
+        // 身份过继失败不阻塞会话替换（花名册重新登记即可恢复）
+      }
+    }
     if (inputRef.current.length > 0 || attachmentsRef.current.length > 0) {
       setComposerDraft(newId, {
         input: inputRef.current,

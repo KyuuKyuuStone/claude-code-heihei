@@ -446,6 +446,27 @@ describe('Session Messages API', () => {
     expect(deliverMock.mock.calls[0][1]).toBe('任务：实现登录接口')
   })
 
+  it('recovers GBK-encoded Chinese from legacy inline curl bodies', async () => {
+    // Windows 控制台的 curl -d 内联中文按 GBK 编码发出（实战复盘 BUG-1）：
+    // 服务端严格 UTF-8 解码失败时回退 GBK 解码。"测试" 的 GBK 字节 = B2 E2 CA D4
+    const body = Buffer.concat([
+      Buffer.from('{"targetSessionId":"sess-1","content":"', 'utf8'),
+      Buffer.from([0xB2, 0xE2, 0xCA, 0xD4]),
+      Buffer.from('","fromSessionId":"emp-1"}', 'utf8'),
+    ])
+    const res = await handleSessionMessagesApi(
+      new Request('http://localhost/api/session-messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      }),
+      new URL('http://localhost/api/session-messages'),
+      ['api', 'session-messages'],
+    )
+    expect(res.status).toBe(201)
+    expect(deliverMock.mock.calls[0][1]).toBe('测试')
+  })
+
   it('should reject invalid payloads', async () => {
     const missingTarget = await handleSessionMessagesApi(
       new Request('http://localhost/api/session-messages', {

@@ -8,24 +8,24 @@ export const BUILT_IN_PROVIDER_IDS = [
   OPENAI_OFFICIAL_PROVIDER_ID,
   GROK_OFFICIAL_PROVIDER_ID,
 ] as const
-export const OPENAI_OFFICIAL_DEFAULT_MODEL_ID = 'gpt-5.6-sol'
+export const OPENAI_OFFICIAL_DEFAULT_MODEL_ID = 'gpt-6-astra'
 export const OPENAI_OFFICIAL_PROVIDER_NAME = 'ChatGPT Official'
 
 export const OPENAI_OFFICIAL_MODELS: ModelInfo[] = [
   {
     id: OPENAI_OFFICIAL_DEFAULT_MODEL_ID,
-    name: 'GPT-5.6-Sol',
-    description: 'Latest frontier agentic coding model',
-    context: '353400',
+    name: 'GPT-6 Astra',
+    description: 'Most capable model, built for the hardest end-to-end work',
+    context: '1050000',
     defaultReasoningEffort: 'low',
     supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
   },
   {
-    id: 'gpt-5.6-terra',
-    name: 'GPT-5.6-Terra',
-    description: 'Balanced agentic coding model for everyday work',
+    id: 'gpt-5.6-sol',
+    name: 'GPT-5.6-Sol',
+    description: 'Frontier agentic coding model',
     context: '353400',
-    defaultReasoningEffort: 'medium',
+    defaultReasoningEffort: 'low',
     supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
   },
   {

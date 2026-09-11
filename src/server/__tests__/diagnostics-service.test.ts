@@ -117,6 +117,29 @@ async function assertAppendSurvivesCliCleanup(
 }
 
 describe('DiagnosticsService', () => {
+  test('degrades to a fallback file when the primary diagnostics file is unwritable', async () => {
+    const service = new DiagnosticsService()
+    const logDir = path.join(tmpDir, 'cc-heihei', 'diagnostics')
+    // 把主诊断文件变成目录：append 必然 EISDIR 失败，模拟被外部进程锁住
+    await fs.mkdir(path.join(logDir, 'diagnostics.jsonl'), { recursive: true })
+
+    await service.recordEvent({ type: 'probe_while_locked', severity: 'error', summary: 'locked' })
+
+    const day = new Date().toISOString().slice(0, 10)
+    const fallback = await fs.readFile(
+      path.join(logDir, `diagnostics-fallback-${day}.jsonl`),
+      'utf-8',
+    )
+    expect(fallback).toContain('probe_while_locked')
+    expect(fallback).toContain('"degraded":true')
+    const fallbackRuntime = await fs.readFile(
+      path.join(logDir, `runtime-errors-fallback-${day}.log`),
+      'utf-8',
+    )
+    expect(fallbackRuntime).toContain('probe_while_locked')
+  })
+
+
   test('writes sanitized structured events and runtime error summaries', async () => {
     const service = new DiagnosticsService()
     await service.recordEvent({

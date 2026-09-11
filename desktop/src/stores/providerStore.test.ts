@@ -177,7 +177,7 @@ describe('providerStore runtime refresh', () => {
     const { useProviderStore } = await import('./providerStore')
     await useProviderStore.getState().activateProvider('openai-official')
 
-    expect(settingsSetModelMock).toHaveBeenCalledWith('gpt-5.6-sol')
+    expect(settingsSetModelMock).toHaveBeenCalledWith('gpt-6-astra')
     expect(settingsFetchAllMock).toHaveBeenCalled()
   })
 
@@ -188,7 +188,7 @@ describe('providerStore runtime refresh', () => {
     const { useProviderStore } = await import('./providerStore')
     await useProviderStore.getState().activateProvider('grok-official')
 
-    expect(settingsSetModelMock).toHaveBeenCalledWith('grok-4.5')
+    expect(settingsSetModelMock).toHaveBeenCalledWith('grok-4.6')
     expect(settingsFetchAllMock).toHaveBeenCalled()
   })
 
