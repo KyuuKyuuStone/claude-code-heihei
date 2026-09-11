@@ -19,10 +19,10 @@
     "baseUrl": "https://api.deepseek.com/anthropic",
     "apiFormat": "anthropic",
     "defaultModels": {
-      "main": "deepseek-v4-pro[1m]",
-      "haiku": "deepseek-v4-flash",
-      "sonnet": "deepseek-v4-pro[1m]",
-      "opus": "deepseek-v4-pro[1m]"
+      "main": "deepseek-flash",
+      "haiku": "deepseek-flash",
+      "sonnet": "deepseek-flash",
+      "opus": "deepseek-flash"
     },
     "needsApiKey": true,
     "websiteUrl": "https://platform.deepseek.com",
@@ -39,7 +39,8 @@
       "deepseek-v4-pro": 1000000,
       "deepseek-v4-flash": 1000000,
       "deepseek-chat": 1000000,
-      "deepseek-reasoner": 1000000
+      "deepseek-reasoner": 1000000,
+      "deepseek-flash": 1000000
     }
   },
   {
