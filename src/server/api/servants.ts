@@ -11,6 +11,7 @@
  */
 
 import { servantService } from '../services/servantService.js'
+import { conversationService } from '../services/conversationService.js'
 import { sessionMessenger } from '../services/sessionMessenger.js'
 import { sessionService } from '../services/sessionService.js'
 import { collabEnvironmentService } from '../services/collabEnvironmentService.js'
@@ -96,6 +97,8 @@ export async function handleServantsApi(
       }
       // 花名册变化后收敛文件信箱监听目录（新增/移除员工的项目）
       void dispatchMailboxService.sync()
+      // 协作身份变化（任命/卸任/改角色）：清主管标记缓存，下次会话启动按最新身份收权
+      conversationService.invalidateSupervisorCache(targetId)
       return Response.json({ servant: entry })
     }
 

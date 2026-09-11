@@ -1441,6 +1441,32 @@ export class ConversationService {
     return args
   }
 
+  /** 主管会话缓存：sessionId → 是否登记为主管（负缓存也存，避免每次启动读花名册文件） */
+  private supervisorSessionCache = new Map<string, boolean>()
+
+  /** 协作身份变化后调用（任命/卸任/移除），让下次会话启动按最新花名册注入标记 */
+  invalidateSupervisorCache(sessionId?: string): void {
+    if (sessionId === undefined) this.supervisorSessionCache.clear()
+    else this.supervisorSessionCache.delete(sessionId)
+  }
+
+  private async isRegisteredSupervisor(sessionId: string): Promise<boolean> {
+    const cached = this.supervisorSessionCache.get(sessionId)
+    if (cached !== undefined) return cached
+    let isSupervisor = false
+    try {
+      // 动态导入避免 conversationService ↔ servantService 静态依赖环
+      // （servantService 引用本类的 hasSession 做 running 标记）
+      const { servantService } = await import('./servantService.js')
+      const entry = await servantService.getServant(sessionId)
+      isSupervisor = Boolean(entry?.supervisor)
+    } catch {
+      // 花名册读取失败按非主管处理：收权是加强项，不能阻塞会话启动
+    }
+    this.supervisorSessionCache.set(sessionId, isSupervisor)
+    return isSupervisor
+  }
+
   private async buildChildEnv(
     workDir: string,
     sdkUrl?: string,
@@ -1605,6 +1631,11 @@ export class ConversationService {
       // 会话级上下级协作：让会话内的 Bash 能可靠拿到自己的服务端会话 ID
       // （CLAUDE_CODE_SESSION_ID 是 CLI 内部 id，且可能为空，不能用于回邮地址）
       ...(sessionId ? { CC_HEIHEI_SESSION_ID: sessionId } : {}),
+      // 主管会话标记：CLI 侧据此对 Edit/Write 做结构性收权（主管只派活不干活，
+      // 提示词约束会被延续对话的旧上下文压过，机制兜底见 collaboration/supervisorGuard）
+      ...(sessionId && await this.isRegisteredSupervisor(sessionId)
+        ? { CC_HEIHEI_SUPERVISOR: '1' }
+        : {}),
       ...(sdkUrl
         ? {
             CC_HEIHEI_DESKTOP_AWAIT_MCP: '1',

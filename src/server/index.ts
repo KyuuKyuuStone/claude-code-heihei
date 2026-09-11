@@ -600,6 +600,17 @@ export function startServer(port = PORT, host = HOST) {
   // dispatch/report when a session's Bash is unusable (e.g. no Git Bash).
   dispatchMailboxService.start(serverPort)
 
+  // One-time protocol update notice for already-registered supervisors:
+  // orientation messages only fire on first appointment, continued
+  // conversations never see upgraded rules otherwise.
+  void import('./services/supervisorProtocolNotice.js')
+    .then(({ notifySupervisorsOfProtocolUpdate }) => notifySupervisorsOfProtocolUpdate())
+    .catch((error) => {
+      console.warn(
+        `[Server] supervisor protocol notice failed: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    })
+
   void ensureDesktopCliLauncherInstalled().catch((error) => {
     console.error(
         '[desktop-cli-launcher] failed to install bundled launcher:',

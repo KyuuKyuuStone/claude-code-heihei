@@ -43,6 +43,7 @@ import { matchWildcardPattern } from '../../utils/permissions/shellRuleMatching.
 import { FILE_UNEXPECTEDLY_MODIFIED_ERROR } from '../FileEditTool/constants.js'
 import { gitDiffSchema, hunkSchema } from '../FileEditTool/types.js'
 import { FILE_WRITE_TOOL_NAME, getWriteToolDescription } from './prompt.js'
+import { supervisorWriteDeniedReason } from '../../collaboration/supervisorGuard.js'
 import {
   getToolUseSummary,
   isResultTruncated,
@@ -152,6 +153,14 @@ export const FileWriteTool = buildTool({
   },
   async validateInput({ file_path, content }, toolUseContext: ToolUseContext) {
     const fullFilePath = expandPath(file_path)
+
+    // 主管会话工具收权：只放行派活协议自身的写路径（payload/信箱），
+    // 其余写入结构性拒绝并给出派活指引（2026-09-11 实战复盘：提示词约束会被
+    // 延续对话的旧上下文压过，主管"顺手代劳"只能靠机制兜底）
+    const supervisorDeny = supervisorWriteDeniedReason(fullFilePath)
+    if (supervisorDeny) {
+      return { result: false, message: supervisorDeny, errorCode: 0 }
+    }
 
     // Reject writes to team memory files that contain secrets
     const secretError = checkTeamMemSecrets(fullFilePath, content)

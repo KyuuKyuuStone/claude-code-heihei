@@ -6,6 +6,7 @@ import {
 } from 'src/utils/fileHistory.js'
 import { z } from 'zod/v4'
 import { buildTool, type ToolDef, type ToolUseContext } from '../../Tool.js'
+import { supervisorEditDeniedReason } from '../../collaboration/supervisorGuard.js'
 import type { NotebookCell, NotebookContent } from '../../types/notebook.js'
 import { getCwd } from '../../utils/cwd.js'
 import { isENOENT } from '../../utils/errors.js'
@@ -180,6 +181,12 @@ export const NotebookEditTool = buildTool({
     const fullPath = isAbsolute(notebook_path)
       ? notebook_path
       : resolve(getCwd(), notebook_path)
+
+    // 主管会话工具收权：结构性拒绝并给出派活指引
+    const supervisorDeny = supervisorEditDeniedReason()
+    if (supervisorDeny) {
+      return { result: false, message: supervisorDeny, errorCode: 0 }
+    }
 
     // SECURITY: Skip filesystem operations for UNC paths to prevent NTLM credential leaks.
     if (fullPath.startsWith('\\\\') || fullPath.startsWith('//')) {

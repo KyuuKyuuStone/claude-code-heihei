@@ -6,6 +6,7 @@ import { clearDeliveredDiagnosticsForFile } from '../../services/lsp/LSPDiagnost
 import { getLspServerManager } from '../../services/lsp/manager.js'
 import { notifyVscodeFileUpdated } from '../../services/mcp/vscodeSdkMcp.js'
 import { checkTeamMemSecrets } from '../../services/teamMemorySync/teamMemSecretGuard.js'
+import { supervisorEditDeniedReason } from '../../collaboration/supervisorGuard.js'
 import {
   activateConditionalSkillsForPaths,
   addSkillDirectories,
@@ -139,6 +140,12 @@ export const FileEditTool = buildTool({
     // Use expandPath for consistent path normalization (especially on Windows
     // where "/" vs "\" can cause readFileState lookup mismatches)
     const fullFilePath = expandPath(file_path)
+
+    // 主管会话工具收权：编辑不属于派活协议的任何环节，结构性拒绝并给出派活指引
+    const supervisorDeny = supervisorEditDeniedReason()
+    if (supervisorDeny) {
+      return { result: false, message: supervisorDeny, errorCode: 0 }
+    }
 
     // Reject edits to team memory files that introduce secrets
     const secretError = checkTeamMemSecrets(fullFilePath, new_string)
