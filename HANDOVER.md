@@ -43,6 +43,17 @@
 
 ## 当前状态
 
+## 当前状态
+
+### 版本快照（v1.0.3 → v1.0.8，2026-09-07 ~ 09-11）
+
+- **v1.0.3**：会话协作实战韧性第一轮——`.heihei/dispatch` 文件信箱（Bash 不可用时的派活/汇报降级通道）、主管履新承诺前实测 CLI 技能、Doctor 新增 shell/协作技能体检、prewarm 回收日志正名
+- **v1.0.4**：本地模型上下文规划重做（32K 是下限非目标，预算内逐级上探至 128K q8_0，`desktop/src/lib/localModelPlan.ts`）；跑分运行方式判定修复（全 GPU 不再误标混合）
+- **v1.0.5**：协作实战可靠性——员工汇报模板改 Write+--data-binary（修 GBK 乱码）、上岗/履新消息注入随身档案、ToolSearch select: 自救提示、花名册 lastActivityAt + 假活检查
+- **v1.0.6**：`POST /api/sessions/:id/interrupt`（中断保留历史）、`GET /api` 端点名录、主管广播（broadcast:true）、登记消息带 sessionId+workDir
+- **v1.0.7**：`/api/session-messages` 请求体严格 UTF-8 失败回退 GBK 解码（乱码服务端兜底）；诊断主文件被锁时降级写 fallback 文件 + stdout 留痕；主管默认派活约束；空协作会话替换时身份过继；**模型目录更新至 2026-09 官方最新**（Claude Fable 5.1 / GPT-6 Astra / Grok 4.6 / GLM-5.3 / 新增 Gemini 预置）
+- **v1.0.8**：DeepSeek 主力切 `deepseek-flash`（官方 9/14 12:00 起 v4-pro 强制路由并按 Flash 计费）
+
 ### 能工作的
 - 本地模型全流程（设置页、跑分、启动、下载中心、多模态、自定义引擎）都能用
 - 站点和 README 已更新本地模型介绍
@@ -50,6 +61,10 @@
 
 ### 已知问题 / 待办
 - **桌面端 vitest 有约 38 个历史失败**（generalSettings/BrandSeal/主题等，main 上就有；CI 只测 adapters+docs 所以没暴露）——改桌面代码时先跑基线对比
+- **ToolSearch 关键词索引缺陷（实战事故 Top1）**：启动期 deferred 清单缺核心工具、关键词索引可能持续失效；`select:工具名` 精确加载始终可用（ToolSearch 空结果已带自救提示）。根因调查待立项（内核 src/Tool.ts、src/tools.ts）
+- **CI 无核心代码门禁**：CI 只跑 adapters+docs，src/server 与 desktop 的数百个测试全部靠本地自觉——建议 CI 加 `bun test src/server`
+- **员工 bypassPermissions 无约束档位**：无人值守员工可无审批执行任意命令，缺目录白名单/只读模式
+- **诊断主文件被外部进程锁住会静默停写**：v1.0.7 已加 fallback 旁路文件（diagnostics-fallback-<日期>.jsonl）+ stdout 留痕，排障时见到 fallback 文件即主文件被锁
 - **GTX 750 机器**：GPU 加速不可用（无 fp16），跑分自动降级 CPU 是预期行为
 - **服务端宠物死代码**：`src/server/petAccessPolicy.ts`、localAccessAuth 的 pet token、desktop-ui 偏好 pet 端点、sessions.ts 的 PET_SESSION_LIMIT——桌面端已不调用，可择期清理
 - **线程 67% vs 物理核**：待找有 NVIDIA 的机器 A/B 实测
@@ -63,6 +78,9 @@
 - **GPU 探测守卫**：`desktop/electron/main.ts` 的 `startLocalModelWithGpuGuard`
 - **IPC 校验**：`desktop/electron/ipc/capabilities.ts`
 - **服务端 Zod 校验**：`src/server/types/provider.ts`、`src/server/config/providerPresets.ts`
+- **会话协作**：`src/collaboration/dispatchProtocol.ts`（派活协议唯一真源）、`src/server/services/dispatchMailboxService.ts`（文件信箱）、`collabEnvironmentService.ts`（协作环境体检）、`servants.ts`（花名册/interrupt 广播等）
+- **本地模型规划**：`desktop/src/lib/localModelPlan.ts`（上下文逐级上探）、`desktop/src/lib/modelChoices.ts`（供应商模型选项共享）
+- **模型目录（2026-09）**：`desktop/src/constants/modelCatalog.ts`（Claude）、`openaiOfficialProvider.ts`、`grokOfficialProvider.ts`、`src/server/config/providerPresets.json`（DeepSeek/智谱/Kimi/MiniMax/Gemini 等）
 - **桌面端类型**：`desktop/src/lib/desktopHost/types.ts`
 
 ### 构建和运行
