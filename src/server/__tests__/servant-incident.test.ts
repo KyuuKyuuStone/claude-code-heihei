@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import * as realServantService from '../services/servantService.js'
 import * as realSessionMessenger from '../services/sessionMessenger.js'
 import * as realProviderService from '../services/providerService.js'
