@@ -79,19 +79,19 @@ describe('provider presets API', () => {
     expect(ollama?.authStrategy).toBe('auth_token_empty_api_key')
     expect(ollama?.defaultModels.main).toBe('qwen3.6:27b')
     expect(deepseek?.authStrategy).toBe('auth_token')
-    expect(deepseek?.defaultModels.main).toBe('deepseek-v4-pro[1m]')
-    expect(deepseek?.defaultModels.haiku).toBe('deepseek-v4-flash')
-    expect(deepseek?.defaultModels.sonnet).toBe('deepseek-v4-pro[1m]')
-    expect(deepseek?.defaultModels.opus).toBe('deepseek-v4-pro[1m]')
+    expect(deepseek?.defaultModels.main).toBe('deepseek-flash')
+    expect(deepseek?.defaultModels.haiku).toBe('deepseek-flash')
+    expect(deepseek?.defaultModels.sonnet).toBe('deepseek-flash')
+    expect(deepseek?.defaultModels.opus).toBe('deepseek-flash')
     expect(deepseek?.defaultEnv?.CC_HEIHEI_SEND_DISABLED_THINKING).toBeUndefined()
     expect(deepseek?.defaultEnv?.ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES).toBe(
       'thinking,effort,adaptive_thinking,max_effort',
     )
     expect(zhipu?.authStrategy).toBe('auth_token')
-    expect(zhipu?.defaultModels.main).toBe('glm-5.2[1m]')
+    expect(zhipu?.defaultModels.main).toBe('glm-5.3[1m]')
     expect(zhipu?.defaultModels.haiku).toBe('glm-4.7')
-    expect(zhipu?.defaultModels.sonnet).toBe('glm-5.2[1m]')
-    expect(zhipu?.defaultModels.opus).toBe('glm-5.2[1m]')
+    expect(zhipu?.defaultModels.sonnet).toBe('glm-5.3[1m]')
+    expect(zhipu?.defaultModels.opus).toBe('glm-5.3[1m]')
     expect(zhipu?.defaultEnv?.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('1000000')
     expect(kimi?.baseUrl).toBe('https://api.kimi.com/coding/')
     expect(kimi?.authStrategy).toBe('api_key')
@@ -173,11 +173,10 @@ describe('provider presets API', () => {
       ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES: 'none',
     })
     expect(shengsuanyun?.modelContextWindows?.['anthropic/claude-opus-4.7']).toBe(1000000)
-    expect(teamorouter?.apiKeyUrl).toBe(
-      'https://teamorouter.com/?utm_source=cc_heihei&utm_medium=referral&utm_campaign=ai_directory',
-    )
-    expect(teamorouter?.promoText).toContain('10% 折扣')
-    expect(teamorouter?.featured).toBe(true)
+    // teamorouter 已退役：退役预置不得自我推广（与 retired-presets 契约一致）
+    expect(teamorouter?.apiKeyUrl).toBeUndefined()
+    expect(teamorouter?.promoText).toBeUndefined()
+    expect(teamorouter?.featured).toBeUndefined()
     expect(teamorouter?.defaultEnv).toEqual({
       CLAUDE_CODE_SUBAGENT_MODEL: 'claude-sonnet-5',
       ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES: 'none',

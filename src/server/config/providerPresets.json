@@ -205,9 +205,6 @@
     },
     "needsApiKey": true,
     "websiteUrl": "https://teamorouter.com",
-    "apiKeyUrl": "https://teamorouter.com/?utm_source=cc_heihei&utm_medium=referral&utm_campaign=ai_directory",
-    "promoText": "TeamoRouter 为 cc-heihei 的用户提供了专属福利，通过此链接注册的新用户首次充值可享 10% 折扣！",
-    "featured": true,
     "deprecated": true,
     "authStrategy": "auth_token",
     "defaultEnv": {
