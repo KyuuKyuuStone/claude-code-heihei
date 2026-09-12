@@ -86,9 +86,11 @@ describe('DoctorService', () => {
       (item) => item.kind !== 'collab_shell' && item.kind !== 'collab_skill',
     )
     expect(featureItems.every((item) => item.status === 'not_configured')).toBe(true)
+    // neutralCount 直接从全部条目推导：collab_* 项的状态是平台相关的
+    // （Windows shell=ok，Linux CI shell=ok 但 skill 档位可能不同），不能写死
     expect(report.summary).toEqual(expect.objectContaining({
       total: report.items.length,
-      neutralCount: featureItems.filter((item) => item.status === 'not_configured').length,
+      neutralCount: report.items.filter((item) => item.status === 'not_configured').length,
       missingCount: 0,
       invalidCount: 0,
     }))
