@@ -52,6 +52,13 @@ import {
 } from './petAccessPolicy.js'
 import { settleResponseOnRequestAbort } from './requestLifecycle.js'
 
+/**
+ * 员工假死 watcher 模块的运行期引用：
+ * 启动时经动态 import 拉起，关闭时由 stopServerRuntimeForShutdown 调用 stop。
+ * （index.ts 不静态导入该模块，避免其依赖在 CLI 纯构建场景被拖入）
+ */
+let servantStallWatcherModule: typeof import('./services/servantStallWatcher.js') | null = null
+
 function readArgValue(flag: string): string | undefined {
   const args = process.argv.slice(2)
   const index = args.indexOf(flag)
@@ -603,7 +610,10 @@ export function startServer(port = PORT, host = HOST) {
   // Watch for stalled servant sessions (running but no activity) and
   // auto-repush with troubleshooting hints, escalating to the supervisor.
   void import('./services/servantStallWatcher.js')
-    .then(({ servantStallWatcher }) => servantStallWatcher.start())
+    .then((mod) => {
+      servantStallWatcherModule = mod
+      mod.servantStallWatcher.start()
+    })
     .catch((error) => {
       console.warn(
         `[Server] servant stall watcher failed to start: ${error instanceof Error ? error.message : String(error)}`,
@@ -642,7 +652,7 @@ export async function stopServerRuntimeForShutdown(
   teamWatcher.stop()
   cronScheduler.stop()
   dispatchMailboxService.stop()
-  servantStallWatcher.stop()
+  servantStallWatcherModule?.servantStallWatcher.stop()
   backgroundIndexStartupController?.abort()
   const pendingIndexStartup = backgroundIndexStartup
   await Promise.all([

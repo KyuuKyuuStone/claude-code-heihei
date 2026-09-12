@@ -11,8 +11,9 @@ concurrency:
 
 jobs:
   server-tests:
+    # 产品只发布 Windows，门禁与开发/验证环境保持一致（windows runner）
     name: Server tests gate
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -20,21 +21,8 @@ jobs:
           bun-version: "1.3.14"
       - name: Install dependencies
         run: bun install --frozen-lockfile
-      # 门禁范围：协作核心 + 诊断/Doctor（在 Linux 已验证全绿）。
-      # 整套 src/server 在 Linux 尚有存量环境性失败（Teams/slash-commands 等，
-      # 套件从未在 Linux 验证过），收编后逐步扩大门禁范围。
-      - name: Run collaboration-critical server tests
-        run: >
-          bun test
-          src/server/__tests__/servants.test.ts
-          src/server/__tests__/supervisor-guard.test.ts
-          src/server/__tests__/supervisor-notice.test.ts
-          src/server/__tests__/servant-incident.test.ts
-          src/server/__tests__/dispatch-mailbox.test.ts
-          src/server/__tests__/provider-presets.test.ts
-          src/server/__tests__/collab-environment.test.ts
-          src/server/__tests__/diagnostics-service.test.ts
-          src/server/__tests__/doctor-service.test.ts
+      - name: Run server tests
+        run: bun test src/server
 
   adapters:
     name: Adapters tests
