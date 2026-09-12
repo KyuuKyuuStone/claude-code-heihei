@@ -16,6 +16,15 @@
 
 export const SUPERVISOR_SESSION_ENV = 'CC_HEIHEI_SUPERVISOR'
 
+/** 员工约束档位：full=完全执行（现状）；readonly=只读观察（禁改文件，信箱汇报放行） */
+export const SERVANT_CONSTRAINT_ENV = 'CC_HEIHEI_SERVANT_CONSTRAINT'
+
+export type ServantConstraint = 'full' | 'readonly'
+
+export function servantConstraintFromEnv(env: NodeJS.ProcessEnv = process.env): ServantConstraint | null {
+  return env[SERVANT_CONSTRAINT_ENV] === 'readonly' ? 'readonly' : null
+}
+
 /** 主管越权时的统一拒绝文本：教模型走正确通道，而不是单纯报错 */
 export const SUPERVISOR_DISPATCH_ONLY_REASON =
   '主管会话禁止修改文件：你的职责是拆解任务、派给员工会话、验收汇报（见 work-orchestrator 协议）。' +
@@ -60,4 +69,25 @@ export function supervisorWriteDeniedReason(
 /** 主管会话的 Edit/NotebookEdit 一律拒绝（编辑不属于派活协议的任何环节） */
 export function supervisorEditDeniedReason(env: NodeJS.ProcessEnv = process.env): string | null {
   return isSupervisorSession(env) ? SUPERVISOR_DISPATCH_ONLY_REASON : null
+}
+
+/** 只读观察员工的统一拒绝文本 */
+export const SERVANT_READONLY_REASON =
+  '只读观察会话禁止修改文件：你的职责是分析与汇报，不是改动。请把建议的修改以文本形式写入汇报（或 .heihei/dispatch/ 信箱）提交；' +
+  '如需直接执行，请用户在会话右键「协作设置…」中将约束档位改为「完全执行」。'
+
+/**
+ * 员工约束档位检查：readonly 档拒绝一切文件修改（信箱汇报放行）。
+ * full 档或未设置 → 不限制。
+ */
+export function servantConstraintWriteDeniedReason(
+  filePath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  if (servantConstraintFromEnv(env) !== 'readonly') return null
+  const normalized = filePath.replace(/\\/g, '/').replace(/\/+$/, '')
+  const basename = normalized.split('/').pop() ?? ''
+  if (DISPATCH_PAYLOAD_BASENAMES.has(basename)) return null
+  if (isInsideMailboxDir(normalized)) return null
+  return SERVANT_READONLY_REASON
 }

@@ -6,7 +6,7 @@ import { clearDeliveredDiagnosticsForFile } from '../../services/lsp/LSPDiagnost
 import { getLspServerManager } from '../../services/lsp/manager.js'
 import { notifyVscodeFileUpdated } from '../../services/mcp/vscodeSdkMcp.js'
 import { checkTeamMemSecrets } from '../../services/teamMemorySync/teamMemSecretGuard.js'
-import { supervisorEditDeniedReason } from '../../collaboration/supervisorGuard.js'
+import { servantConstraintWriteDeniedReason, supervisorEditDeniedReason } from '../../collaboration/supervisorGuard.js'
 import {
   activateConditionalSkillsForPaths,
   addSkillDirectories,
@@ -145,6 +145,11 @@ export const FileEditTool = buildTool({
     const supervisorDeny = supervisorEditDeniedReason()
     if (supervisorDeny) {
       return { result: false, message: supervisorDeny, errorCode: 0 }
+    }
+    // 员工约束档位：readonly 只读观察员工禁止修改文件
+    const constraintDeny = servantConstraintWriteDeniedReason(fullFilePath)
+    if (constraintDeny) {
+      return { result: false, message: constraintDeny, errorCode: 0 }
     }
 
     // Reject edits to team memory files that introduce secrets

@@ -600,6 +600,16 @@ export function startServer(port = PORT, host = HOST) {
   // dispatch/report when a session's Bash is unusable (e.g. no Git Bash).
   dispatchMailboxService.start(serverPort)
 
+  // Watch for stalled servant sessions (running but no activity) and
+  // auto-repush with troubleshooting hints, escalating to the supervisor.
+  void import('./services/servantStallWatcher.js')
+    .then(({ servantStallWatcher }) => servantStallWatcher.start())
+    .catch((error) => {
+      console.warn(
+        `[Server] servant stall watcher failed to start: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    })
+
   // One-time protocol update notice for already-registered supervisors:
   // orientation messages only fire on first appointment, continued
   // conversations never see upgraded rules otherwise.
@@ -632,6 +642,7 @@ export async function stopServerRuntimeForShutdown(
   teamWatcher.stop()
   cronScheduler.stop()
   dispatchMailboxService.stop()
+  servantStallWatcher.stop()
   backgroundIndexStartupController?.abort()
   const pendingIndexStartup = backgroundIndexStartup
   await Promise.all([

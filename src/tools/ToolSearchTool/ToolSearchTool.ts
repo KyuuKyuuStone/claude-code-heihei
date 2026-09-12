@@ -330,6 +330,13 @@ export const ToolSearchTool = buildTool({
 
     const deferredTools = tools.filter(isDeferredTool)
     maybeInvalidateCache(deferredTools)
+    // 诊断探针：deferred 集合异常小（< 5）通常意味着启动期工具注册不完整
+    // （2026-09-08 实战事故：核心工具中途才注册）。debug 日志留证据供根因调查。
+    if (deferredTools.length > 0 && deferredTools.length < 5) {
+      logForDebugging(
+        `ToolSearchTool: suspiciously small deferred set (${deferredTools.length}): ${deferredTools.map(t => t.name).join(', ')}`,
+      )
+    }
 
     // Check for MCP servers still connecting
     function getPendingServerNames(): string[] | undefined {
@@ -405,13 +412,28 @@ export const ToolSearchTool = buildTool({
       return buildSearchResult(found, query, deferredTools.length)
     }
 
-    // Keyword search
-    const matches = await searchToolsWithKeywords(
+    // Keyword search over deferred tools. 实战教训（2026-09-08/09-10）：个别会话的
+    // deferred 快照可能不完整或缺核心工具——deferred 搜索为空时回扫全量工具集，
+    // 已加载的工具也会被返回（引用已激活工具是无害 no-op），保证"永远搜得到"。
+    let matches = await searchToolsWithKeywords(
       query,
       deferredTools,
       tools,
       max_results,
     )
+    if (matches.length === 0 && deferredTools.length !== tools.length) {
+      matches = await searchToolsWithKeywords(
+        query,
+        tools,
+        tools,
+        max_results,
+      )
+      if (matches.length > 0) {
+        logForDebugging(
+          `ToolSearchTool: deferred keyword search empty, recovered from full toolset for "${query}"`,
+        )
+      }
+    }
 
     logForDebugging(
       `ToolSearchTool: keyword search for "${query}", found ${matches.length} matches`,

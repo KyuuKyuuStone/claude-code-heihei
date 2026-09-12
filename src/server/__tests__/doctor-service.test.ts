@@ -121,8 +121,10 @@ describe('DoctorService', () => {
 
     // Reported paths are abbreviated, and configDir renders as `~/.claude`, so
     // an `.agents` root built from the config dir would show up nested under it.
-    expect(byId('user-skills')).toBe(path.join('~', '.claude', 'skills'))
-    expect(byId('user-agent-skills')).toBe(path.join('~', '.agents', 'skills'))
+    // 产物路径永远输出 posix 分隔符（toPosix），断言不能用 path.join（Windows 下
+    // 会得到反斜杠而失败）。
+    expect(byId('user-skills')).toBe('~/.claude/skills')
+    expect(byId('user-agent-skills')).toBe('~/.agents/skills')
   })
 
   test('drops the .agents targets when cross-client discovery is switched off', async () => {

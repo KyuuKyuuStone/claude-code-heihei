@@ -6,7 +6,7 @@ import {
 } from 'src/utils/fileHistory.js'
 import { z } from 'zod/v4'
 import { buildTool, type ToolDef, type ToolUseContext } from '../../Tool.js'
-import { supervisorEditDeniedReason } from '../../collaboration/supervisorGuard.js'
+import { servantConstraintWriteDeniedReason, supervisorEditDeniedReason } from '../../collaboration/supervisorGuard.js'
 import type { NotebookCell, NotebookContent } from '../../types/notebook.js'
 import { getCwd } from '../../utils/cwd.js'
 import { isENOENT } from '../../utils/errors.js'
@@ -186,6 +186,11 @@ export const NotebookEditTool = buildTool({
     const supervisorDeny = supervisorEditDeniedReason()
     if (supervisorDeny) {
       return { result: false, message: supervisorDeny, errorCode: 0 }
+    }
+    // 员工约束档位：readonly 只读观察员工禁止修改文件
+    const constraintDeny = servantConstraintWriteDeniedReason(fullPath)
+    if (constraintDeny) {
+      return { result: false, message: constraintDeny, errorCode: 0 }
     }
 
     // SECURITY: Skip filesystem operations for UNC paths to prevent NTLM credential leaks.

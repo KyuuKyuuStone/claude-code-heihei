@@ -56,6 +56,8 @@ export async function handleServantsApi(
         runtimeProviderId: body.runtimeProviderId as string | null | undefined,
         runtimeModelId: body.runtimeModelId as string | undefined,
         effortLevel: body.effortLevel as string | undefined,
+        // 约束档位：readonly=只读观察（禁改文件，信箱汇报放行）
+        constraint: body.constraint as 'readonly' | undefined,
       })
       const host = req.headers.get('host') || '127.0.0.1'
 
@@ -162,7 +164,13 @@ export async function handleSessionMessagesApi(
       if (!delivered) {
         throw ApiError.internal('Message could not be delivered to the session')
       }
-      return Response.json({ ok: true }, { status: 201 })
+      // 撞车提醒：目标忙（运行中且最近 3 分钟有活动）时在响应里声明，
+      // 主管 AI 可据此决定排队等待或改派他人
+      const targetState = await describeTargetState(targetSessionId)
+      return Response.json(
+        { ok: true, target: { sessionId: targetSessionId, ...targetState } },
+        { status: 201 },
+      )
     }
 
     throw new ApiError(405, `Method ${req.method} not allowed on /api/session-messages`, 'METHOD_NOT_ALLOWED')
@@ -172,6 +180,21 @@ export async function handleSessionMessagesApi(
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
+
+/** 目标会话忙闲：运行中且最近 3 分钟有 transcript 活动 = busy（撞车提醒用） */
+async function describeTargetState(
+  targetSessionId: string,
+): Promise<{ busy: boolean; lastActivityAt?: string }> {
+  const servantInfo = (await servantService
+    .listServants({ includeAll: true })
+    .catch(() => [])) as Array<{ sessionId: string; running: boolean; lastActivityAt?: string }>
+  const info = servantInfo.find((entry) => entry.sessionId === targetSessionId)
+  if (info) {
+    const staleMs = info.lastActivityAt ? Date.now() - Date.parse(info.lastActivityAt) : Infinity
+    return { busy: Boolean(info.running) && staleMs < 180_000, lastActivityAt: info.lastActivityAt }
+  }
+  return { busy: conversationService.hasSession(targetSessionId) }
+}
 
 /** 广播：body {broadcast:true, content, fromSessionId} → 本项目全部 enabled 员工 */
 async function handleBroadcast(req: Request, body: Record<string, unknown>): Promise<Response> {

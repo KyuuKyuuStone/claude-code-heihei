@@ -26,6 +26,8 @@ export type ServantEntry = {
   enabled: boolean
   /** 是否被用户任命为主管。每个项目（workDir）最多一名 */
   supervisor?: boolean
+  /** 约束档位：readonly=只读观察（禁改文件，信箱汇报放行） */
+  constraint?: 'readonly'
   updatedAt: number
 }
 
@@ -118,6 +120,8 @@ export class ServantService {
       runtimeProviderId?: string | null
       runtimeModelId?: string
       effortLevel?: string
+      /** 约束档位：readonly=只读观察（禁改文件，信箱汇报放行） */
+      constraint?: 'readonly'
     },
   ): Promise<ServantEntry> {
     if (!sessionId || !sessionId.trim()) {
@@ -159,6 +163,7 @@ export class ServantService {
     }
 
     const index = data.servants.findIndex((s) => s.sessionId === sessionId)
+    const previousConstraint = index !== -1 ? data.servants[index].constraint : undefined
     const entry: ServantEntry = {
       sessionId,
       role: input.role?.trim() || undefined,
@@ -168,6 +173,12 @@ export class ServantService {
         ? { supervisor: input.supervisor }
         : index !== -1 && data.servants[index].supervisor !== undefined
           ? { supervisor: data.servants[index].supervisor }
+          : {}),
+      // 约束档位：未传时保留旧值（禁用员工也保留，重新启用不丢设置）
+      ...(input.constraint !== undefined
+        ? { constraint: input.constraint }
+        : previousConstraint !== undefined
+          ? { constraint: previousConstraint }
           : {}),
       updatedAt: Date.now(),
     }

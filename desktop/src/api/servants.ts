@@ -7,6 +7,8 @@ export type ServantInfo = {
   description?: string
   enabled: boolean
   supervisor?: boolean
+  /** 约束档位：readonly=只读观察（禁改文件，信箱汇报放行） */
+  constraint?: 'readonly'
   updatedAt: number
   title: string
   workDir?: string
@@ -33,6 +35,8 @@ export type ServantInput = {
   runtimeProviderId?: string | null
   runtimeModelId?: string
   effortLevel?: string
+  /** 约束档位：readonly=只读观察（禁改文件，信箱汇报放行） */
+  constraint?: 'readonly'
 }
 
 export const servantsApi = {
@@ -60,5 +64,20 @@ export const servantsApi = {
     fromSessionId?: string
   }) {
     return api.post<{ ok: true }>('/api/session-messages', input)
+  },
+
+  /** 中断员工当前运行（保留会话与历史），用于唤醒卡死的员工 */
+  interrupt(sessionId: string) {
+    return api.post<{ ok: true; stopped: boolean }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/interrupt`,
+    )
+  },
+
+  /** 主管广播：一条消息发给本项目全部 enabled 员工 */
+  broadcast(content: string, fromSessionId: string) {
+    return api.post<{ ok: true; broadcast: true; delivered: number }>(
+      '/api/session-messages',
+      { broadcast: true, content, fromSessionId },
+    )
   },
 }

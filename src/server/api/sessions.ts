@@ -6,7 +6,7 @@
  * Routes:
  *   GET    /api/sessions            — 列出会话
  *   GET    /api/sessions/:id        — 获取会话详情
- *   GET    /api/sessions/:id/messages — 获取会话消息
+ *   GET    /api/sessions/:id/messages — 获取会话消息（?tail=N 只取尾部 N 条）
  *   GET    /api/sessions/:id/subagents/by-tool/:toolUseId — 获取 SubAgent 运行详情
  *   GET    /api/sessions/:id/trace — 获取会话级模型调用 trace（body preview 裁剪后的列表视图）
  *   GET    /api/sessions/:id/trace/calls/:callId — 获取单次调用的完整 trace 记录
@@ -122,7 +122,7 @@ export async function handleSessionsApi(
           { status: 405 }
         )
       }
-      return await getSessionMessages(sessionId)
+      return await getSessionMessages(sessionId, url)
     }
 
     if (subResource === 'trace') {
@@ -353,11 +353,20 @@ async function getSession(sessionId: string): Promise<Response> {
   return Response.json(detail)
 }
 
-async function getSessionMessages(sessionId: string): Promise<Response> {
+async function getSessionMessages(sessionId: string, url?: URL): Promise<Response> {
   const [messages, taskNotifications] = await Promise.all([
     sessionService.getSessionMessages(sessionId),
     sessionService.getSessionTaskNotifications(sessionId),
   ])
+  // ?tail=N 尾部读取：主管巡检员工进度不必拉全量（长会话单次可达数百 KB）
+  const tailRaw = url?.searchParams.get('tail')
+  const tail = tailRaw !== null ? parseInt(tailRaw, 10) : NaN
+  if (Number.isInteger(tail) && tail > 0) {
+    return Response.json({
+      messages: messages.slice(-tail),
+      taskNotifications: taskNotifications.slice(-tail),
+    })
+  }
   return Response.json({ messages, taskNotifications })
 }
 

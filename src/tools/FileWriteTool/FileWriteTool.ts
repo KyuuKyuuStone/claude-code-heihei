@@ -43,7 +43,7 @@ import { matchWildcardPattern } from '../../utils/permissions/shellRuleMatching.
 import { FILE_UNEXPECTEDLY_MODIFIED_ERROR } from '../FileEditTool/constants.js'
 import { gitDiffSchema, hunkSchema } from '../FileEditTool/types.js'
 import { FILE_WRITE_TOOL_NAME, getWriteToolDescription } from './prompt.js'
-import { supervisorWriteDeniedReason } from '../../collaboration/supervisorGuard.js'
+import { servantConstraintWriteDeniedReason, supervisorWriteDeniedReason } from '../../collaboration/supervisorGuard.js'
 import {
   getToolUseSummary,
   isResultTruncated,
@@ -160,6 +160,11 @@ export const FileWriteTool = buildTool({
     const supervisorDeny = supervisorWriteDeniedReason(fullFilePath)
     if (supervisorDeny) {
       return { result: false, message: supervisorDeny, errorCode: 0 }
+    }
+    // 员工约束档位：readonly 只读观察员工禁止修改文件（信箱/payload 例外）
+    const constraintDeny = servantConstraintWriteDeniedReason(fullFilePath)
+    if (constraintDeny) {
+      return { result: false, message: constraintDeny, errorCode: 0 }
     }
 
     // Reject writes to team memory files that contain secrets

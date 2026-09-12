@@ -935,7 +935,9 @@ describe('DiagnosticsService', () => {
       server.kill()
       await server.exited.catch(() => undefined)
     }
-  })
+    // 真实启动整个服务器（冷启动 + 迁移 + 后台引导），慢机器/Windows 上会超过
+    // bun 默认 5s 单测超时——给足余量，不让环境速度决定测试成败
+  }, 30_000)
 })
 
 describe('diagnostics API', () => {

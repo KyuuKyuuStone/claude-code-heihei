@@ -71,6 +71,7 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
   const [description, setDescription] = useState(existing?.description || '')
   const [serve, setServe] = useState(existing?.enabled ?? true)
   const [supervisor, setSupervisor] = useState(existing?.supervisor ?? false)
+  const [constraint, setConstraint] = useState<'readonly' | undefined>(existing?.constraint)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -238,6 +239,7 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
             description: description.trim() || undefined,
             enabled: serve,
             supervisor,
+            ...(constraint ? { constraint } : {}),
             ...runtimeFields,
           })
         }
@@ -252,6 +254,7 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
           description: description.trim() || undefined,
           enabled: serve,
           supervisor,
+          ...(constraint ? { constraint } : {}),
           ...runtimeFields,
         })
       }
@@ -337,6 +340,15 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
               onChange={handleSupervisorChange}
             />
           </div>
+          <SelectField
+            label={t('servant.modal.constraint')}
+            value={constraint ?? ''}
+            onChange={(value) => setConstraint(value === 'readonly' ? 'readonly' : undefined)}
+            options={[
+              { value: '', label: t('servant.modal.constraintFull') },
+              { value: 'readonly', label: t('servant.modal.constraintReadonly') },
+            ]}
+          />
           <p className="text-[12px] leading-relaxed text-[var(--color-text-tertiary)] -mt-1">
             {t('servant.modal.identityHint')}
           </p>

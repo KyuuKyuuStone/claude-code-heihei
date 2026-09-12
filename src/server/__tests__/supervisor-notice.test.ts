@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import * as realServantService from '../services/servantService.js'
+import * as realSessionMessenger from '../services/sessionMessenger.js'
+import * as realProviderService from '../services/providerService.js'
 
 let tmpDir: string
 const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
@@ -60,4 +63,10 @@ describe('notifySupervisorsOfProtocolUpdate', () => {
     const marker = path.join(tmpDir, 'cc-heihei', 'supervisor-protocol-notice-v1.sent')
     await expect(fs.access(marker)).resolves.toBeDefined()
   })
+})
+
+afterAll(async () => {
+  mock.module('../services/servantService.js', () => realServantService)
+  mock.module('../services/sessionMessenger.js', () => realSessionMessenger)
+  mock.module('../services/providerService.js', () => realProviderService)
 })

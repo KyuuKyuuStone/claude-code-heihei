@@ -1018,6 +1018,11 @@ export class ConversationService {
         const msg = JSON.parse(line)
         if (this.isReplayedSdkMessage(session, msg)) continue
         this.retainSdkMessage(session, msg, Buffer.byteLength(line, 'utf-8'))
+        // 员工会话轮次结果观察：报错轮自动续跑（有界），成功轮重置连错。
+        // 自动化实战验证过的"注入消息救活"，覆盖线上模型员工的 API 抖动中断。
+        if (msg?.type === 'result') {
+          this.observeServantTurnResult(sessionId, msg)
+        }
         const sdkError = this.extractSdkErrorEvent(msg)
         if (sdkError) {
           void diagnosticsService.recordEvent({
@@ -1389,6 +1394,13 @@ export class ConversationService {
           sdkMessages: this.summarizeSdkMessages(activeSession.sdkMessages),
         },
       })
+      // 员工会话异常崩溃（非刻意停止/回收，severity=error）：主动告知其主管
+      // "任务可能中断 + 处理建议"，让中断在一分钟内被看见而不是靠人工巡检
+      if (cliExitSeverity(code) === 'error') {
+        void import('./servantIncidentNotifier.js')
+          .then(({ notifyServantCrash }) => notifyServantCrash({ sessionId, exitCode: code }))
+          .catch(() => {})
+      }
       const callbacks = [...activeSession.outputCallbacks]
       this.sessions.delete(sessionId)
       this.notifyOutputCallbacks(sessionId, callbacks, {
@@ -1441,8 +1453,11 @@ export class ConversationService {
     return args
   }
 
-  /** 主管会话缓存：sessionId → 是否登记为主管（负缓存也存，避免每次启动读花名册文件） */
-  private supervisorSessionCache = new Map<string, boolean>()
+  /**
+   * 协作身份缓存：sessionId → 主管标记与约束档位（负缓存也存，
+   * 避免每次启动都读花名册文件）。任命/卸任/改档位时失效。
+   */
+  private supervisorSessionCache = new Map<string, { supervisor: boolean; constraint?: 'readonly' }>()
 
   /** 协作身份变化后调用（任命/卸任/移除），让下次会话启动按最新花名册注入标记 */
   invalidateSupervisorCache(sessionId?: string): void {
@@ -1450,21 +1465,58 @@ export class ConversationService {
     else this.supervisorSessionCache.delete(sessionId)
   }
 
+  /** 员工会话连错轮数：报错 +1，成功清零；达到阈值升级主管并停止自动续跑 */
+  private servantTurnErrorStreak = new Map<string, number>()
+
+  /**
+   * 员工会话轮次结果观察（同步钩子，副作用走异步通知）：
+   * 报错轮 → servantIncidentNotifier 决定自动续跑/升级主管；
+   * 成功轮 → 清零。非员工会话由 notifier 侧自行清理，不影响任何行为。
+   */
+  private observeServantTurnResult(sessionId: string, msg: { type?: string; is_error?: boolean; result?: unknown }): void {
+    if (msg.type !== 'result') return
+    if (msg.is_error === true) {
+      const streak = (this.servantTurnErrorStreak.get(sessionId) ?? 0) + 1
+      this.servantTurnErrorStreak.set(sessionId, streak)
+      const summary = typeof msg.result === 'string' ? msg.result.slice(0, 300) : ''
+      void import('./servantIncidentNotifier.js')
+        .then(({ onServantTurnError }) => onServantTurnError({ sessionId, streak, summary }))
+        .catch(() => {})
+      return
+    }
+    if (this.servantTurnErrorStreak.has(sessionId)) {
+      this.servantTurnErrorStreak.delete(sessionId)
+      void import('./servantIncidentNotifier.js')
+        .then(({ clearServantTurnErrors }) => clearServantTurnErrors(sessionId))
+        .catch(() => {})
+    }
+  }
+
   private async isRegisteredSupervisor(sessionId: string): Promise<boolean> {
     const cached = this.supervisorSessionCache.get(sessionId)
     if (cached !== undefined) return cached
-    let isSupervisor = false
+    let info: { supervisor: boolean; constraint?: 'readonly' } = { supervisor: false }
     try {
       // 动态导入避免 conversationService ↔ servantService 静态依赖环
       // （servantService 引用本类的 hasSession 做 running 标记）
       const { servantService } = await import('./servantService.js')
       const entry = await servantService.getServant(sessionId)
-      isSupervisor = Boolean(entry?.supervisor)
+      info = {
+        supervisor: Boolean(entry?.supervisor),
+        ...(entry?.constraint === 'readonly' ? { constraint: 'readonly' as const } : {}),
+      }
     } catch {
       // 花名册读取失败按非主管处理：收权是加强项，不能阻塞会话启动
     }
-    this.supervisorSessionCache.set(sessionId, isSupervisor)
-    return isSupervisor
+    this.supervisorSessionCache.set(sessionId, info)
+    return info
+  }
+
+  private async getCollabIdentity(sessionId: string): Promise<{
+    supervisor: boolean
+    constraint?: 'readonly'
+  }> {
+    return this.isRegisteredSupervisor(sessionId)
   }
 
   private async buildChildEnv(
@@ -1585,7 +1637,14 @@ export class ConversationService {
       // just under 240s apart keeps it alive forever and the request hangs with
       // no completion (#766: "卡住" with slowly growing tokens). This independent
       // cap frees such a stream after a fixed duration regardless of trickle.
-      CLAUDE_STREAM_MAX_DURATION_MS: cleanEnv.CLAUDE_STREAM_MAX_DURATION_MS || '600000',
+      // 本地模型（baseUrl 指向本机 llama-server）生成慢但健康，10 分钟硬上限
+      // 会掐断大改动的长生成（员工任务中断、改到一半需要人工收拾）——放宽到
+      // 30 分钟；真·卡死仍由 240s idle 看门狗兜住。云端保持 600s（#766 防挂死）。
+      CLAUDE_STREAM_MAX_DURATION_MS:
+        cleanEnv.CLAUDE_STREAM_MAX_DURATION_MS ||
+        (explicitProvider && /localhost|127\.0\.0\.1|::1|\[::1\]|0\.0\.0\.0/i.test(explicitProvider.baseUrl ?? '')
+          ? '1800000'
+          : '600000'),
       // Time-to-first-token budget: how long to wait for the FIRST streamed
       // chunk after response headers arrive. The idle timer above is the wrong
       // knob for slow prefill — it kills healthy local/3P models that take
@@ -1631,10 +1690,14 @@ export class ConversationService {
       // 会话级上下级协作：让会话内的 Bash 能可靠拿到自己的服务端会话 ID
       // （CLAUDE_CODE_SESSION_ID 是 CLI 内部 id，且可能为空，不能用于回邮地址）
       ...(sessionId ? { CC_HEIHEI_SESSION_ID: sessionId } : {}),
-      // 主管会话标记：CLI 侧据此对 Edit/Write 做结构性收权（主管只派活不干活，
-      // 提示词约束会被延续对话的旧上下文压过，机制兜底见 collaboration/supervisorGuard）
-      ...(sessionId && await this.isRegisteredSupervisor(sessionId)
+      // 主管会话标记 + 员工约束档位：CLI 侧据此做结构性收权（主管只派活不干活、
+      // readonly 员工禁改文件；提示词约束会被延续对话的旧上下文压过，
+      // 机制兜底见 collaboration/supervisorGuard）
+      ...(sessionId && (await this.getCollabIdentity(sessionId)).supervisor
         ? { CC_HEIHEI_SUPERVISOR: '1' }
+        : {}),
+      ...(sessionId && (await this.getCollabIdentity(sessionId)).constraint === 'readonly'
+        ? { CC_HEIHEI_SERVANT_CONSTRAINT: 'readonly' }
         : {}),
       ...(sdkUrl
         ? {

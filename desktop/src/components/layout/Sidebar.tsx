@@ -16,6 +16,16 @@ import { FindInPageModal } from '../search/FindInPageModal'
 import type { SessionListItem } from '../../types/session'
 import { useTabStore, SETTINGS_TAB_ID, SCHEDULED_TAB_ID, MARKET_TAB_ID } from '../../stores/tabStore'
 import { useServantStore } from '../../stores/servantStore'
+import { servantsApi } from '../../api/servants'
+import { BroadcastDialog } from '../servants/BroadcastDialog'
+import type { ServantInfo } from '../../api/servants'
+
+/** 员工会话状态灯：busy=运行中且最近有活动；stalled=运行中但 10 分钟无活动；idle=未运行 */
+function servantStatus(info: ServantInfo): 'busy' | 'stalled' | 'idle' {
+  if (!info.running) return 'idle'
+  const staleMs = info.lastActivityAt ? Date.now() - Date.parse(info.lastActivityAt) : Infinity
+  return staleMs > 10 * 60_000 ? 'stalled' : 'busy'
+}
 import { ServantSessionModal } from '../servants/ServantSessionModal'
 import { useChatStore } from '../../stores/chatStore'
 import { useOpenTargetStore } from '../../stores/openTargetStore'
@@ -95,6 +105,7 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
   const [projectHeaderMenu, setProjectHeaderMenu] = useState<{ type: SidebarHeaderMenuType; x: number; y: number } | null>(null)
   const [projectHeaderSubmenu, setProjectHeaderSubmenu] = useState<{ type: 'organize' | 'sort'; x: number; y: number } | null>(null)
   const [newSessionMenu, setNewSessionMenu] = useState<{ x: number; y: number } | null>(null)
+const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: string } | null>(null)
   const [servantModal, setServantModal] = useState<{ mode: 'create' | 'edit'; sessionId?: string; workDir?: string } | null>(null)
   const [pendingDeleteSessionId, setPendingDeleteSessionId] = useState<string | null>(null)
   const [pendingBatchDeleteSessionIds, setPendingBatchDeleteSessionIds] = useState<string[] | null>(null)
@@ -1157,6 +1168,27 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
                                       </span>
                                     ) : null}
                                     <span className="min-w-0 flex-1 truncate font-medium tracking-normal">{session.title || 'Untitled'}</span>
+                                    {servantsById[session.id] && (() => {
+                                      const status = servantStatus(servantsById[session.id]!)
+                                      const title =
+                                        status === 'busy'
+                                          ? t('sidebar.servantStatusBusy')
+                                          : status === 'stalled'
+                                            ? t('sidebar.servantStatusStalled')
+                                            : t('sidebar.servantStatusIdle')
+                                      return (
+                                        <span
+                                          className={`flex-shrink-0 rounded-full px-1 ${
+                                            status === 'stalled'
+                                              ? 'bg-[var(--color-warning)]'
+                                              : status === 'busy'
+                                                ? 'bg-[var(--color-success)]'
+                                                : 'bg-[var(--color-text-quaternary,#9aa0a6)]'
+                                          } h-2 w-2`}
+                                          title={t('sidebar.servantStatusTitle', { status: title })}
+                                        />
+                                      )
+                                    })()}
                                     {servantsById[session.id]?.supervisor && (
                                       <span
                                         className="flex-shrink-0 rounded-[var(--radius-sm)] bg-[var(--color-warning-container,#f5e6c8)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-on-warning-container,#6b4e00)]"
@@ -1307,6 +1339,39 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
           >
             {t('sidebar.servantSettings')}
           </button>
+          {servantsById[contextMenu.id]?.supervisor && (
+            <button
+              onClick={() => {
+                setBroadcastDialog({ supervisorSessionId: contextMenu.id })
+                setContextMenu(null)
+              }}
+              className="w-full px-4 py-2 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            >
+              {t('sidebar.broadcastToServants')}
+            </button>
+          )}
+          {servantsById[contextMenu.id]?.enabled && (
+            <button
+              onClick={() => {
+                void void (async () => {
+                  try {
+                    await servantsApi.interrupt(contextMenu.id)
+                    await servantsApi.sendMessage({
+                      targetSessionId: contextMenu.id,
+                      content: t('sidebar.wakeNudge'),
+                    })
+                    addToast({ type: 'success', message: t('sidebar.wakeDone') })
+                  } catch {
+                    addToast({ type: 'error', message: t('sidebar.wakeFailed') })
+                  }
+                })()
+                setContextMenu(null)
+              }}
+              className="w-full px-4 py-2 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            >
+              {t('sidebar.wakeServant')}
+            </button>
+          )}
           <button
             onClick={() => handleDelete(contextMenu.id)}
             className="w-full px-4 py-2 text-left text-[13px] text-[var(--color-error)] transition-colors hover:bg-[var(--color-error-container)]"
@@ -1390,6 +1455,13 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
         />
       )}
 
+      {broadcastDialog && (
+        <BroadcastDialog
+          open
+          supervisorSessionId={broadcastDialog.supervisorSessionId}
+          onClose={() => setBroadcastDialog(null)}
+        />
+      )}
       {servantModal && (
         <ServantSessionModal
           open
