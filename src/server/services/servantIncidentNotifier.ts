@@ -14,19 +14,60 @@ export type ServantCrashInput = {
   exitCode: number | null
 }
 
+/** 可注入依赖（测试用）；缺省走真实服务 */
+export type ServantIncidentDeps = {
+  deliver: (targetSessionId: string, content: string, serverHost: string) => Promise<boolean>
+  getServant: (sessionId: string) => Promise<{
+    sessionId: string
+    role?: string
+    description?: string
+    enabled: boolean
+    constraint?: 'readonly'
+  } | null>
+  listServants: (options: { includeAll: boolean; forSessionId?: string }) => Promise<
+    Array<{
+      sessionId: string
+      role?: string
+      description?: string
+      title?: string
+      enabled: boolean
+      supervisor?: boolean
+      running?: boolean
+      lastActivityAt?: string
+    }>
+  >
+  getServerPort: () => number
+}
+
+const defaultDeps: ServantIncidentDeps = {
+  deliver: (targetSessionId, content, serverHost) =>
+    sessionMessenger.deliver(targetSessionId, content, serverHost),
+  getServant: (sessionId) => servantService.getServant(sessionId),
+  listServants: (options) => servantService.listServants(options),
+  getServerPort: () => ProviderService.getServerPort(),
+}
+
+let incidentDeps: ServantIncidentDeps = defaultDeps
+
+/** 测试注入假依赖；传 null 恢复默认 */
+export function setServantIncidentDeps(overrides: Partial<ServantIncidentDeps> | null): void {
+  incidentDeps = overrides ? { ...defaultDeps, ...overrides } : defaultDeps
+}
+
+export function resetServantIncidentState(): void {
+  turnErrorStreaks.clear()
+  turnErrorEscalated.clear()
+}
+
 export async function notifyServantCrash(input: ServantCrashInput): Promise<void> {
-  const { servantService } = await import('./servantService.js')
-  const entry = await servantService.getServant(input.sessionId).catch(() => null)
+  const entry = await incidentDeps.getServant(input.sessionId).catch(() => null)
   if (!entry?.enabled) return
 
-  const all = await servantService
+  const all = await incidentDeps
     .listServants({ includeAll: true, forSessionId: input.sessionId })
     .catch(() => [])
   const supervisor = all.find((s) => s.supervisor && s.sessionId !== input.sessionId)
   if (!supervisor) return
-
-  const { ProviderService } = await import('./providerService.js')
-  const { sessionMessenger } = await import('./sessionMessenger.js')
 
   const roleText = entry.role ? `${entry.role}（${entry.description || '未填写特性'}）` : '未命名角色'
   const codeText = input.exitCode === null ? '未知原因' : `exit code ${input.exitCode}`
@@ -35,7 +76,7 @@ export async function notifyServantCrash(input: ServantCrashInput): Promise<void
     `建议处理：1) 重新派活让其继续（附上原任务要点与已完成部分）；2) 现场混乱时先 POST /api/sessions/${entry.sessionId}/interrupt 清理，再重新派活；3) 已完成部分可从其产出文件核对。`,
   ].join('\n')
 
-  await sessionMessenger.deliver(supervisor.sessionId, content, `127.0.0.1:${ProviderService.getServerPort()}`)
+  await incidentDeps.deliver(supervisor.sessionId, content, `127.0.0.1:${incidentDeps.getServerPort()}`)
 }
 
 /* ── 员工轮次报错自动续跑（有界）─────────────────────────────────────────────
@@ -60,8 +101,7 @@ export async function onServantTurnError(input: {
   streak: number
   summary: string
 }): Promise<void> {
-  const { servantService } = await import('./servantService.js')
-  const entry = await servantService.getServant(input.sessionId).catch(() => null)
+  const entry = await incidentDeps.getServant(input.sessionId).catch(() => null)
   if (!entry?.enabled) {
     clearServantTurnErrors(input.sessionId)
     return
@@ -71,34 +111,30 @@ export async function onServantTurnError(input: {
   if (input.streak > TURN_ERROR_MAX_AUTO_NUDGES) {
     if (!turnErrorEscalated.has(input.sessionId)) {
       turnErrorEscalated.add(input.sessionId)
-      const { ProviderService } = await import('./providerService.js')
-      const { sessionMessenger } = await import('./sessionMessenger.js')
-      const all = await servantService
+      const all = await incidentDeps
         .listServants({ includeAll: true, forSessionId: input.sessionId })
         .catch(() => [])
       const supervisor = all.find((s) => s.supervisor && s.sessionId !== input.sessionId)
       if (supervisor) {
         const roleText = entry.role ? `${entry.role}（${entry.description || '未填写特性'}）` : '未命名角色'
-        await sessionMessenger.deliver(
+        await incidentDeps.deliver(
           supervisor.sessionId,
           `【系统】员工会话连续 ${input.streak} 轮报错，已停止自动续跑，请人工介入：${roleText}（会话 ID：${input.sessionId}）。最近错误摘要：${input.summary || '（无详情）'}`,
-          `127.0.0.1:${ProviderService.getServerPort()}`,
+          `127.0.0.1:${incidentDeps.getServerPort()}`,
         )
       }
     }
     return
   }
 
-  const { ProviderService } = await import('./providerService.js')
-  const { sessionMessenger } = await import('./sessionMessenger.js')
   const nudge = [
     `【系统】你上一轮任务因错误中断（自动续跑 ${input.streak}/${TURN_ERROR_MAX_AUTO_NUDGES}）：${input.summary || '（无错误详情）'}`,
     '请从当前进度继续完成任务，完成后按规范向主管汇报。',
     '若同一错误反复出现，改用文件信箱（.heihei/dispatch/）向主管说明卡点，不要原地重试。',
   ].join('\n')
-  await sessionMessenger.deliver(
+  await incidentDeps.deliver(
     input.sessionId,
     nudge,
-    `127.0.0.1:${ProviderService.getServerPort()}`,
+    `127.0.0.1:${incidentDeps.getServerPort()}`,
   )
 }
