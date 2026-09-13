@@ -20,11 +20,17 @@ import { servantsApi } from '../../api/servants'
 import { BroadcastDialog } from '../servants/BroadcastDialog'
 import type { ServantInfo } from '../../api/servants'
 
-/** 员工会话状态灯：busy=运行中且最近有活动；stalled=运行中但 10 分钟无活动；idle=未运行 */
-function servantStatus(info: ServantInfo): 'busy' | 'stalled' | 'idle' {
+/**
+ * 员工会话状态灯：
+ * - busy（绿点）：CLI 运行中且最近 3 分钟有 transcript 活动 = 正在干活
+ * - waiting（灰点）：CLI 运行中但无近期活动 = 待命（回合结束等下一个任务，非卡死——
+ *   卡死由服务端假死 watcher 10 分钟阈值自动重推处理）
+ * - idle：CLI 未运行（应用重启后员工未被拉起）
+ */
+function servantStatus(info: ServantInfo): 'busy' | 'waiting' | 'idle' {
   if (!info.running) return 'idle'
   const staleMs = info.lastActivityAt ? Date.now() - Date.parse(info.lastActivityAt) : Infinity
-  return staleMs > 10 * 60_000 ? 'stalled' : 'busy'
+  return staleMs < 3 * 60_000 ? 'busy' : 'waiting'
 }
 import { ServantSessionModal } from '../servants/ServantSessionModal'
 import { useChatStore } from '../../stores/chatStore'
@@ -137,6 +143,12 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
 
   useEffect(() => {
     void fetchServants()
+    // 花名册含 running/lastActivityAt（员工状态灯数据源），必须轮询刷新，
+    // 否则员工开始干活后状态点永远停留在旧快照（2026-09-13 实测：一直灰）
+    const rosterTimer = setInterval(() => {
+      void fetchServants().catch(() => {})
+    }, 20_000)
+    return () => clearInterval(rosterTimer)
   }, [fetchServants])
 
   useEffect(() => useSessionStore.subscribe((nextState, previousState) => {
@@ -1173,19 +1185,17 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
                                       const title =
                                         status === 'busy'
                                           ? t('sidebar.servantStatusBusy')
-                                          : status === 'stalled'
-                                            ? t('sidebar.servantStatusStalled')
+                                          : status === 'waiting'
+                                            ? t('sidebar.servantStatusWaiting')
                                             : t('sidebar.servantStatusIdle')
                                       return (
                                         <span
-                                          className={`flex-shrink-0 rounded-full px-1 ${
-                                            status === 'stalled'
-                                              ? 'bg-[var(--color-warning)]'
-                                              : status === 'busy'
-                                                ? 'bg-[var(--color-success)]'
-                                                : 'bg-[var(--color-text-quaternary,#9aa0a6)]'
-                                          } h-2 w-2`}
-                                          title={t('sidebar.servantStatusTitle', { status: title })}
+                                          className={`flex-shrink-0 h-2 w-2 rounded-full ${
+                                            status === 'busy'
+                                              ? 'bg-[var(--color-success)]'
+                                              : 'bg-[var(--color-text-quaternary,#9aa0a6)]'
+                                          }`}
+                                          title={title}
                                         />
                                       )
                                     })()}
