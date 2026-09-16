@@ -65,3 +65,53 @@ jobs:
           cache-dependency-path: site/package-lock.json
       - name: Build and check docs
         run: bun run check:docs
+
+  desktop-tests:
+    # 桌面门禁（首批收编子集）。
+    #
+    # 收编标准（全部满足才纳入；不满足则剔除或先行加固）：
+    #   1) 本机连续 ≥3 次全绿（vitest 单进程扫全子集，无 flake）；
+    #   2) 确定性：无真实模型/公网/secrets/真实用户目录（AGENTS.md 不变量），
+    #      所有外部依赖均被 mock；
+    #   3) 该文件一旦在 CI 出现 flake —— 先按既有模式加固（用例级 testTimeout 余量，
+    #      或把同步查询改成 await findBy*/waitFor 消除渲染竞态）；加固后仍需连续
+    #      ≥2 次 CI 绿才保留，否则移出子集，不留在门禁里反复红。
+    #
+    # 必须 windows runner：本套件只在 Windows 开发机上验证过，ubuntu 有存量
+    # 环境性失败（交接文档记载 ~26 个）；且产品只发布 Windows。
+    #
+    # 子集构成：协作相关桌面组件 + B1 分诊修复中验证稳定的文件（同时守护 B1 的修复）。
+    # 扩缩此清单时，请同步 cc-heihei-交接/批次2_B2 报告，并保持 job 内注释与清单一一致。
+    name: Desktop tests gate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - name: Install desktop dependencies
+        # desktop 有独立 lockfile（仓库根非 workspace），需在其目录内安装。
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+      - name: Run desktop collaboration & stability gate subset
+        working-directory: desktop
+        run: >
+          bun run test -- --run
+          src/components/servants/ServantSessionModal.test.tsx
+          src/stores/servantStore.test.ts
+          src/stores/agentStore.test.ts
+          src/api/agents.test.ts
+          src/pages/SubagentRunPage.test.tsx
+          src/components/layout/Sidebar.test.tsx
+          src/components/chat/MessageList.test.tsx
+          src/theme/contrast.test.ts
+          src/theme/globals.test.ts
+          src/theme/tokenUsage.test.ts
+          src/theme/paletteEscapes.test.ts
+          src/lib/filePathBoundary.test.ts
+          src/lib/providerModels.test.ts
+          src/config/providerPresets.test.ts
+          src/components/composite/BrandSeal.test.tsx
+          src/components/workspace/WorkspacePanel.test.tsx
+          src/pages/ActivitySettings.test.tsx
+          src/__tests__/generalSettings.test.tsx

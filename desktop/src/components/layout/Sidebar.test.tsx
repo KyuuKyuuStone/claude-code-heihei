@@ -68,6 +68,9 @@ vi.mock('../../i18n', () => ({
       'sidebar.collapseProject': 'Collapse {project}',
       'sidebar.worktree': 'worktree',
       'sidebar.sessionRunning': 'Session running',
+      'sidebar.servantStatusBusy': 'Servant busy',
+      'sidebar.servantStatusWaiting': 'Servant waiting',
+      'sidebar.servantStatusIdle': 'Servant idle',
       'common.retry': 'Retry',
       'common.loading': 'Loading...',
       'common.cancel': 'Cancel',
@@ -112,6 +115,7 @@ vi.mock('../../i18n', () => ({
 import { Sidebar } from './Sidebar'
 import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
+import { useServantStore } from '../../stores/servantStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
 import type { SessionListItem } from '../../types/session'
@@ -261,6 +265,7 @@ describe('Sidebar', () => {
     vi.useRealTimers()
     cleanup()
     useTabStore.setState({ tabs: [], activeTabId: null })
+    useServantStore.setState({ bySessionId: {} })
     window.localStorage.removeItem(PROJECT_ORDER_STORAGE_KEY)
     window.localStorage.removeItem(PROJECT_PINNED_STORAGE_KEY)
     window.localStorage.removeItem(PROJECT_HIDDEN_STORAGE_KEY)
@@ -1761,6 +1766,54 @@ describe('Sidebar', () => {
       expect(screen.getByRole('button', { name: 'Batch manage' })).toHaveClass('h-11', 'w-11')
       // Same flex row as the two above; at h-9 it left the row ragged.
       expect(screen.getAllByRole('button', { name: 'Search chats' })[0]).toHaveClass('h-11')
+    })
+  })
+
+  describe('servant status marker', () => {
+    function seedSessionWithServant(lastActivityAt: string | undefined) {
+      useSessionStore.setState({
+        sessions: [makeSession('servant-1', 'Servant session', '/workspace/alpha', '2026-05-15T10:00:00.000Z')],
+      })
+      useServantStore.setState({
+        bySessionId: {
+          'servant-1': {
+            sessionId: 'servant-1',
+            enabled: true,
+            updatedAt: 0,
+            title: 'Servant session',
+            running: true,
+            lastActivityAt,
+          },
+        },
+      })
+    }
+
+    it('wraps a busy servant in a spinning ring around the green dot', () => {
+      seedSessionWithServant(new Date().toISOString())
+
+      render(<Sidebar />)
+
+      const marker = screen.getByTitle('Servant busy')
+      const [ring, dot] = Array.from(marker.children)
+      // Same spinner idiom as SessionActivityPanel: a soft track with one
+      // accented arc, spinning only when motion is allowed.
+      expect(ring).toHaveClass(
+        'motion-safe:animate-spin',
+        'motion-reduce:animate-none',
+        'border-[var(--color-success-container)]',
+        'border-t-[var(--color-success)]',
+      )
+      expect(dot).toHaveClass('rounded-full', 'bg-[var(--color-success)]')
+    })
+
+    it('keeps a non-busy servant as a static muted dot without the ring', () => {
+      seedSessionWithServant(new Date(Date.now() - 10 * 60_000).toISOString())
+
+      render(<Sidebar />)
+
+      const marker = screen.getByTitle('Servant waiting')
+      expect(marker).toHaveClass('h-2', 'w-2', 'rounded-full', 'bg-[var(--color-text-tertiary)]')
+      expect(marker.children).toHaveLength(0)
     })
   })
 })

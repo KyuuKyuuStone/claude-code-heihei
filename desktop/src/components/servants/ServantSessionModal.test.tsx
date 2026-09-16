@@ -130,4 +130,139 @@ describe('ServantSessionModal', () => {
     expect(screen.getByLabelText('大模型')).toHaveValue('kimi-max')
     expect(screen.getByLabelText('思考强度')).toHaveValue('low')
   })
+
+  // ─── whitelist 约束档（A3）─────────────────────────────────────────────────
+
+  it('shows writeDirs editor only when the whitelist constraint is selected', () => {
+    render(<ServantSessionModal open mode="create" workDir="D:/proj" onClose={vi.fn()} />)
+
+    const constraintSelect = screen.getByLabelText('约束档位')
+    expect(constraintSelect).toHaveValue('')
+    expect(screen.queryByLabelText('可写目录（每行一个绝对路径）')).not.toBeInTheDocument()
+
+    fireEvent.change(constraintSelect, { target: { value: 'whitelist' } })
+    expect(screen.getByLabelText('可写目录（每行一个绝对路径）')).toBeInTheDocument()
+
+    fireEvent.change(constraintSelect, { target: { value: '' } })
+    expect(screen.queryByLabelText('可写目录（每行一个绝对路径）')).not.toBeInTheDocument()
+  })
+
+  it('pre-fills writeDirs with the session working directory in create mode', () => {
+    render(<ServantSessionModal open mode="create" workDir="D:/proj" onClose={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('约束档位'), { target: { value: 'whitelist' } })
+
+    expect(screen.getByLabelText('可写目录（每行一个绝对路径）')).toHaveValue('D:/proj')
+  })
+
+  it('pre-fills writeDirs from the persisted roster entry in edit mode', async () => {
+    useSessionStore.setState({
+      sessions: [{
+        id: 's1',
+        title: '受限员工',
+        createdAt: '2026-01-01',
+        modifiedAt: '2026-01-01',
+        messageCount: 0,
+        projectPath: 'D:/proj',
+        workDir: 'D:/proj',
+        workDirExists: true,
+      }],
+    })
+    const { useServantStore } = await import('../../stores/servantStore')
+    useServantStore.setState({
+      bySessionId: {
+        s1: {
+          sessionId: 's1',
+          enabled: true,
+          constraint: 'whitelist',
+          writeDirs: ['D:/safe-area', 'D:/build-out'],
+          updatedAt: 1,
+          title: '受限员工',
+          running: false,
+        },
+      },
+    })
+
+    render(<ServantSessionModal open mode="edit" sessionId="s1" onClose={vi.fn()} />)
+
+    expect(screen.getByLabelText('约束档位')).toHaveValue('whitelist')
+    expect(screen.getByLabelText('可写目录（每行一个绝对路径）')).toHaveValue(
+      'D:/safe-area\nD:/build-out',
+    )
+  })
+
+  it('does not overwrite user-edited writeDirs when roster data arrives late (坑③ touched guard)', async () => {
+    useSessionStore.setState({
+      sessions: [{
+        id: 's1',
+        title: '员工',
+        createdAt: '2026-01-01',
+        modifiedAt: '2026-01-01',
+        messageCount: 0,
+        projectPath: 'D:/proj',
+        workDir: 'D:/proj',
+        workDirExists: true,
+      }],
+    })
+    const { useServantStore } = await import('../../stores/servantStore')
+    useServantStore.setState({ bySessionId: {} })
+
+    render(<ServantSessionModal open mode="edit" sessionId="s1" onClose={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('约束档位'), { target: { value: 'whitelist' } })
+    // 档位切换后 workDir 兜底预填，用户随后手动编辑
+    const editor = screen.getByLabelText('可写目录（每行一个绝对路径）')
+    fireEvent.change(editor, { target: { value: 'D:/user-typed' } })
+
+    // 花名册数据晚到（模拟异步 fetch 完成触发 rerender + 预填 effect）
+    useServantStore.setState({
+      bySessionId: {
+        s1: {
+          sessionId: 's1',
+          enabled: true,
+          constraint: 'whitelist',
+          writeDirs: ['D:/late-arrived'],
+          updatedAt: 2,
+          title: '员工',
+          running: false,
+        },
+      },
+    })
+
+    // touched 守卫生效：用户输入不被晚到的持久化数据覆盖
+    expect(screen.getByLabelText('可写目录（每行一个绝对路径）')).toHaveValue('D:/user-typed')
+  })
+
+  it('submits writeDirs with whitelist and omits them for other constraints', async () => {
+    render(<ServantSessionModal open mode="create" workDir="D:/proj" onClose={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('约束档位'), { target: { value: 'whitelist' } })
+    fireEvent.change(screen.getByLabelText('可写目录（每行一个绝对路径）'), {
+      target: { value: '\n  D:/proj  \n\nD:/out\n' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '创建' }))
+
+    await waitFor(() => {
+      expect(servantsApi.set).toHaveBeenCalled()
+    })
+    expect(vi.mocked(servantsApi.set)).toHaveBeenCalledWith(
+      'new-session',
+      expect.objectContaining({
+        constraint: 'whitelist',
+        // trim + 去空行
+        writeDirs: ['D:/proj', 'D:/out'],
+      }),
+    )
+
+    // 切回 full 再提交：不带 constraint/writeDirs
+    vi.mocked(servantsApi.set).mockClear()
+    fireEvent.change(screen.getByLabelText('约束档位'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: '创建' }))
+    await waitFor(() => {
+      expect(servantsApi.set).toHaveBeenCalled()
+    })
+    const secondCall = vi.mocked(servantsApi.set).mock.calls[0]?.[1]
+    expect(secondCall?.constraint).toBeUndefined()
+    expect(secondCall?.writeDirs).toBeUndefined()
+  })
 })

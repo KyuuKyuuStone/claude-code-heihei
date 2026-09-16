@@ -35,6 +35,9 @@ describe('ConversationService', () => {
   let originalShell: string | undefined
   let originalZdotdir: string | undefined
   let originalDisableTerminalShellEnv: string | undefined
+  let originalSupervisorEnv: string | undefined
+  let originalServantConstraintEnv: string | undefined
+  let originalServantWriteDirsEnv: string | undefined
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-heihei-conversation-service-'))
@@ -60,6 +63,9 @@ describe('ConversationService', () => {
     originalShell = process.env.SHELL
     originalZdotdir = process.env.ZDOTDIR
     originalDisableTerminalShellEnv = process.env.CC_HEIHEI_DISABLE_TERMINAL_SHELL_ENV
+    originalSupervisorEnv = process.env.CC_HEIHEI_SUPERVISOR
+    originalServantConstraintEnv = process.env.CC_HEIHEI_SERVANT_CONSTRAINT
+    originalServantWriteDirsEnv = process.env.CC_HEIHEI_SERVANT_WRITE_DIRS
 
     process.env.CLAUDE_CONFIG_DIR = tmpDir
     process.env.ANTHROPIC_API_KEY = 'stale-parent-api-key'
@@ -81,6 +87,11 @@ describe('ConversationService', () => {
     delete process.env.CC_HEIHEI_TRACE_PROVIDER_NAME
     delete process.env.CC_HEIHEI_TRACE_PROVIDER_FORMAT
     process.env.CC_HEIHEI_DISABLE_TERMINAL_SHELL_ENV = '1'
+    // 协作身份 env：运行者（如主管 shell）携带的 CC_HEIHEI_* 会经 cleanEnv
+    // 泄漏进 buildChildEnv 断言——用例必须与运行者环境隔离
+    delete process.env.CC_HEIHEI_SUPERVISOR
+    delete process.env.CC_HEIHEI_SERVANT_CONSTRAINT
+    delete process.env.CC_HEIHEI_SERVANT_WRITE_DIRS
     resetTerminalShellEnvironmentCacheForTests()
   })
 
@@ -150,6 +161,15 @@ describe('ConversationService', () => {
 
     if (originalDisableTerminalShellEnv === undefined) delete process.env.CC_HEIHEI_DISABLE_TERMINAL_SHELL_ENV
     else process.env.CC_HEIHEI_DISABLE_TERMINAL_SHELL_ENV = originalDisableTerminalShellEnv
+
+    if (originalSupervisorEnv === undefined) delete process.env.CC_HEIHEI_SUPERVISOR
+    else process.env.CC_HEIHEI_SUPERVISOR = originalSupervisorEnv
+
+    if (originalServantConstraintEnv === undefined) delete process.env.CC_HEIHEI_SERVANT_CONSTRAINT
+    else process.env.CC_HEIHEI_SERVANT_CONSTRAINT = originalServantConstraintEnv
+
+    if (originalServantWriteDirsEnv === undefined) delete process.env.CC_HEIHEI_SERVANT_WRITE_DIRS
+    else process.env.CC_HEIHEI_SERVANT_WRITE_DIRS = originalServantWriteDirsEnv
 
     resetTerminalShellEnvironmentCacheForTests()
     await fs.rm(tmpDir, { recursive: true, force: true })
@@ -1457,6 +1477,80 @@ describe('ConversationService', () => {
     expect(serialized).not.toContain('PRIVATE_SDK_ERROR')
     expect(serialized).not.toContain('PRIVATE_ERROR_DETAILS')
     expect(serialized).not.toContain('PRIVATE_ASSISTANT_REPLY')
+  })
+
+  // ─── 协作身份 env 注入（readonly 存量补测 + whitelist A3）──────────────────
+
+  async function writeRoster(entries: unknown[]): Promise<void> {
+    await fs.writeFile(
+      path.join(tmpDir, 'servant_sessions.json'),
+      JSON.stringify({ schemaVersion: 1, servants: entries }),
+      'utf-8',
+    )
+  }
+
+  test('buildChildEnv injects whitelist constraint env pair from the roster (A3)', async () => {
+    await writeRoster([
+      {
+        sessionId: 'wl-session',
+        enabled: true,
+        constraint: 'whitelist',
+        writeDirs: ['/wl/proj', '/wl/out'],
+        updatedAt: 1,
+      },
+    ])
+    const service = new ConversationService() as any
+    const env = (await service.buildChildEnv(
+      '/tmp',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'wl-session',
+    )) as Record<string, string>
+
+    expect(env.CC_HEIHEI_SUPERVISOR).toBeUndefined()
+    expect(env.CC_HEIHEI_SERVANT_CONSTRAINT).toBe('whitelist')
+    // 换行分隔（\n 不可能出现在路径中，规避盘符冒号冲突）
+    expect(env.CC_HEIHEI_SERVANT_WRITE_DIRS).toBe('/wl/proj\n/wl/out')
+  })
+
+  test('buildChildEnv injects readonly constraint env only (存量补测)', async () => {
+    await writeRoster([
+      { sessionId: 'ro-session', enabled: true, constraint: 'readonly', updatedAt: 1 },
+    ])
+    const service = new ConversationService() as any
+    const env = (await service.buildChildEnv(
+      '/tmp',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'ro-session',
+    )) as Record<string, string>
+
+    expect(env.CC_HEIHEI_SUPERVISOR).toBeUndefined()
+    expect(env.CC_HEIHEI_SERVANT_CONSTRAINT).toBe('readonly')
+    expect(env.CC_HEIHEI_SERVANT_WRITE_DIRS).toBeUndefined()
+  })
+
+  test('buildChildEnv injects no constraint env for unregistered sessions (存量补测)', async () => {
+    await writeRoster([
+      { sessionId: 'other-session', enabled: true, constraint: 'readonly', updatedAt: 1 },
+    ])
+    const service = new ConversationService() as any
+    const env = (await service.buildChildEnv(
+      '/tmp',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'not-registered',
+    )) as Record<string, string>
+
+    expect(env.CC_HEIHEI_SUPERVISOR).toBeUndefined()
+    expect(env.CC_HEIHEI_SERVANT_CONSTRAINT).toBeUndefined()
+    expect(env.CC_HEIHEI_SERVANT_WRITE_DIRS).toBeUndefined()
   })
 })
 

@@ -1188,13 +1188,23 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
                                           : status === 'waiting'
                                             ? t('sidebar.servantStatusWaiting')
                                             : t('sidebar.servantStatusIdle')
-                                      return (
+                                      return status === 'busy' ? (
+                                        // 点+环：实心绿点外套旋转圆环表达「正在干活」，
+                                        // 与 SessionActivityPanel 的 spinner 同款
+                                        // （motion-safe 才转，motion-reduce 静止成弧线+点）。
+                                        <span className="relative flex-shrink-0 h-3 w-3" title={title}>
+                                          <span
+                                            aria-hidden="true"
+                                            className="absolute inset-0 rounded-full border-2 border-[var(--color-success-container)] border-t-[var(--color-success)] motion-safe:animate-spin motion-reduce:animate-none"
+                                          />
+                                          <span
+                                            aria-hidden="true"
+                                            className="absolute inset-[3px] rounded-full bg-[var(--color-success)]"
+                                          />
+                                        </span>
+                                      ) : (
                                         <span
-                                          className={`flex-shrink-0 h-2 w-2 rounded-full ${
-                                            status === 'busy'
-                                              ? 'bg-[var(--color-success)]'
-                                              : 'bg-[var(--color-text-tertiary)]'
-                                          }`}
+                                          className="flex-shrink-0 h-2 w-2 rounded-full bg-[var(--color-text-tertiary)]"
                                           title={title}
                                         />
                                       )

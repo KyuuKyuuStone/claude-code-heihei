@@ -71,7 +71,11 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
   const [description, setDescription] = useState(existing?.description || '')
   const [serve, setServe] = useState(existing?.enabled ?? true)
   const [supervisor, setSupervisor] = useState(existing?.supervisor ?? false)
-  const [constraint, setConstraint] = useState<'readonly' | undefined>(existing?.constraint)
+  const [constraint, setConstraint] = useState<'readonly' | 'whitelist' | undefined>(
+    existing?.constraint === 'whitelist' ? 'whitelist' : existing?.constraint === 'readonly' ? 'readonly' : undefined,
+  )
+  const [writeDirsText, setWriteDirsText] = useState(existing?.writeDirs?.join('\n') ?? '')
+  const [writeDirsTouched, setWriteDirsTouched] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -126,6 +130,23 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providers.length, runtimeTouched, hasPersistedRuntime])
+
+  // writeDirs 预填守卫（同 runtime 双层模式，坑③：异步 store 数据到达不得覆盖用户输入）：
+  // 已手动编辑→ 以用户为准；edit 模式已有持久化值 → 以持久化值为准；
+  // 否则档位切到 whitelist 且输入为空时，才回填会话工作目录作为默认白名单
+  const hasPersistedWriteDirs = mode === 'edit' && Boolean(existing?.writeDirs?.length)
+  const defaultWriteDir = mode === 'create' ? workDir : existingSession?.workDir
+  useEffect(() => {
+    if (writeDirsTouched) return
+    if (hasPersistedWriteDirs && existing?.writeDirs?.length) {
+      setWriteDirsText(existing.writeDirs.join('\n'))
+      return
+    }
+    if (constraint === 'whitelist' && defaultWriteDir) {
+      setWriteDirsText((prev) => (prev.trim() === '' ? defaultWriteDir : prev))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [constraint, writeDirsTouched, hasPersistedWriteDirs, existing?.writeDirs, defaultWriteDir])
 
   const roleLabels = useMemo(
     () => ({
@@ -218,6 +239,15 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
     }
   }
 
+  const handleConstraintChange = (value: string) => {
+    setConstraint(value === 'readonly' || value === 'whitelist' ? value : undefined)
+  }
+
+  const parsedWriteDirs = writeDirsText
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+
   const handleSubmit = async () => {
     setIsSubmitting(true)
     setError(null)
@@ -240,6 +270,7 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
             enabled: serve,
             supervisor,
             ...(constraint ? { constraint } : {}),
+            ...(constraint === 'whitelist' ? { writeDirs: parsedWriteDirs } : {}),
             ...runtimeFields,
           })
         }
@@ -255,6 +286,7 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
           enabled: serve,
           supervisor,
           ...(constraint ? { constraint } : {}),
+          ...(constraint === 'whitelist' ? { writeDirs: parsedWriteDirs } : {}),
           ...runtimeFields,
         })
       }
@@ -343,12 +375,26 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
           <SelectField
             label={t('servant.modal.constraint')}
             value={constraint ?? ''}
-            onChange={(value) => setConstraint(value === 'readonly' ? 'readonly' : undefined)}
+            onChange={handleConstraintChange}
             options={[
               { value: '', label: t('servant.modal.constraintFull') },
               { value: 'readonly', label: t('servant.modal.constraintReadonly') },
+              { value: 'whitelist', label: t('servant.modal.constraintWhitelist') },
             ]}
           />
+          {constraint === 'whitelist' && (
+            <TextArea
+              label={t('servant.modal.writeDirs')}
+              value={writeDirsText}
+              onChange={(e) => {
+                setWriteDirsTouched(true)
+                setWriteDirsText(e.target.value)
+              }}
+              placeholder={t('servant.modal.writeDirsPlaceholder')}
+              hint={t('servant.modal.writeDirsHint')}
+              rows={3}
+            />
+          )}
           <p className="text-[12px] leading-relaxed text-[var(--color-text-tertiary)] -mt-1">
             {t('servant.modal.identityHint')}
           </p>

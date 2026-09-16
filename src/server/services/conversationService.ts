@@ -1023,6 +1023,8 @@ export class ConversationService {
         if (msg?.type === 'result') {
           this.observeServantTurnResult(sessionId, msg)
         }
+        // 员工会话工具可用性观察：连续调用不存在的工具达阈值 → 中断该轮次并通知主管。
+        this.observeServantToolResults(sessionId, msg)
         const sdkError = this.extractSdkErrorEvent(msg)
         if (sdkError) {
           void diagnosticsService.recordEvent({
@@ -1457,7 +1459,10 @@ export class ConversationService {
    * 协作身份缓存：sessionId → 主管标记与约束档位（负缓存也存，
    * 避免每次启动都读花名册文件）。任命/卸任/改档位时失效。
    */
-  private supervisorSessionCache = new Map<string, { supervisor: boolean; constraint?: 'readonly' }>()
+  private supervisorSessionCache = new Map<
+    string,
+    { supervisor: boolean; constraint?: 'readonly' | 'whitelist'; writeDirs?: string[] }
+  >()
 
   /** 协作身份变化后调用（任命/卸任/移除），让下次会话启动按最新花名册注入标记 */
   invalidateSupervisorCache(sessionId?: string): void {
@@ -1490,12 +1495,58 @@ export class ConversationService {
         .then(({ clearServantTurnErrors }) => clearServantTurnErrors(sessionId))
         .catch(() => {})
     }
+    // 轮次成功也清零「连续调用不存在工具」计数（语义见 servantIncidentNotifier）。
+    void import('./servantIncidentNotifier.js')
+      .then(({ resetUnknownToolStreak }) => resetUnknownToolStreak(sessionId))
+      .catch(() => {})
   }
 
-  private async isRegisteredSupervisor(sessionId: string): Promise<boolean> {
+  /**
+   * 员工会话工具调用观察：把每条消息里的 tool_result 文本交给熔断器判定。
+   *
+   * 只读消息自带的字段，不做额外映射：不存在工具的 tool_result 文本里已带
+   * 「No such tool available: <toolName>」，通知所需信息足够；其余任何 tool_result
+   * 都表示"这个工具确实存在"，用于清零连续计数。
+   */
+  private observeServantToolResults(sessionId: string, msg: any): void {
+    const content = msg?.message?.content
+    if (!Array.isArray(content)) return
+    for (const block of content) {
+      if (!block || typeof block !== 'object' || block.type !== 'tool_result') continue
+      const resultText = this.toolResultText(block)
+      const isError = (block as { is_error?: unknown }).is_error === true
+      void import('./servantIncidentNotifier.js')
+        .then(({ onServantToolResult }) => onServantToolResult({ sessionId, resultText, isError }))
+        .catch(() => {})
+    }
+  }
+
+  /** tool_result 的 content 可能是字符串，也可能是 content block 数组 */
+  private toolResultText(block: { content?: unknown }): string {
+    const content = block.content
+    if (typeof content === 'string') return content
+    if (!Array.isArray(content)) return ''
+    return content
+      .map((part) =>
+        part && typeof part === 'object' && typeof (part as { text?: unknown }).text === 'string'
+          ? (part as { text: string }).text
+          : '',
+      )
+      .join('\n')
+  }
+
+  private async isRegisteredSupervisor(sessionId: string): Promise<{
+    supervisor: boolean
+    constraint?: 'readonly' | 'whitelist'
+    writeDirs?: string[]
+  }> {
     const cached = this.supervisorSessionCache.get(sessionId)
     if (cached !== undefined) return cached
-    let info: { supervisor: boolean; constraint?: 'readonly' } = { supervisor: false }
+    let info: {
+      supervisor: boolean
+      constraint?: 'readonly' | 'whitelist'
+      writeDirs?: string[]
+    } = { supervisor: false }
     try {
       // 动态导入避免 conversationService ↔ servantService 静态依赖环
       // （servantService 引用本类的 hasSession 做 running 标记）
@@ -1503,7 +1554,12 @@ export class ConversationService {
       const entry = await servantService.getServant(sessionId)
       info = {
         supervisor: Boolean(entry?.supervisor),
-        ...(entry?.constraint === 'readonly' ? { constraint: 'readonly' as const } : {}),
+        ...(entry?.constraint === 'readonly' || entry?.constraint === 'whitelist'
+          ? { constraint: entry.constraint }
+          : {}),
+        ...(entry?.constraint === 'whitelist' && entry.writeDirs?.length
+          ? { writeDirs: entry.writeDirs }
+          : {}),
       }
     } catch {
       // 花名册读取失败按非主管处理：收权是加强项，不能阻塞会话启动
@@ -1514,7 +1570,8 @@ export class ConversationService {
 
   private async getCollabIdentity(sessionId: string): Promise<{
     supervisor: boolean
-    constraint?: 'readonly'
+    constraint?: 'readonly' | 'whitelist'
+    writeDirs?: string[]
   }> {
     return this.isRegisteredSupervisor(sessionId)
   }
@@ -1527,6 +1584,8 @@ export class ConversationService {
     networkRuntimeMetadata?: { firstTokenTimeoutDerived: boolean },
     sessionId?: string,
   ): Promise<Record<string, string>> {
+    // 协作身份（主管标记/约束档位/白名单目录）取一次复用（带缓存）
+    const collabIdentity = sessionId ? await this.getCollabIdentity(sessionId) : null
     // Provider isolation: when Desktop has its own provider config/index,
     // strip inherited provider env vars so the child CLI reads fresh values
     // from ~/.claude/cc-heihei/settings.json instead of stale process.env.
@@ -1691,13 +1750,18 @@ export class ConversationService {
       // （CLAUDE_CODE_SESSION_ID 是 CLI 内部 id，且可能为空，不能用于回邮地址）
       ...(sessionId ? { CC_HEIHEI_SESSION_ID: sessionId } : {}),
       // 主管会话标记 + 员工约束档位：CLI 侧据此做结构性收权（主管只派活不干活、
-      // readonly 员工禁改文件；提示词约束会被延续对话的旧上下文压过，
-      // 机制兜底见 collaboration/supervisorGuard）
-      ...(sessionId && (await this.getCollabIdentity(sessionId)).supervisor
-        ? { CC_HEIHEI_SUPERVISOR: '1' }
-        : {}),
-      ...(sessionId && (await this.getCollabIdentity(sessionId)).constraint === 'readonly'
+      // readonly 员工禁改文件、whitelist 员工仅白名单目录内可写；提示词约束会被
+      // 延续对话的旧上下文压过，机制兜底见 collaboration/supervisorGuard）
+      ...(collabIdentity?.supervisor ? { CC_HEIHEI_SUPERVISOR: '1' } : {}),
+      ...(collabIdentity?.constraint === 'readonly'
         ? { CC_HEIHEI_SERVANT_CONSTRAINT: 'readonly' }
+        : {}),
+      ...(collabIdentity?.constraint === 'whitelist'
+        ? {
+            CC_HEIHEI_SERVANT_CONSTRAINT: 'whitelist',
+            // 缺列表注入空串：guard 侧解析为空 → 全拒（最严格解释）
+            CC_HEIHEI_SERVANT_WRITE_DIRS: (collabIdentity.writeDirs ?? []).join('\n'),
+          }
         : {}),
       ...(sdkUrl
         ? {

@@ -7,8 +7,10 @@ export type ServantInfo = {
   description?: string
   enabled: boolean
   supervisor?: boolean
-  /** 约束档位：readonly=只读观察（禁改文件，信箱汇报放行） */
-  constraint?: 'readonly'
+  /** 约束档位：readonly=只读观察；whitelist=目录白名单（仅 writeDirs 内可写） */
+  constraint?: 'readonly' | 'whitelist'
+  /** whitelist 档的可写目录（服务端已规范化） */
+  writeDirs?: string[]
   updatedAt: number
   title: string
   workDir?: string
@@ -23,6 +25,8 @@ export type ServantEntry = {
   description?: string
   enabled: boolean
   supervisor?: boolean
+  constraint?: 'readonly' | 'whitelist'
+  writeDirs?: string[]
   updatedAt: number
 }
 
@@ -35,8 +39,10 @@ export type ServantInput = {
   runtimeProviderId?: string | null
   runtimeModelId?: string
   effortLevel?: string
-  /** 约束档位：readonly=只读观察（禁改文件，信箱汇报放行） */
-  constraint?: 'readonly'
+  /** 约束档位：readonly=只读观察；whitelist=目录白名单（需 writeDirs） */
+  constraint?: 'readonly' | 'whitelist'
+  /** whitelist 档可写目录（每行一个绝对路径；服务端校验规范化） */
+  writeDirs?: string[]
 }
 
 export const servantsApi = {
