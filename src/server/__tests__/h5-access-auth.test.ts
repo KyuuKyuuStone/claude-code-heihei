@@ -23,7 +23,6 @@ let originalH5DistDir: string | undefined
 let originalClaudeAppRoot: string | undefined
 let originalServerAuthRequired: string | undefined
 let originalLocalAccessToken: string | undefined
-let originalPetAccessToken: string | undefined
 let originalServerPort = 3456
 const PHONE_ORIGIN = 'https://phone.example'
 const SERVER_STOP_WAIT_MS = 500
@@ -221,14 +220,12 @@ beforeEach(async () => {
   originalClaudeAppRoot = process.env.CLAUDE_APP_ROOT
   originalServerAuthRequired = process.env.SERVER_AUTH_REQUIRED
   originalLocalAccessToken = process.env.CC_HEIHEI_LOCAL_ACCESS_TOKEN
-  originalPetAccessToken = process.env.CC_HEIHEI_PET_ACCESS_TOKEN
   originalServerPort = ProviderService.getServerPort()
   process.env.CLAUDE_CONFIG_DIR = tmpDir
   const h5DistDir = path.join(tmpDir, 'dist')
   process.env.CLAUDE_H5_DIST_DIR = h5DistDir
   delete process.env.ANTHROPIC_API_KEY
   delete process.env.CC_HEIHEI_LOCAL_ACCESS_TOKEN
-  delete process.env.CC_HEIHEI_PET_ACCESS_TOKEN
   await fs.mkdir(path.join(h5DistDir, 'assets'), { recursive: true })
   await fs.writeFile(
     path.join(h5DistDir, 'index.html'),
@@ -257,9 +254,6 @@ afterEach(async () => {
   else process.env.SERVER_AUTH_REQUIRED = originalServerAuthRequired
   if (originalLocalAccessToken === undefined) delete process.env.CC_HEIHEI_LOCAL_ACCESS_TOKEN
   else process.env.CC_HEIHEI_LOCAL_ACCESS_TOKEN = originalLocalAccessToken
-  if (originalPetAccessToken === undefined) delete process.env.CC_HEIHEI_PET_ACCESS_TOKEN
-  else process.env.CC_HEIHEI_PET_ACCESS_TOKEN = originalPetAccessToken
-
   await fs.rm(tmpDir, {
     recursive: true,
     force: true,
@@ -475,122 +469,6 @@ describe('remote H5 auth and CORS integration', () => {
       },
     })
     expect(externalAsset.status).toBe(403)
-  })
-
-  test('enforces the pet bearer capability allowlist before API routing', async () => {
-    process.env.CC_HEIHEI_LOCAL_ACCESS_TOKEN = 'desktop-local-secret'
-    process.env.CC_HEIHEI_PET_ACCESS_TOKEN = 'pet-capability-secret'
-    await restartRemoteServer()
-    const petHeaders = { Authorization: 'Bearer pet-capability-secret' }
-    const privateWorkDir = path.join(tmpDir, 'private-workspace')
-    await fs.mkdir(privateWorkDir, { recursive: true })
-    const { sessionId } = await sessionService.createSession(privateWorkDir)
-
-    for (const pathName of [
-      '/api/desktop-ui/preferences/pet',
-      `/api/sessions/${sessionId}/chat/status`,
-    ]) {
-      const response = await fetch(`${baseUrl}${pathName}`, { headers: petHeaders })
-      expect(response.status).toBe(200)
-    }
-
-    const sessionsResponse = await fetch(`${baseUrl}/api/sessions?limit=400`, {
-      headers: petHeaders,
-    })
-    expect(sessionsResponse.status).toBe(200)
-    const sessionsBody = await sessionsResponse.json() as {
-      sessions: Array<Record<string, unknown>>
-      total: number
-    }
-    const projectedSession = sessionsBody.sessions.find((session) => session.id === sessionId)
-    expect(projectedSession).toMatchObject({
-      id: sessionId,
-      title: 'Untitled Session',
-      messageCount: 0,
-      projectPath: '',
-      workDir: null,
-      workDirExists: false,
-    })
-    expect(typeof projectedSession?.createdAt).toBe('string')
-    expect(typeof projectedSession?.modifiedAt).toBe('string')
-    expect(JSON.stringify(sessionsBody)).not.toContain(privateWorkDir)
-    expect(sessionsBody.sessions.length).toBeLessThanOrEqual(9)
-
-    const desktopSessionsResponse = await fetch(`${baseUrl}/api/sessions?limit=400`, {
-      headers: { Authorization: 'Bearer desktop-local-secret' },
-    })
-    expect(desktopSessionsResponse.status).toBe(200)
-    const desktopSessionsBody = await desktopSessionsResponse.json() as {
-      sessions: Array<Record<string, unknown>>
-    }
-    const realPrivateWorkDir = await fs.realpath(privateWorkDir)
-    expect(desktopSessionsBody.sessions.find((session) => session.id === sessionId)).toMatchObject({
-      workDir: realPrivateWorkDir,
-      projectRoot: realPrivateWorkDir,
-    })
-
-    const updateResponse = await fetch(`${baseUrl}/api/desktop-ui/preferences/pet`, {
-      method: 'PUT',
-      headers: { ...petHeaders, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ collapsed: true }),
-    })
-    expect(updateResponse.status).toBe(200)
-    const updateBody = await updateResponse.json() as Record<string, unknown>
-    expect(updateBody).toEqual({
-      ok: true,
-      pet: {
-        enabled: false,
-        selectedPetId: 'dada-code',
-        size: 144,
-        showTaskPanel: false,
-        collapsed: true,
-        motionEnabled: true,
-        lastSessionId: null,
-      },
-    })
-    expect(updateBody).not.toHaveProperty('preferences')
-    const hiddenSessionStatus = await fetch(`${baseUrl}/api/sessions/pet-test/chat/status`, {
-      headers: petHeaders,
-    })
-    expect(hiddenSessionStatus.status).toBe(403)
-    await expect(hiddenSessionStatus.json()).resolves.toMatchObject({
-      error: 'Forbidden',
-      message: 'The pet token cannot access this session.',
-    })
-
-    const hiddenSessionSocket = await fetch(
-      `${baseUrl}/ws/pet-test?token=pet-capability-secret`,
-      { headers: makeUpgradeHeaders() },
-    )
-    expect(hiddenSessionSocket.status).toBe(403)
-    await expectWebSocketOpen(`${wsBaseUrl}/ws/${sessionId}?token=pet-capability-secret`)
-
-    for (const [method, pathName] of [
-      ['GET', '/api/providers'],
-      ['GET', '/api/desktop-ui/preferences'],
-      ['GET', '/api/filesystem'],
-      ['GET', '/api/computer-use/authorized-apps'],
-      ['GET', '/api/settings/user'],
-      ['POST', '/api/doctor/repair'],
-      ['GET', '/preview-fs/pet-test/index.html'],
-      ['GET', '/local-file/tmp/private.txt'],
-      ['POST', '/proxy/v1/messages'],
-    ]) {
-      const response = await fetch(`${baseUrl}${pathName}`, {
-        method,
-        headers: petHeaders,
-      })
-      expect(response.status).toBe(403)
-      await expect(response.json()).resolves.toMatchObject({
-        error: 'Forbidden',
-        message: 'The pet token cannot access this capability.',
-      })
-    }
-
-    const desktopResponse = await fetch(`${baseUrl}/api/settings/user`, {
-      headers: { Authorization: 'Bearer desktop-local-secret' },
-    })
-    expect(desktopResponse.status).toBe(200)
   })
 
   test('keeps the host-managed provider proxy working with local auth across H5 modes', async () => {

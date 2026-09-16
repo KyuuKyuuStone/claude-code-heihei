@@ -50,8 +50,6 @@ import { isValidPermissionMode } from '../services/settingsService.js'
 import { handleWorkspaceSearchRoute } from './workspaceSearch.js'
 import { localIndexCoordinator } from '../services/localIndex/coordinator.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
-import { isPetAccessAuthorized } from '../localAccessAuth.js'
-import { PET_SESSION_LIMIT } from '../petAccessPolicy.js'
 
 const DEFAULT_GIT_INFO_COMMAND_TIMEOUT_MS = 3_000
 
@@ -317,28 +315,11 @@ async function listSessions(req: Request, url: URL): Promise<Response> {
     throw ApiError.badRequest('Invalid offset parameter')
   }
 
-  const petAccess = isPetAccessAuthorized(req)
-  const limit = petAccess ? Math.min(requestedLimit, PET_SESSION_LIMIT) : requestedLimit
   const result = await sessionService.listSessions({
-    ...(petAccess ? {} : { project }),
-    limit,
-    offset: petAccess ? 0 : offset,
+    project,
+    limit: requestedLimit,
+    offset,
   })
-  if (petAccess) {
-    return Response.json({
-      sessions: result.sessions.map((session) => ({
-        id: session.id,
-        title: session.title,
-        createdAt: session.createdAt,
-        modifiedAt: session.modifiedAt,
-        messageCount: session.messageCount,
-        projectPath: '',
-        workDir: null,
-        workDirExists: false,
-      })),
-      total: result.sessions.length,
-    })
-  }
   return Response.json({
     ...result,
     index: localIndexCoordinator.getPublicStatus(),

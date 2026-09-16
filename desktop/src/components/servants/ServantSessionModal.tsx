@@ -18,7 +18,8 @@ import { useHeiheiGrokOAuthStore } from '../../stores/heiheiGrokOAuthStore'
 import { buildProviderChoices, type ProviderChoice } from '../../lib/modelChoices'
 import { resolveDefaultRuntimeSelection } from '../../lib/runtimeSelection'
 import { useTranslation } from '../../i18n'
-import { ROLE_PRESETS, SUPERVISOR_DEFAULT_DESCRIPTION } from './rolePresets'
+import type { TranslationKey } from '../../i18n/locales/en'
+import { ROLE_PRESETS, SUPERVISOR_DEFAULT_DESCRIPTION_KEY } from './rolePresets'
 import type { RuntimeSelection } from '../../types/runtime'
 import type { ReasoningEffortLevel } from '../../types/settings'
 
@@ -229,13 +230,13 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
     const preset = ROLE_PRESETS.find((p) => p.name === name)
     if (!preset) return
     setRole(preset.name)
-    setDescription(preset.description)
+    setDescription(t(`servant.presets.${preset.key}.description` as TranslationKey))
   }
 
   const handleSupervisorChange = (checked: boolean) => {
     setSupervisor(checked)
     if (checked && !description.trim()) {
-      setDescription(SUPERVISOR_DEFAULT_DESCRIPTION)
+      setDescription(t(SUPERVISOR_DEFAULT_DESCRIPTION_KEY))
     }
   }
 
@@ -338,7 +339,10 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
               onChange={applyPreset}
               options={[
                 { value: '', label: t('servant.modal.presetPlaceholder') },
-                ...ROLE_PRESETS.map((p) => ({ value: p.name, label: p.name })),
+                ...ROLE_PRESETS.map((p) => ({
+                  value: p.name,
+                  label: t(`servant.presets.${p.key}.name` as TranslationKey),
+                })),
               ]}
             />
             <Input

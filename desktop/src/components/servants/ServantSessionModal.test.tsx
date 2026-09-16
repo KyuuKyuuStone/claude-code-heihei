@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -80,6 +80,22 @@ describe('ServantSessionModal', () => {
     expect(screen.getByLabelText('角色')).toHaveValue('代码审查')
     expect(screen.getByLabelText('角色特性')).toHaveValue(
       '严格挑剔地审查代码质量、安全与可维护性，只报真问题，输出问题清单与修改建议',
+    )
+  })
+
+  it('localizes preset labels and descriptions while keeping the canonical role name', () => {
+    useSettingsStore.setState({ locale: 'en' })
+    render(<ServantSessionModal open mode="create" workDir="D:/proj" onClose={vi.fn()} />)
+
+    // 选项标签随语言走，value 仍是中文正名（稳定标识，匹配既有存档）
+    const presetSelect = screen.getByLabelText('Role preset')
+    expect(within(presetSelect).getByRole('option', { name: 'Code Review' })).toHaveValue('代码审查')
+
+    fireEvent.change(presetSelect, { target: { value: '代码审查' } })
+
+    expect(screen.getByLabelText('Role')).toHaveValue('代码审查')
+    expect(screen.getByLabelText('Role description')).toHaveValue(
+      'Reviews code quality, security and maintainability with a critical eye; only reports real issues, delivering a problem list with fix suggestions',
     )
   })
 

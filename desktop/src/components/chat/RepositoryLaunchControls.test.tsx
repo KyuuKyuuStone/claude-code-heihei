@@ -55,6 +55,8 @@ vi.mock('../../i18n', () => ({
     'repoLaunch.launchLocation': 'Location',
     'repoLaunch.localBranch': 'Local branch',
     'repoLaunch.missingWorkdir': 'Missing working directory',
+    'repoLaunch.nonAsciiPathWarning': 'Path contains non-ASCII characters; some toolchains may misbehave',
+    'repoLaunch.nonAsciiPathWarningCompact': 'Non-ASCII path',
     'repoLaunch.noBranch': 'No branch',
     'repoLaunch.noBranchMatch': 'No matching branches',
     'repoLaunch.remoteBranch': 'Remote branch',
@@ -350,6 +352,28 @@ describe('RepositoryLaunchControls', () => {
     expect(await screen.findByRole('status', { name: 'Dirty worktree' }))
       .toHaveTextContent('Dirty worktree')
     expect(screen.queryByText('Uncommitted changes')).not.toBeInTheDocument()
+  })
+
+  it('warns when the working directory path contains non-ASCII characters', async () => {
+    renderControls({ workDir: '/用户/项目' })
+
+    expect(await screen.findByRole('status', {
+      name: 'Path contains non-ASCII characters; some toolchains may misbehave',
+    })).toBeInTheDocument()
+  })
+
+  it('stays quiet for pure-ASCII and empty working directory paths', async () => {
+    renderControls({ workDir: '/repo/plain-ascii' })
+
+    await screen.findByRole('button', { name: 'Location: cc-heihei / main' })
+    expect(screen.queryByRole('status', {
+      name: 'Path contains non-ASCII characters; some toolchains may misbehave',
+    })).not.toBeInTheDocument()
+
+    renderControls({ workDir: '' })
+    expect(screen.queryByRole('status', {
+      name: 'Path contains non-ASCII characters; some toolchains may misbehave',
+    })).not.toBeInTheDocument()
   })
 
   // The dropdown used to close on its own `mousedown` listener, which does not

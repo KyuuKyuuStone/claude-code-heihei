@@ -10,12 +10,14 @@
  *         主管给员工派活、员工给主管汇报共用此端点。
  */
 
+import * as crypto from 'node:crypto'
 import { servantService } from '../services/servantService.js'
 import { conversationService } from '../services/conversationService.js'
 import { sessionMessenger } from '../services/sessionMessenger.js'
 import { sessionService } from '../services/sessionService.js'
 import { collabEnvironmentService } from '../services/collabEnvironmentService.js'
 import { dispatchMailboxService } from '../services/dispatchMailboxService.js'
+import { forgetReceipt, getReceipt, listReceipts, recordDelivery } from '../services/dispatchReceiptService.js'
 import {
   DISPATCH_PROTOCOL_MD,
   WORK_ORCHESTRATOR_SKILL_NAME,
@@ -124,10 +126,26 @@ export async function handleServantsApi(
 
 export async function handleSessionMessagesApi(
   req: Request,
-  _url: URL,
+  url: URL,
   _segments: string[],
 ): Promise<Response> {
   try {
+    // ── GET /api/session-messages ───────────────────────────────────────
+    // 查询派活回执：?messageId=<投递响应返回的 id> 或 ?targetSessionId=<看该目标最近的回执>
+    if (req.method === 'GET') {
+      const messageId = url.searchParams.get('messageId')?.trim()
+      if (messageId) {
+        const receipt = getReceipt(messageId)
+        if (!receipt) throw ApiError.notFound(`Unknown message id: ${messageId}`)
+        return Response.json({ ok: true, receipt })
+      }
+      const targetSessionId = url.searchParams.get('targetSessionId')?.trim()
+      if (targetSessionId) {
+        return Response.json({ ok: true, receipts: listReceipts(targetSessionId).slice(0, 20) })
+      }
+      throw ApiError.badRequest('Provide either "messageId" or "targetSessionId"')
+    }
+
     // ── POST /api/session-messages ──────────────────────────────────────
     if (req.method === 'POST') {
       const body = await parseJsonBody(req)
@@ -157,19 +175,40 @@ export async function handleSessionMessagesApi(
         }
       }
 
-      const delivered = await sessionMessenger.deliver(
+      // 消费回执：投递成功 ≠ 目标已消费。先登记再发送（目标可能极快地处理完并产出
+      // 活动信号，晚登记会把信号漏在门外）；发送失败/未送达则撤回，避免留下假回执。
+      const messageId = crypto.randomUUID()
+      recordDelivery({
+        messageId,
         targetSessionId,
-        body.content as string,
-        req.headers.get('host') || '127.0.0.1',
-      )
+        ...(fromSessionId ? { fromSessionId } : {}),
+      })
+      let delivered = false
+      try {
+        delivered = await sessionMessenger.deliver(
+          targetSessionId,
+          body.content as string,
+          req.headers.get('host') || '127.0.0.1',
+        )
+      } catch (error) {
+        forgetReceipt(messageId)
+        throw error
+      }
       if (!delivered) {
+        forgetReceipt(messageId)
         throw ApiError.internal('Message could not be delivered to the session')
       }
       // 撞车提醒：目标忙（运行中且最近 3 分钟有活动）时在响应里声明，
       // 主管 AI 可据此决定排队等待或改派他人
       const targetState = await describeTargetState(targetSessionId)
       return Response.json(
-        { ok: true, target: { sessionId: targetSessionId, ...targetState } },
+        {
+          ok: true,
+          // 消费回执：投递成功 ≠ 目标已消费。用 GET /api/session-messages?messageId=<id>
+          // 轮询 consumed 字段，确认目标是否真的接住了活（不必只靠等汇报）。
+          messageId,
+          target: { sessionId: targetSessionId, ...targetState },
+        },
         { status: 201 },
       )
     }

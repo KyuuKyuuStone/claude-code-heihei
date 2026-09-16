@@ -13,7 +13,6 @@
 
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { DesktopUiPreferencesService } from '../services/desktopUiPreferencesService.js'
-import { isPetAccessAuthorized } from '../localAccessAuth.js'
 
 const desktopUiPreferencesService = new DesktopUiPreferencesService()
 
@@ -57,9 +56,6 @@ export async function handleDesktopUiApi(
       if (req.method !== 'PUT') throw methodNotAllowed(req.method)
       const body = await parseJsonBody(req)
       const preferences = await desktopUiPreferencesService.updatePetPreferences(body)
-      if (isPetAccessAuthorized(req)) {
-        return Response.json({ ok: true, pet: preferences.pet })
-      }
       return Response.json({
         ok: true,
         preferences,

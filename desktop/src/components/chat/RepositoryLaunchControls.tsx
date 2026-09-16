@@ -291,6 +291,16 @@ export function RepositoryLaunchControls({
     return null
   }, [context, selectedBranch, t, useWorktree])
 
+  // 历史教训：含中文等非 ASCII 字符的工作目录曾让部分工具链出错（nginx 1113）。
+  // 提示但不阻断——目录照常选用。
+  const pathWarning = useMemo(() => {
+    if (!workDir || !/[^\x00-\x7F]/.test(workDir)) return null
+    return {
+      message: t('repoLaunch.nonAsciiPathWarning'),
+      compactLabel: t('repoLaunch.nonAsciiPathWarningCompact'),
+    }
+  }, [t, workDir])
+
   const selectBranch = (candidate: RepositoryBranchInfo) => {
     onBranchChange(candidate.name)
     setView('root')
@@ -704,6 +714,17 @@ export function RepositoryLaunchControls({
               <span className="hidden 2xl:inline">{warning.compactLabel}</span>
             </div>
           )}
+          {pathWarning && (
+            <div
+              role="status"
+              aria-label={pathWarning.message}
+              title={pathWarning.message}
+              className="inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[var(--radius-md)] bg-[var(--color-warning-container)] px-2 text-[11px] font-medium text-[var(--color-on-warning-container)]"
+            >
+              <AlertCircle size={13} aria-hidden="true" className="shrink-0 text-[var(--color-warning)]" />
+              <span className="hidden 2xl:inline">{pathWarning.compactLabel}</span>
+            </div>
+          )}
         </div>
       ) : pill}
 
@@ -722,6 +743,17 @@ export function RepositoryLaunchControls({
         >
           <AlertCircle size={13} aria-hidden="true" className="shrink-0" />
           <span>{warning.message}</span>
+        </div>
+      )}
+
+      {pathWarning && !isToolbar && (
+        <div
+          role="status"
+          aria-label={pathWarning.message}
+          className="flex items-center gap-2 px-1 text-[11px] text-[var(--color-warning)]"
+        >
+          <AlertCircle size={13} aria-hidden="true" className="shrink-0" />
+          <span>{pathWarning.message}</span>
         </div>
       )}
 
