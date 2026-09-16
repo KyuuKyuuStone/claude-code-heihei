@@ -82,7 +82,7 @@ export class ServantStallWatcher {
       const roleText = servant.role ? `${servant.role}（${servant.title}）` : servant.title
       const nudge = [
         `【系统】你已经 ${Math.round(staleFor / 60_000)} 分钟没有任何活动，疑似卡住（自动重推 ${current.nudges}/${MAX_AUTO_REPUSH}）。`,
-        '请汇报当前状态与卡点：1) 若在等待或重试某个失败操作，改用替代方案；2) 若工具调用报错，用 select:Bash,Read,Write,Glob,Grep 精确加载后继续；3) 完成或无法继续时，用 .heihei/dispatch/ 信箱向主管汇报。',
+        '请汇报当前状态与卡点：1) 若在等待或重试某个失败操作，改用替代方案；2) 若工具调用报错：核心工具（Bash/Read/Write/Glob/Grep）本就内联可用，直接调用即可，不要用 ToolSearch 反复加载；3) 完成或无法继续时，用 .heihei/dispatch/ 信箱向主管汇报。',
       ].join('\n')
       try {
         await sessionMessenger.deliver(

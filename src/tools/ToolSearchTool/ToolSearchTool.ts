@@ -40,6 +40,8 @@ export const outputSchema = lazySchema(() =>
     query: z.string(),
     total_deferred_tools: z.number(),
     pending_mcp_servers: z.array(z.string()).optional(),
+    /** Hits that were already loaded inline (no tool_reference needed). */
+    inline_loaded: z.array(z.string()).optional(),
   }),
 )
 type OutputSchema = ReturnType<typeof outputSchema>
@@ -112,6 +114,7 @@ function buildSearchResult(
   query: string,
   totalDeferredTools: number,
   pendingMcpServers?: string[],
+  inlineLoaded?: string[],
 ): { data: Output } {
   return {
     data: {
@@ -120,6 +123,9 @@ function buildSearchResult(
       total_deferred_tools: totalDeferredTools,
       ...(pendingMcpServers && pendingMcpServers.length > 0
         ? { pending_mcp_servers: pendingMcpServers }
+        : {}),
+      ...(inlineLoaded && inlineLoaded.length > 0
+        ? { inline_loaded: inlineLoaded }
         : {}),
     },
   }
@@ -375,19 +381,29 @@ export const ToolSearchTool = buildTool({
         .filter(Boolean)
 
       const found: string[] = []
+      const inlineLoaded: string[] = []
       const missing: string[] = []
       for (const toolName of requested) {
-        const tool =
-          findToolByName(deferredTools, toolName) ??
-          findToolByName(tools, toolName)
+        const deferredTool = findToolByName(deferredTools, toolName)
+        const tool = deferredTool ?? findToolByName(tools, toolName)
         if (tool) {
-          if (!found.includes(tool.name)) found.push(tool.name)
+          // Distinguish deferred hits (need a tool_reference) from tools
+          // already loaded inline. Selecting an inline tool is a harmless
+          // no-op, but if the response looks like a successful load the
+          // model re-selects it every turn (2026-09-10 incident: 244/244
+          // ToolSearch calls were re-selects of always-inline core tools).
+          if (deferredTool) {
+            if (!found.includes(tool.name)) found.push(tool.name)
+          } else if (!inlineLoaded.includes(tool.name)) {
+            inlineLoaded.push(tool.name)
+          }
         } else {
           missing.push(toolName)
         }
       }
+      const allFound = [...found, ...inlineLoaded]
 
-      if (found.length === 0) {
+      if (allFound.length === 0) {
         logForDebugging(
           `ToolSearchTool: select failed — none found: ${missing.join(', ')}`,
         )
@@ -403,13 +419,19 @@ export const ToolSearchTool = buildTool({
 
       if (missing.length > 0) {
         logForDebugging(
-          `ToolSearchTool: partial select — found: ${found.join(', ')}, missing: ${missing.join(', ')}`,
+          `ToolSearchTool: partial select — found: ${allFound.join(', ')}, missing: ${missing.join(', ')}`,
         )
       } else {
-        logForDebugging(`ToolSearchTool: selected ${found.join(', ')}`)
+        logForDebugging(`ToolSearchTool: selected ${allFound.join(', ')}`)
       }
-      logSearchOutcome(found, 'select')
-      return buildSearchResult(found, query, deferredTools.length)
+      logSearchOutcome(allFound, 'select')
+      return buildSearchResult(
+        allFound,
+        query,
+        deferredTools.length,
+        undefined,
+        inlineLoaded,
+      )
     }
 
     // Keyword search over deferred tools. 实战教训（2026-09-08/09-10）：个别会话的
@@ -475,13 +497,27 @@ export const ToolSearchTool = buildTool({
       ) {
         text += `. Some MCP servers are still connecting: ${content.pending_mcp_servers.join(', ')}. Their tools will become available shortly — try searching again.`
       }
-      // 关键词索引可能不完整（会话早期偶发持续缺失）：精确名 select: 直连
-      // 始终可用，必须让模型知道这条自救路径，否则它会断言"工具不存在"并绕行
-      text += ' Tip: keyword search may be incomplete — load tools by exact name instead with a "select:" query, e.g. select:Bash,Read,Write,Glob,Grep,Skill.'
+      // 关键词搜索只覆盖 deferred 工具；核心工具恒 inline。必须点破这两层，
+      // 否则模型会断言"工具不存在"并绕行，或对 inline 工具反复 select:
+      text +=
+        ' Tip: keyword search only covers deferred tools — core tools (Bash/Read/Write/Edit/Glob/Grep/Skill/Agent) are always loaded inline and directly callable. To load a specific deferred tool by exact name, use "select:", e.g. select:NotebookEdit,WebFetch.'
       return {
         type: 'tool_result',
         tool_use_id: toolUseID,
         content: text,
+      }
+    }
+    // 所有命中均为已加载的 inline 工具：不回 tool_reference（会像"刚加载
+    // 成功"，诱发每轮重复 select:），改回明示"直接调用"的文本
+    if (
+      content.inline_loaded &&
+      content.inline_loaded.length > 0 &&
+      content.inline_loaded.length === content.matches.length
+    ) {
+      return {
+        type: 'tool_result',
+        tool_use_id: toolUseID,
+        content: `No loading needed — already loaded inline and directly callable: ${content.inline_loaded.join(', ')}. Call them directly; there is no need to select them again.`,
       }
     }
     return {

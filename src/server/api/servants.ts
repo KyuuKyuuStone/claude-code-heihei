@@ -276,7 +276,7 @@ function buildPocketCardLines(sessionId?: string, serverUrl?: string): string[] 
     lines.push('- 文件信箱：<工作目录>/.heihei/dispatch/report-<序号>.json（Bash 不可用时的汇报通道）')
   }
   lines.push('两条硬规则：① 汇报/派活的 HTTP 请求禁止内联中文——Windows 控制台按 GBK 编码会导致服务端收到乱码，必须把 JSON 写入文件后用 --data-binary @file 提交，或走文件信箱；② computer-use 系列工具在无人值守的协作会话中不可用（审批需要桌面连接），不要尝试。')
-  lines.push('工具找不到时（ToolSearch 报 "No matching deferred tools found"）：关键词搜索可能失效，直接用精确名加载——查询 select:Bash,Read,Write,Glob,Grep,Skill。')
+  lines.push('工具找不到时（ToolSearch 报 "No matching deferred tools found"）：关键词搜索只覆盖 deferred 工具——核心工具（Bash/Read/Write/Edit/Glob/Grep/Skill/Agent）已直接内联可用，直接调用；确需加载 deferred 工具时用精确名，如 select:NotebookEdit,WebFetch。')
   return lines
 }
 

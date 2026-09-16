@@ -351,7 +351,7 @@ describe('Servants API', () => {
     expect(deliverMock.mock.calls[0][1]).toContain('写作')
     // 随身档案：环境变量/Bash 不可用时，凭消息文本即可完成汇报与自救
     expect(deliverMock.mock.calls[0][1]).toContain(sessionId)
-    expect(deliverMock.mock.calls[0][1]).toContain('select:Bash,Read,Write')
+    expect(deliverMock.mock.calls[0][1]).toContain('已直接内联可用')
     expect(deliverMock.mock.calls[0][1]).toContain('computer-use')
 
     // 再次保存（已是员工）：不重复触发

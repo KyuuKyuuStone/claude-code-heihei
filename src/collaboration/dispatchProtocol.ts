@@ -87,13 +87,13 @@ curl -s "$CC_HEIHEI_DESKTOP_SERVER_URL/api/servant-sessions?forSession=$CC_HEIHE
 \`\`\`
 
 - 员工的 \`lastActivityAt\` 在派活之后有更新 = 已开工，继续等汇报；
-- 一直没更新 = 员工可能卡住（工具缺失/权限等待），**发一条带排障线索的催促**，不要只施压。催促模板要点：① 用 ToolSearch 查询 \`select:Bash,Read,Write,Glob,Grep\` 精确加载核心工具（关键词搜索失效时这是唯一有效路径）；② 汇报改用文件信箱（写 JSON 到 \`.heihei/dispatch/report-<序号>.json\`）；③ 汇报命令不要内联中文。
+- 一直没更新 = 员工可能卡住（工具缺失/权限等待），**发一条带排障线索的催促**，不要只施压。催促模板要点：① 核心工具（Bash/Read/Write/Glob/Grep）本就内联可用，直接调用即可，不要用 ToolSearch 反复加载（关键词搜索只覆盖 deferred 工具，搜不到核心工具属正常）；② 汇报改用文件信箱（写 JSON 到 \`.heihei/dispatch/report-<序号>.json\`）；③ 汇报命令不要内联中文。
 - 员工长期（10 分钟以上）无活动且催促无回应：告知用户该员工会话可能异常，建议用户在 UI 点开该会话查看现场。
 
 ## 故障自检（派活/汇报失败时按序执行）
 
 1. Bash 输出 \`?????\` 或命令毫无效果 = shell 不可用：放弃 curl，全程改用「文件信箱」通道（只需 Write/Read 工具）。
-2. 工具找不到时（ToolSearch 报 "No matching deferred tools found"）：**关键词搜索可能失效，直接用精确名加载**——ToolSearch 查询 \`select:Bash,Read,Write,Glob,Grep,Skill\`。
+2. 工具找不到时（ToolSearch 报 "No matching deferred tools found"）：**关键词搜索只覆盖 deferred 工具**——核心工具（Bash/Read/Write/Glob/Grep/Skill）已直接内联可用，直接调用；确需加载 deferred 工具时用精确名，如 \`select:NotebookEdit,WebFetch\`。
 3. 环境变量检查：\`$CC_HEIHEI_DESKTOP_SERVER_URL\` 与 \`$CC_HEIHEI_SESSION_ID\` 应在你的 Bash 里可用（\`echo\` 验证）。HTTP 通道依赖这两个变量；这两个值也写在你的上岗消息里。
 4. 端口疑似过期时，用 Read 查看桌面服务状态文件 \`~/.claude/desktop-server-state.json\` 的 \`lastPort\` 字段取真实端口；文件信箱通道不依赖端口。
 5. computer-use 系列工具在无人值守的协作会话中不可用（审批需要桌面连接）：**不要尝试**，别在这条路上浪费轮次。
