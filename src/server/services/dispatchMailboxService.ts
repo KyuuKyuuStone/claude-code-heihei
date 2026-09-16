@@ -15,7 +15,9 @@
 import { watch, type FSWatcher } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
+import * as crypto from 'node:crypto'
 import { COLLAB_MAILBOX_DIR } from '../../collaboration/dispatchProtocol.js'
+import { forgetReceipt, recordDelivery } from './dispatchReceiptService.js'
 import { servantService, type ServantInfo } from './servantService.js'
 import { sessionService } from './sessionService.js'
 import { sessionMessenger } from './sessionMessenger.js'
@@ -304,14 +306,25 @@ export class DispatchMailboxService {
       }
 
       const host = `127.0.0.1:${this.serverPort}`
+      // 消费回执：信箱是"主管 Bash 不可用"时的降级派活通道，同样要能判定
+      // "这条活有没有被接住"。否则经信箱投递的派活对假死告警判定不可见
+      // （A4 只覆盖了 HTTP 派活）。与 api/servants.ts 同款：先登记，失败撤回。
+      const messageId = crypto.randomUUID()
+      recordDelivery({
+        messageId,
+        targetSessionId: payload.targetSessionId,
+        ...(payload.fromSessionId ? { fromSessionId: payload.fromSessionId } : {}),
+      })
       try {
         const delivered = await this.deps.deliver(payload.targetSessionId, payload.content, host)
         if (!delivered) {
+          forgetReceipt(messageId)
           const reason = 'Message could not be delivered to the target session'
           await this.markFailed(dir, name, reason)
           return { ok: false, reason }
         }
       } catch (error) {
+        forgetReceipt(messageId)
         const reason = error instanceof Error ? error.message : String(error)
         await this.markFailed(dir, name, reason)
         return { ok: false, reason }

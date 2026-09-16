@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 import { handleSessionMessagesApi } from '../api/servants.js'
 import {
   MAX_TRACKED_RECEIPTS,
+  countUnconsumedReceipts,
   forgetReceipt,
   getReceipt,
   isSessionTurnInProgress,
@@ -103,6 +104,21 @@ describe('dispatch receipts', () => {
     expect(listReceipts()).toHaveLength(3)
     expect(listReceipts(OTHER)).toHaveLength(1)
     expect(forEmp[0]?.fromSessionId).toBe(SUP)
+  })
+
+  test('counts only the unconsumed dispatches of the given session', () => {
+    deliverTo(EMP, T0)
+    const second = deliverTo(EMP, T0 + 1000)
+    deliverTo(OTHER, T0 + 2000)
+
+    expect(countUnconsumedReceipts(EMP)).toBe(2)
+    expect(countUnconsumedReceipts(OTHER)).toBe(1)
+    expect(countUnconsumedReceipts(SILENT)).toBe(0)
+
+    // 被消费掉的那条不再计入
+    observeSessionSdkMessage(EMP, 'stream_event', T0 + 3000)
+    expect(countUnconsumedReceipts(EMP)).toBe(0)
+    expect(getReceipt(second.messageId)?.consumed).toBe(true)
   })
 
   test('a torn-down delivery leaves no receipt behind', () => {

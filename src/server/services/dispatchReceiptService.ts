@@ -69,6 +69,15 @@ export function getReceipt(messageId: string): DispatchReceipt | null {
   return receipt ? { ...receipt } : null
 }
 
+/** 该会话还有多少条**未被消费**的派活（0 = 没有悬着的活） */
+export function countUnconsumedReceipts(targetSessionId: string): number {
+  let count = 0
+  for (const receipt of receipts.values()) {
+    if (!receipt.consumed && receipt.targetSessionId === targetSessionId) count += 1
+  }
+  return count
+}
+
 /** 最近的回执（可选按目标会话过滤），最新在前 */
 export function listReceipts(targetSessionId?: string): DispatchReceipt[] {
   return [...receipts.values()]

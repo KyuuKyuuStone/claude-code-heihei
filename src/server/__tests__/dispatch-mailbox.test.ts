@@ -7,6 +7,11 @@ import {
   isDispatchPayloadName,
 } from '../services/dispatchMailboxService.js'
 import { COLLAB_MAILBOX_DIR } from '../../collaboration/dispatchProtocol.js'
+import {
+  countUnconsumedReceipts,
+  listReceipts,
+  resetDispatchReceipts,
+} from '../services/dispatchReceiptService.js'
 
 describe('DispatchMailboxService', () => {
   let tmpDir: string
@@ -79,6 +84,39 @@ describe('DispatchMailboxService', () => {
     expect(calls[0].content).toBe('【汇报】完成')
     expect(calls[0].host).toBe('127.0.0.1:0')
     expect(await pathExists(filePath)).toBe(false)
+  })
+
+  test('records a dispatch receipt so mailbox dispatches are visible to the stall watcher', async () => {
+    resetDispatchReceipts()
+    await writePayload('dispatch-9.json', {
+      targetSessionId: 'session-mb',
+      content: '【上级派活】干活',
+      fromSessionId: 'session-sup',
+    })
+    const { service } = buildService()
+
+    expect(countUnconsumedReceipts('session-mb')).toBe(0)
+    await service.handleMailboxFile(path.join(tmpDir, COLLAB_MAILBOX_DIR), 'dispatch-9.json')
+
+    // 投递成功 → 记一条未消费回执（否则经信箱派的活对告警判定不可见）
+    expect(countUnconsumedReceipts('session-mb')).toBe(1)
+    const receipt = listReceipts('session-mb')[0]!
+    expect(receipt.fromSessionId).toBe('session-sup')
+    expect(receipt.consumed).toBe(false)
+    resetDispatchReceipts()
+  })
+
+  test('a failed mailbox delivery leaves no receipt behind', async () => {
+    resetDispatchReceipts()
+    await writePayload('dispatch-10.json', {
+      targetSessionId: 'session-mb-fail',
+      content: '【上级派活】干活',
+    })
+    const { service } = buildService({ deliver: async () => false })
+
+    await service.handleMailboxFile(path.join(tmpDir, COLLAB_MAILBOX_DIR), 'dispatch-10.json')
+
+    expect(countUnconsumedReceipts('session-mb-fail')).toBe(0)
   })
 
   test('rejects invalid payloads with a .failed rename and an .error.txt explanation', async () => {

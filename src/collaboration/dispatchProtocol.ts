@@ -115,7 +115,7 @@ curl -s "$CC_HEIHEI_DESKTOP_SERVER_URL/api/servant-sessions?forSession=$CC_HEIHE
 
 - **修改角色特性 / 禁用员工**：用 **PUT**（不是 PATCH）\`/api/servant-sessions/<员工sessionId>\`，body：\`{"description":"补充约束","enabled":true}\`（enabled 必填，带上当前值；\`false\` 即停接新活）。
 - **中断员工正在跑的任务**：POST \`/api/sessions/<员工sessionId>/interrupt\`（保留会话与历史）。⚠️ 不要用 \`DELETE /api/sessions/<id>\`——那会删除整个会话，不可逆。
-- **自动熔断（服务端行为，无需你触发）**：员工**连续调用不存在的工具 3 次**（阈值 N=3）时，服务端会自动**中断该轮次**（保留会话与历史）并给你发通知；员工**任一工具调用成功（含工具自己执行报错，因为它证明该工具存在）或整个轮次成功**都会把该连续计数清零。收到这类通知后：多半是员工被 ToolSearch / deferred 工具机制误导，重新派活时把「核心工具（Bash/Read/Write/Glob/Grep）本就内联可用、不要用 ToolSearch 反复加载」与任务要点一并写进消息。
+- **自动熔断（服务端行为，无需你触发）**：员工**连续调用不存在的工具 3 次**（阈值 N=3）时，服务端会自动**中断该轮次**（保留会话与历史）。⚠️ 该事件**不会向你注入任何会话消息**（v1.2.3 起系统通知一律降为日志级，不再打扰对话流）——需要自查时读诊断日志 \`~/.claude/cc-heihei/diagnostics/diagnostics.jsonl\`，事件名 \`servant_unknown_tool_circuit\`（含会话 ID、工具名、连续次数）：\`grep servant_unknown_tool_circuit ~/.claude/cc-heihei/diagnostics/diagnostics.jsonl\`。员工**任一工具调用成功（含工具自己执行报错，因为它证明该工具存在）或整个轮次成功**都会把该连续计数清零。若你在日志里看到它：多半是员工被 ToolSearch / deferred 工具机制误导，重新派活时把「核心工具（Bash/Read/Write/Glob/Grep）本就内联可用、不要用 ToolSearch 反复加载」与任务要点一并写进消息。
 - **广播**：POST \`/api/session-messages\`，body：\`{"broadcast":true,"content":"停工待命","fromSessionId":"<你的会话ID>"}\`，一条消息发给本项目全部员工。
 - **端点名录**：GET \`$CC_HEIHEI_DESKTOP_SERVER_URL/api\` 可列出全部可用端点，拿不准路径就查它。
 
