@@ -35,6 +35,11 @@ const PROCESS_DELAY_MS = 200
 const READ_RETRY_DELAYS_MS = [100, 250, 400]
 const MAX_FILE_BYTES = 256 * 1024
 const MAX_CONTENT_LENGTH = 64 * 1024
+/**
+ * 周期兜底扫描间隔（30–60s 区间取中值）。watcher 未建立/事后失效/漏事件
+ * 三类静默失效的最后防线：最坏一个周期内文件仍会被消费（2026-09-14 实战）。
+ */
+const RESCAN_INTERVAL_MS = 45_000
 
 type DebouncedFile = { timer: ReturnType<typeof setTimeout>; firstAt: number }
 
@@ -72,6 +77,8 @@ export class DispatchMailboxService {
   private inFlight = new Set<string>()
   private syncing: Promise<void> | null = null
   private stopped = true
+  private rescanTimer: ReturnType<typeof setInterval> | null = null
+  private rescanning = false
 
   private readonly deps: {
     deliver: (targetSessionId: string, content: string, serverHost: string) => Promise<boolean>
@@ -96,10 +103,12 @@ export class DispatchMailboxService {
     this.serverPort = serverPort
     this.stopped = false
     void this.sync()
+    this.startPeriodicRescan()
   }
 
   stop(): void {
     this.stopped = true
+    this.stopPeriodicRescan()
     for (const timer of this.debounced.values()) clearTimeout(timer.timer)
     this.debounced.clear()
     for (const watcher of this.watchers.values()) watcher.close()
@@ -143,6 +152,43 @@ export class DispatchMailboxService {
     return path.join(workDir, COLLAB_MAILBOX_DIR)
   }
 
+  /**
+   * 周期兜底扫描（2026-09-14 实战：watcher 静默失效导致信箱 40s+ 无响应）。
+   * sync() 幂等——openWatcher 会重建缺失/失效的 watcher（含首扫），顺带
+   * 覆盖 sync() 首次失败的重试；再对已监听目录全量补扫，兜住漏事件。
+   * scheduleProcess 自带 debounce + inFlight 去重，重复扫描天然幂等。
+   */
+  private startPeriodicRescan(): void {
+    this.stopPeriodicRescan()
+    this.rescanTimer = setInterval(() => void this.rescanAll(), RESCAN_INTERVAL_MS)
+    // 不阻塞进程退出
+    this.rescanTimer.unref?.()
+  }
+
+  private stopPeriodicRescan(): void {
+    if (this.rescanTimer !== null) {
+      clearInterval(this.rescanTimer)
+      this.rescanTimer = null
+    }
+  }
+
+  /** 周期任务体。测试直接调用以避免真实等待 setInterval。内部全捕获，永不抛错。 */
+  private async rescanAll(): Promise<void> {
+    if (this.stopped || this.rescanning) return
+    this.rescanning = true
+    try {
+      await this.sync().catch((error) => {
+        console.warn(
+          `[DispatchMailbox] Periodic rescan sync failed: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      })
+      const dirs = [...this.watchers.keys()].map((workDir) => this.mailboxDir(workDir))
+      await Promise.all(dirs.map((dir) => this.scanExisting(dir)))
+    } finally {
+      this.rescanning = false
+    }
+  }
+
   private async openWatcher(workDir: string): Promise<void> {
     if (this.watchers.has(workDir)) return
     const dir = this.mailboxDir(workDir)
@@ -159,11 +205,20 @@ export class DispatchMailboxService {
     // mkdir 与 watch 之间的窗口里已有文件也要被消费
     await this.scanExisting(dir)
     if (this.stopped) return
-    const watcher = watch(dir, (_event, fileName) => {
-      const name = typeof fileName === 'string' ? fileName : null
-      if (!name || !isDispatchPayloadName(name)) return
-      this.scheduleProcess(dir, name)
-    })
+    let watcher: FSWatcher
+    try {
+      watcher = watch(dir, (_event, fileName) => {
+        const name = typeof fileName === 'string' ? fileName : null
+        if (!name || !isDispatchPayloadName(name)) return
+        this.scheduleProcess(dir, name)
+      })
+    } catch (error) {
+      // 构造期失败（目录被删瞬间/句柄耗尽）：warn 后放弃，周期任务下轮重建
+      console.warn(
+        `[DispatchMailbox] Failed to watch ${dir}: ${error instanceof Error ? error.message : String(error)}`,
+      )
+      return
+    }
     watcher.on('error', (error) => {
       console.warn(
         `[DispatchMailbox] Watcher error for ${dir}: ${error instanceof Error ? error.message : String(error)}`,
@@ -174,6 +229,7 @@ export class DispatchMailboxService {
       return
     }
     this.watchers.set(workDir, watcher)
+    console.log(`[DispatchMailbox] Watching ${dir} (total: ${this.watchers.size})`)
   }
 
   private async scanExisting(dir: string): Promise<void> {

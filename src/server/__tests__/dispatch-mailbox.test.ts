@@ -200,4 +200,111 @@ describe('DispatchMailboxService', () => {
     service.stop()
     expect((service as unknown as { watchers: Map<string, unknown> }).watchers.size).toBe(0)
   })
+
+  // —— 周期兜底扫描（三类静默失效的最后防线）——
+
+  /** PROCESS_DELAY_MS(200) debounce 之后的确定性结算窗口 */
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 400))
+
+  function enabledWorkerList(workDir: string) {
+    return [
+      {
+        sessionId: 'worker-1',
+        enabled: true,
+        workDir,
+        updatedAt: 1,
+        title: 'w1',
+      },
+    ]
+  }
+
+  test('periodic rescan rebuilds a dead watcher and consumes pending files', async () => {
+    const { service, calls } = buildService({
+      listServants: async () => enabledWorkerList(tmpDir),
+    })
+    service.start(0)
+    await service.sync()
+    // 模拟 watcher 事后失效：关闭并清空（等价于 watcher 从未建立/已被系统回收）
+    const internal = service as unknown as { watchers: Map<string, { close(): void }> }
+    for (const w of internal.watchers.values()) w.close()
+    internal.watchers.clear()
+
+    await writePayload('report-20.json', {
+      targetSessionId: 'session-a',
+      content: '【汇报】兜底投递',
+    })
+    const result = await (service as unknown as { rescanAll(): Promise<void> }).rescanAll()
+    expect(result).toBeUndefined()
+    await settle()
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0].targetSessionId).toBe('session-a')
+    expect(await pathExists(mailboxPath('report-20.json'))).toBe(false)
+    service.stop()
+  })
+
+  test('periodic rescan recovers after an initial sync failure', async () => {
+    let listFails = true
+    const { service, calls } = buildService({
+      listServants: async () => {
+        if (listFails) throw new Error('roster unreadable')
+        return enabledWorkerList(tmpDir)
+      },
+    })
+    service.start(0)
+    await service.sync()
+    // start 时 sync 失败：没有任何 watcher 建立
+    expect((service as unknown as { watchers: Map<string, unknown> }).watchers.size).toBe(0)
+
+    await writePayload('dispatch-21.json', {
+      targetSessionId: 'session-a',
+      content: '【上级派活】延迟恢复',
+    })
+    // 第一轮周期任务：吞掉 sync 失败不抛错；故障恢复后第二轮重建并消费
+    await (service as unknown as { rescanAll(): Promise<void> }).rescanAll()
+    listFails = false
+    await (service as unknown as { rescanAll(): Promise<void> }).rescanAll()
+    await settle()
+
+    expect(calls).toHaveLength(1)
+    expect(await pathExists(mailboxPath('dispatch-21.json'))).toBe(false)
+    service.stop()
+  })
+
+  test('scanExisting is idempotent: repeated scans deliver exactly once', async () => {
+    const { service, calls } = buildService({
+      listServants: async () => enabledWorkerList(tmpDir),
+    })
+    service.start(0)
+    await service.sync()
+
+    await writePayload('report-22.json', {
+      targetSessionId: 'session-a',
+      content: '【汇报】幂等',
+    })
+    const dir = path.join(tmpDir, COLLAB_MAILBOX_DIR)
+    const scan = (service as unknown as { scanExisting(d: string): Promise<void> }).scanExisting.bind(service)
+    // watcher 事件 + 三次手动补扫同时到达：debounce/inFlight 必须合并为一次投递
+    await scan(dir)
+    await scan(dir)
+    await scan(dir)
+    await settle()
+
+    expect(calls).toHaveLength(1)
+    expect(await pathExists(path.join(dir, 'report-22.json'))).toBe(false)
+    // 文件已消费后再扫：readdir 看不到，不产生新投递
+    await scan(dir)
+    await settle()
+    expect(calls).toHaveLength(1)
+    service.stop()
+  })
+
+  test('periodic rescan timer lifecycle: created on start, cleared on stop', async () => {
+    const { service } = buildService()
+    service.start(0)
+    const withTimer = service as unknown as { rescanTimer: unknown }
+    expect(withTimer.rescanTimer).not.toBeNull()
+    service.stop()
+    expect(withTimer.rescanTimer).toBeNull()
+  })
 })
