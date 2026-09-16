@@ -38,12 +38,12 @@
 ## GitHub 信息
 
 - **仓库**：`https://github.com/KyuuKyuuStone/claude-code-heihei`
-- **当前版本**：`v1.2.1`（2026-09-16 发布，Latest；v1.2.0 的安装包假死自动重推形同虚设——状态机崩溃导致该功能从未生效，建议升级）
-- **主分支**：`main`（上一发布 v1.2.0 = `832977b`；v1.2.1 为本次发布提交）
+- **当前版本**：`v1.2.2`（2026-09-16 发布，Latest；v1.2.1 的安装包会循环戳待命会话——每轮白耗一个模型回合，建议升级）
+- **主分支**：`main`（上一发布 v1.2.1 = `70006a4`；v1.2.2 为本次发布提交）
 
 ## 当前状态
 
-### 版本快照（v1.0.3 → v1.2.1，2026-09-07 ~ 09-16）
+### 版本快照（v1.0.3 → v1.2.2，2026-09-07 ~ 09-16）
 
 - **v1.0.3**：会话协作实战韧性第一轮——`.heihei/dispatch` 文件信箱（Bash 不可用时的派活/汇报降级通道）、主管履新承诺前实测 CLI 技能、Doctor 新增 shell/协作技能体检、prewarm 回收日志正名
 - **v1.0.4**：本地模型上下文规划重做（32K 是下限非目标，预算内逐级上探至 128K q8_0，`desktop/src/lib/localModelPlan.ts`）；跑分运行方式判定修复（全 GPU 不再误标混合）
@@ -57,6 +57,7 @@
 - **v1.1.2**：**ToolSearch 误用修复**（实战事故 Top1 根因）——核心工具恒 inline 说明 + `select:` 命中显式回执 + 协作侧 4 处文案五语言同步（`src/tools/ToolSearchTool/`、`src/collaboration/dispatchProtocol.ts`）；**桌面测试基线清零**（14 失败文件 / 40 失败用例 → 0，其中 generalSettings 25 条显式豁免待接线＝条目 B1-D2）；Sidebar 未定义 token 修复（`--color-text-quaternary` → `--color-text-tertiary`）
 - **v1.2.0**：协作安全与可靠性加固——**目录白名单约束档**（第三档，按目录放行文件工具写入，`CC_HEIHEI_SERVANT_WRITE_DIRS`；**Bash 不受此约束**，属文件工具级边界非安全沙箱）、**连续调用不存在工具自动熔断并通知主管**、**文件信箱 watcher 周期兜底扫描**（默认 45 秒，顺带重建缺失 watcher）、员工忙碌态转圈动画；工程质量——**CI 新增 `desktop-tests` 门禁 job**（windows runner，18 文件子集起步）、协作测试环境隔离修复
 - **v1.2.1**：**假死自动重推真正修复**——旧状态机 4 行确定性 TypeError（新建的 state 未落 map → 下一行 `get(key)!` 抛 `Cannot read properties of undefined`），异常冒泡出 `watch()` 被 `start()` 的 `.catch(() => {})` 吞掉：**该功能自 v1.1.0 起从未成功重推过任何会话**，且异常打断循环会跳过其后所有会话、旧实现零日志。修复＝状态机取不到就建并落 map + 拆「非 running 一律跳过」的死路（改为**只告警主管、不自动拉起**）+ `servant_stall` 诊断事件全覆盖（`list-failed` / `nudge` / `nudge-failed` / `no-process-alert` / `escalate` / `scan-failed` 等 action）+ **投递成功才计重推额度** + 主管会话豁免 + 依赖注入缝（新增 10 条单测）。另含：**配额/限流 429 错误可见化**（非订阅者门后新增兜底，文案含重置时间，绝不空串）、**诊断日志每条带 sessionId + 启动锚点 `server_started`**（消除「安静 ≠ 写坏」盲区）、**派活消费回执**（POST 返回 `messageId` + GET 查询——投递 ≠ 消费）、**诊断 fallback 保留策略**（天数 + 个数双上限）、**pet 死代码清理**（11 文件、净删 619 行）、**角色多语言**（14 角色 × 五语言）+ **非 ASCII 路径提示**（提示不阻断）
+- **v1.2.2**：假死重推**降噪**——修复 v1.2.1 上线后实测发现的「**待命会话被循环戳**」：旧判定只看「无活动时长」，已正常结束回合、处于待命的会话也被当作疑似卡死反复重推；而重推触发的回复本身就是活动、又重置计时，于是形成「戳 → 回复 → 重置 → 再 10 分钟 → 再戳」的循环，**每轮白白消耗一个模型回合**。现重推条件收紧为「**回合进行中 + 10 分钟无活动**」才触发——回合已正常结束的待命会话**不戳也不告警**，真·卡死仍会被自动重推（自愈能力不受影响）。回合态判定复用**派活回执**已有的观察（`isSessionTurnInProgress`，`src/server/services/dispatchReceiptService.ts`），**状态同源不漂移**（不引入第二套状态来源）
 
 ### 能工作的
 - 本地模型全流程（设置页、跑分、启动、下载中心、多模态、自定义引擎）都能用
@@ -78,7 +79,7 @@
 
 **待核实候选**（2026-09-14 协作实测发现；2026-09-16 更新处置状态）
 - **文件信箱通道未消费** → **已加固（随 v1.2.0 发布）**：核实结论为「未复现失败、重启自愈、链路零代码差异」——失效机理是 watcher 未建立或事后失效，**无补建/重试/日志机制、完全静默**，故会复发；v1.2.0 已加**周期兜底扫描（默认 45 秒）+ 重建缺失 watcher**。见 `cc-heihei-交接/批次1_信箱通道核实报告_20260915.md`
-- **假死重推未触发** → **已修复（v1.2.1）**：真根因比初版分析更硬——旧状态机 4 行**确定性 TypeError** + 异常被吞，**该功能自 v1.1.0 起从未生效**（不是偶发失效，是一次都没成功过）；修复同时补上 `running=false` 的可见告警与全链路诊断事件。见 `cc-heihei-交接/批次3_假死重推根因分析_20260916.md`、`批次3_假死重推_进度_20260916.md`
+- **假死重推未触发** → **已修复（v1.2.1）**：真根因比初版分析更硬——旧状态机 4 行**确定性 TypeError** + 异常被吞，**该功能自 v1.1.0 起从未生效**（不是偶发失效，是一次都没成功过）；修复同时补上 `running=false` 的可见告警与全链路诊断事件。见 `cc-heihei-交接/批次3_假死重推根因分析_20260916.md`、`批次3_假死重推_进度_20260916.md`。**v1.2.2 已降噪**（仅「回合进行中」才重推，待命会话不再被循环戳）
 - **tool_result 丢失致会话冻结** → **机制仍未锁定（P1 待办）**：环节 ② 确证存在（唯一孤儿 tool_use 实测）；并已判明**重推类手段对该类冻结无效**（CLI 阻塞在长工具时，注入消息要等工具返回才被处理）——需 CLI 工具生命周期埋点 + 超时工具强制注入兜底 tool_result
 
 ### 关键文件位置
@@ -90,7 +91,7 @@
 - **IPC 校验**：`desktop/electron/ipc/capabilities.ts`
 - **服务端 Zod 校验**：`src/server/types/provider.ts`、`src/server/config/providerPresets.ts`
 - **会话协作**：`src/collaboration/dispatchProtocol.ts`（派活协议唯一真源）、`src/server/services/dispatchMailboxService.ts`（文件信箱：watcher + v1.2.0 周期兜底扫描）、`collabEnvironmentService.ts`（协作环境体检）、`servants.ts`（花名册/interrupt/广播/约束档位）
-- **协作加固（v1.2.0 / v1.2.1）**：`src/collaboration/supervisorGuard.ts`（三档约束 full / readonly / whitelist；白名单目录经 `CC_HEIHEI_SERVANT_WRITE_DIRS` 注入，仅拦文件工具、Bash 不受约束）、`src/server/services/servantIncidentNotifier.ts`（崩溃上报 + 报错续跑 + **连调不存在工具熔断**，阈值 `UNKNOWN_TOOL_STREAK_LIMIT`）、`src/server/services/servantStallWatcher.ts`（假死重推，**v1.2.1 修复致命状态机 bug**）、`src/server/services/dispatchReceiptService.ts`（派活消费回执）、`src/services/api/errors.ts`（429 配额错误可见化兜底）
+- **协作加固（v1.2.0 / v1.2.1 / v1.2.2）**：`src/collaboration/supervisorGuard.ts`（三档约束 full / readonly / whitelist；白名单目录经 `CC_HEIHEI_SERVANT_WRITE_DIRS` 注入，仅拦文件工具、Bash 不受约束）、`src/server/services/servantIncidentNotifier.ts`（崩溃上报 + 报错续跑 + **连调不存在工具熔断**，阈值 `UNKNOWN_TOOL_STREAK_LIMIT`）、`src/server/services/servantStallWatcher.ts`（假死重推，**v1.2.1 修复致命状态机 bug**、**v1.2.2 降噪为仅回合进行中才重推**）、`src/server/services/dispatchReceiptService.ts`（派活消费回执）、`src/services/api/errors.ts`（429 配额错误可见化兜底）
 - **本地模型规划**：`desktop/src/lib/localModelPlan.ts`（上下文逐级上探）、`desktop/src/lib/modelChoices.ts`（供应商模型选项共享）
 - **模型目录（2026-09）**：`desktop/src/constants/modelCatalog.ts`（Claude）、`openaiOfficialProvider.ts`、`grokOfficialProvider.ts`、`src/server/config/providerPresets.json`（DeepSeek/智谱/Kimi/MiniMax/Gemini 等）
 - **桌面端类型**：`desktop/src/lib/desktopHost/types.ts`
@@ -123,6 +124,6 @@
 
 ---
 
-*交接时间：2026-09-13（v1.1.1 周期）；文档同步：2026-09-14（C1）、2026-09-16（v1.2.0 / v1.2.1 发布前）——均未改代码*
-*当前版本：v1.2.1（Latest；上一发布 v1.2.0 = `832977b`）*
+*交接时间：2026-09-13（v1.1.1 周期）；文档同步：2026-09-14（C1）、2026-09-16（v1.2.0 / v1.2.1 / v1.2.2 发布前）——均未改代码*
+*当前版本：v1.2.2（Latest；上一发布 v1.2.1 = `70006a4`）*
 *交接状态：本地模型策略定型（实测诚实派）+ 多会话协作体系加固（安全档位 / 自动熔断 / 门禁扩容）；代码全部已推 GitHub，可随时接手新任务*
