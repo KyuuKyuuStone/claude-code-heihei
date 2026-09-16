@@ -191,6 +191,11 @@ function buildApiCatalog() {
         description: '会话间消息投递（派活/汇报共用）；body: {targetSessionId, content, fromSessionId?}。中文必须写 JSON 文件后 --data-binary @file 提交；body 用 {broadcast:true, content, fromSessionId} 可发给本项目全部员工',
       },
       {
+        method: 'GET',
+        path: '/api/session-messages?messageId={id}',
+        description: '派活消费回执：用 POST 响应返回的 messageId 查 consumed（目标是否已接住这条消息）——投递成功≠已消费。也可用 ?targetSessionId={id} 看该目标最近 20 条回执',
+      },
+      {
         method: 'POST',
         path: '/api/sessions/{sessionId}/interrupt',
         description: '中断该会话当前运行（保留会话与历史）。停止员工空转用这个，不要用 DELETE',

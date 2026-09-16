@@ -1,0 +1,143 @@
+/**
+ * DispatchReceiptService — 会话间消息的「消费回执」
+ *
+ * 背景（交接文档 P2）：派活响应已带目标忙闲，但**投递成功 ≠ 目标已消费**——
+ * 消息写进目标 CLI 的输入流后，可能还排在它当前回合的后面（甚至目标刚被拉起、
+ * 还没读输入）。主管此前的唯一办法是"假活检查"间接猜。
+ *
+ * 判定口径（本模块的契约）：
+ *   **消费 = 目标会话确实开始了对这条消息的处理。**
+ * 服务端不依赖 CLI 的私有 ack，而是用「回合边界」这一确定性信号推断：
+ *   - 投递时目标**空闲** → 之后任一"回合活动"信号（assistant / stream_event /
+ *     tool_result 等）只可能来自新回合，即已消费；
+ *   - 投递时目标**忙碌**（正在跑回合）→ 期间的活动信号属于它当前这条回合，
+ *     不能算消费；要等到**下一个回合结束（result）**——CLI 在回合边界才读取
+ *     排队的输入，此时该消息必然已被拉取。
+ *   - 目标离线被拉起、但始终没有产生任何活动 → 一直保持「未消费」（正确暴露
+ *     "没人接手"），这正是"大目标离线/卡住"场景需要的信号。
+ *
+ * 状态仅存内存（重启即清空，与 servantIncidentNotifier 的连错计数同类取舍）：
+ * 回执是"最近一次派活有没有被接住"的运维信号，不需要跨重启持久化。
+ */
+
+export type DispatchReceipt = {
+  messageId: string
+  targetSessionId: string
+  /** 派活方（主管）会话 ID，用于回执归属 */
+  fromSessionId?: string
+  deliveredAt: number
+  consumed: boolean
+  consumedAt: number | null
+  /** 投递时目标是否正忙；忙碌投递必须等到下一个回合边界才算消费 */
+  targetWasBusy: boolean
+}
+
+/** 内存中保留的回执上限（超出丢最旧），避免长时间运行无界增长 */
+export const MAX_TRACKED_RECEIPTS = 200
+
+const receipts = new Map<string, DispatchReceipt>()
+/** sessionId → 是否有回合正在进行（由 observeSessionSdkMessage 维护） */
+const sessionMidTurn = new Map<string, boolean>()
+
+/** 测试隔离用：清空全部状态 */
+export function resetDispatchReceipts(): void {
+  receipts.clear()
+  sessionMidTurn.clear()
+}
+
+export function getReceipt(messageId: string): DispatchReceipt | null {
+  const receipt = receipts.get(messageId)
+  return receipt ? { ...receipt } : null
+}
+
+/** 最近的回执（可选按目标会话过滤），最新在前 */
+export function listReceipts(targetSessionId?: string): DispatchReceipt[] {
+  return [...receipts.values()]
+    .filter((receipt) => !targetSessionId || receipt.targetSessionId === targetSessionId)
+    .sort((left, right) => right.deliveredAt - left.deliveredAt)
+    .map((receipt) => ({ ...receipt }))
+}
+
+/**
+ * 登记一次成功投递（未消费）。
+ *
+ * 调用方应在**发出消息之前**登记：目标可能极快地处理完并产生活动信号，
+ * 若先发后登记，信号会赶在登记之前到达，回执将永远停在"未消费"。
+ * 发送失败时用 forgetReceipt 撤回。
+ */
+export function recordDelivery(input: {
+  messageId: string
+  targetSessionId: string
+  fromSessionId?: string
+  at?: number
+}): DispatchReceipt {
+  const receipt: DispatchReceipt = {
+    messageId: input.messageId,
+    targetSessionId: input.targetSessionId,
+    ...(input.fromSessionId ? { fromSessionId: input.fromSessionId } : {}),
+    deliveredAt: input.at ?? Date.now(),
+    consumed: false,
+    consumedAt: null,
+    targetWasBusy: sessionMidTurn.get(input.targetSessionId) === true,
+  }
+  receipts.set(receipt.messageId, receipt)
+  pruneReceipts()
+  return { ...receipt }
+}
+
+/** 投递失败时撤回登记（避免留下一条永远"未消费"的假回执） */
+export function forgetReceipt(messageId: string): void {
+  receipts.delete(messageId)
+}
+
+/**
+ * 观察一条来自目标会话的 SDK 消息，据此推进消费状态。
+ *
+ * @param messageType SDK 消息的 `type`（assistant / stream_event / user / result / …）
+ */
+export function observeSessionSdkMessage(
+  sessionId: string,
+  messageType: unknown,
+  at: number = Date.now(),
+): void {
+  const type = typeof messageType === 'string' ? messageType : ''
+
+  if (type === 'result') {
+    // 回合边界：CLI 在此时才拉取排队的输入 → 该会话所有未消费回执都算被消费
+    sessionMidTurn.set(sessionId, false)
+    consume(sessionId, at, () => true)
+    return
+  }
+
+  if (type === 'assistant' || type === 'stream_event' || type === 'user') {
+    const wasBusy = sessionMidTurn.get(sessionId) === true
+    if (!wasBusy) sessionMidTurn.set(sessionId, true)
+    // 只有"投递时空闲"的回执才会被活动信号消费；忙碌期间的活动属于上一条回合
+    consume(sessionId, at, (receipt) => !receipt.targetWasBusy)
+    return
+  }
+
+  // system(init) / control_* 等中性事件：既不代表新回合，也不代表回合结束
+}
+
+function consume(
+  sessionId: string,
+  at: number,
+  shouldConsume: (receipt: DispatchReceipt) => boolean,
+): void {
+  for (const receipt of receipts.values()) {
+    if (receipt.consumed || receipt.targetSessionId !== sessionId) continue
+    if (!shouldConsume(receipt)) continue
+    receipt.consumed = true
+    receipt.consumedAt = at
+  }
+}
+
+function pruneReceipts(): void {
+  if (receipts.size <= MAX_TRACKED_RECEIPTS) return
+  const oldestFirst = [...receipts.values()].sort((left, right) => left.deliveredAt - right.deliveredAt)
+  for (const receipt of oldestFirst) {
+    if (receipts.size <= MAX_TRACKED_RECEIPTS) break
+    receipts.delete(receipt.messageId)
+  }
+}

@@ -78,6 +78,18 @@ curl -s -X POST "$CC_HEIHEI_DESKTOP_SERVER_URL/api/session-messages" \\
 - 员工汇报会以一条「【汇报】」消息出现在你的会话里，**收到后你必须响应**：验收结果，然后向用户总结交付，或把返工意见再用第二步派回同一个员工。
 - 多件活可并行派给不同员工，也可串行：一件验收通过再派下一件。
 
+### 消费回执（比假活检查更早、更准的一手证据）
+
+派活（POST \`/api/session-messages\`）的响应里带 \`messageId\`。**投递成功 ≠ 目标已消费**——消息可能还排在员工当前回合的后面。直接查它：
+
+\`\`\`bash
+curl -s "$CC_HEIHEI_DESKTOP_SERVER_URL/api/session-messages?messageId=<派活响应里的 messageId>"
+\`\`\`
+
+- \`consumed: false\` = 员工还没接住这条消息（可能正忙、可能没读到）；
+- \`consumed: true\` = 员工确实开始处理了（\`consumedAt\` 是时刻）；
+- 传 \`?targetSessionId=<员工sessionId>\` 可看该员工最近 20 条回执。
+
 ### 假活检查（派活后 3~5 分钟主动做一次）
 
 \`{"ok":true}\` 只代表消息**投递**成功，不代表员工真的在干活。派活几分钟后查一次花名册，用 \`lastActivityAt\`（员工会话最后一次活动时间）区分"执行中"与"假活"：
