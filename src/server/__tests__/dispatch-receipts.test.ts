@@ -4,6 +4,7 @@ import {
   MAX_TRACKED_RECEIPTS,
   forgetReceipt,
   getReceipt,
+  isSessionTurnInProgress,
   listReceipts,
   observeSessionSdkMessage,
   recordDelivery,
@@ -118,6 +119,24 @@ describe('dispatch receipts', () => {
     }
     expect(listReceipts()).toHaveLength(MAX_TRACKED_RECEIPTS)
     expect(getReceipt(first.messageId)).toBeNull()
+  })
+
+  test('reports turn-in-progress state from the SDK message flow (stall watcher input)', () => {
+    // 从未观察到消息 → 不认为回合进行中
+    expect(isSessionTurnInProgress(SILENT)).toBe(false)
+
+    observeSessionSdkMessage(SILENT, 'system', T0)
+    observeSessionSdkMessage(SILENT, 'control_request', T0 + 1)
+    expect(isSessionTurnInProgress(SILENT)).toBe(false)
+
+    observeSessionSdkMessage(SILENT, 'assistant', T0 + 2)
+    expect(isSessionTurnInProgress(SILENT)).toBe(true)
+    observeSessionSdkMessage(SILENT, 'user', T0 + 3)
+    expect(isSessionTurnInProgress(SILENT)).toBe(true)
+
+    // 回合边界 → 结束
+    observeSessionSdkMessage(SILENT, 'result', T0 + 4)
+    expect(isSessionTurnInProgress(SILENT)).toBe(false)
   })
 })
 

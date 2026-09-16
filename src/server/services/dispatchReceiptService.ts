@@ -45,6 +45,25 @@ export function resetDispatchReceipts(): void {
   sessionMidTurn.clear()
 }
 
+/**
+ * 该会话当前是否处于「回合进行中」。
+ *
+ * 判定来源与消费回执完全同源：只认 CLI 实际吐出来的 SDK 消息流——
+ *   见到 assistant / stream_event / user(tool_result) → 回合进行中；
+ *   见到 result（回合边界）→ 回合结束；
+ *   从未观察到任何消息 → **false（不认为进行中）**。
+ *
+ * 为什么不用别处的活跃标记：`activeUserTurns`（ws/handler）只在"用户消息注入"路径
+ * set，文件信箱/HTTP 注入式回合可能根本没有 turn（《批次2_会话冻结根因调查报告》§2.3），
+ * 而消息流是 CLI 实际输出的直接映射，不受注入路径影响。
+ *
+ * 消费方：servantStallWatcher —— 只有"回合进行中却长时间没动静"才算假死；
+ * "回合已结束、只是待命"是正常空闲，不该被反复戳（v1.2.2 降噪）。
+ */
+export function isSessionTurnInProgress(sessionId: string): boolean {
+  return sessionMidTurn.get(sessionId) === true
+}
+
 export function getReceipt(messageId: string): DispatchReceipt | null {
   const receipt = receipts.get(messageId)
   return receipt ? { ...receipt } : null

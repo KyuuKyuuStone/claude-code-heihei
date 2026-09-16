@@ -15,6 +15,7 @@
  */
 
 import { diagnosticsService } from './diagnosticsService.js'
+import { isSessionTurnInProgress } from './dispatchReceiptService.js'
 import { servantService } from './servantService.js'
 import { sessionMessenger } from './sessionMessenger.js'
 import { ProviderService } from './providerService.js'
@@ -52,6 +53,8 @@ export type ServantStallWatcherDeps = {
     details?: unknown
   }) => void
   now: () => number
+  /** 该会话是否处于「回合进行中」（假死判定只用它，见 isSessionTurnInProgress） */
+  isTurnInProgress: (sessionId: string) => boolean
 }
 
 const defaultDeps: ServantStallWatcherDeps = {
@@ -63,6 +66,7 @@ const defaultDeps: ServantStallWatcherDeps = {
     void diagnosticsService.recordEvent(input).catch(() => {})
   },
   now: () => Date.now(),
+  isTurnInProgress: (sessionId) => isSessionTurnInProgress(sessionId),
 }
 
 export class ServantStallWatcher {
@@ -175,6 +179,25 @@ export class ServantStallWatcher {
         continue
       }
       this.noProcessAlertedAt.delete(key)
+
+      // 降噪（v1.2.2）：只有**回合进行中**却长时间没动静才算假死。回合已正常结束、
+      // 只是待命的空闲会话属于正常状态——旧判定只看"running + 10 分钟无活动"，
+      // 会把它们每 ~11 分钟戳一次，而每次戳都触发一个员工模型回合、持续烧配额
+      // （v1.2.1 上线的真实环境实例：运维脚本连续两次被戳并回复）。
+      // 回合是否进行中由 SDK 消息流观察得出（isSessionTurnInProgress），
+      // 从未观察到消息的会话按"非进行中"处理（宁可少戳：running=false 那条路
+      // 仍会每 episode 告警一次，不会完全无声）。
+      if (!this.deps.isTurnInProgress(key)) {
+        this.stallStates.delete(key)
+        this.report(
+          'info',
+          'skip-idle',
+          `会话回合已结束且长时间无活动（正常待命，不重推）：${servant.role ? `${servant.role}（${servant.title}）` : servant.title}`,
+          key,
+          { staleForMs: staleFor, running: true, turnInProgress: false },
+        )
+        continue
+      }
 
       // 2026-09-16 修复的致命 bug：旧写法是
       //   const state = this.stallStates.get(key) ?? { …lastActivityAtMs }  ← 新建的对象

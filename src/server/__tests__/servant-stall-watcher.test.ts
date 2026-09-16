@@ -18,6 +18,8 @@ import {
 const MIN = 60_000
 
 let nowMs = 0
+/** 处于「回合进行中」的会话集合（v1.2.2 降噪后假死判定的前置条件） */
+const turnInProgress = new Set<string>()
 const deliverMock = mock(async (_target: string, _content: string, _host: string) => true)
 const listServantsMock = mock(
   async (_options: { includeAll: boolean; forSessionId?: string }): Promise<StallServantInfo[]> => [],
@@ -60,6 +62,7 @@ function makeWatcher(): ServantStallWatcher {
     getServerPort: () => 61694,
     recordEvent: recordEventMock,
     now: () => nowMs,
+    isTurnInProgress: (sessionId: string) => turnInProgress.has(sessionId),
   }
   return new ServantStallWatcher(deps)
 }
@@ -79,6 +82,9 @@ function actionsLogged(): string[] {
 
 beforeEach(() => {
   nowMs = Date.parse('2026-09-16T10:00:00.000Z')
+  turnInProgress.clear()
+  // 除专门验证"空闲待命"的用例外，默认认为员工正跑着回合
+  turnInProgress.add(EMP)
   deliverMock.mockClear()
   listServantsMock.mockClear()
   recordEventMock.mockClear()
@@ -243,6 +249,53 @@ describe('ServantStallWatcher', () => {
     ])
     await watcher.watch()
     expect(actionsLogged()).toContain('skip-bad-activity')
+  })
+
+  test('does not nudge a session whose turn already finished (normal idle)', async () => {
+    const last = nowMs
+    nowMs = last + 30 * MIN
+    listServantsMock.mockImplementation(async () => roster({ lastActivityAt: iso(last) }))
+    // 回合已正常结束 → 空闲待命，不是假死
+    turnInProgress.delete(EMP)
+
+    const watcher = makeWatcher()
+    await watcher.watch()
+    await watcher.watch()
+
+    expect(deliveredTo(EMP)).toHaveLength(0)
+    expect(deliveredTo(SUP)).toHaveLength(0)
+    expect(actionsLogged()).toContain('skip-idle')
+    expect(actionsLogged()).not.toContain('nudge')
+  })
+
+  test('nudges once a stalled session is in a running turn again', async () => {
+    const last = nowMs
+    nowMs = last + 30 * MIN
+    listServantsMock.mockImplementation(async () => roster({ lastActivityAt: iso(last) }))
+    turnInProgress.delete(EMP)
+    const watcher = makeWatcher()
+
+    await watcher.watch()
+    expect(deliveredTo(EMP)).toHaveLength(0)
+
+    // 新回合开始后再次卡死 → 从第 1 次重推起算
+    turnInProgress.add(EMP)
+    await watcher.watch()
+    expect(deliveredTo(EMP)).toHaveLength(1)
+    expect(deliveredTo(EMP)[0]).toContain(`自动重推 1/${MAX_AUTO_REPUSH}`)
+  })
+
+  test('leaves a session that never reported any turn activity alone', async () => {
+    const last = nowMs
+    nowMs = last + 30 * MIN
+    listServantsMock.mockImplementation(async () => roster({ lastActivityAt: iso(last) }))
+    // 从未观察到该会话的任何 SDK 消息 → 按"非进行中"处理（宁可少戳）
+    turnInProgress.clear()
+
+    await makeWatcher().watch()
+
+    expect(deliverMock).not.toHaveBeenCalled()
+    expect(actionsLogged()).toContain('skip-idle')
   })
 
   test('disabled sessions are ignored', async () => {
