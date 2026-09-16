@@ -1982,7 +1982,8 @@ describe('WorkspacePanel', () => {
     expect(surface.textContent).toContain('map[string]*Room')
     expect(view.queryByText('Mermaid Error')).toBeNull()
     expect(view.queryByTestId('workspace-code')).toBeNull()
-  })
+    // Mermaid 渲染用例：全量并行（286 文件）下实测 5s 默认超时被击穿，单文件复跑通过（整文件 8.67s）。
+  }, 30_000)
 
   it('opens a context menu for preview tabs and closes tabs to the right', async () => {
     await setWorkspaceState((state) => ({

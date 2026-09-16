@@ -129,9 +129,11 @@ describe('splitTextByFilePaths', () => {
 describe('matchGitHubRef', () => {
   it('reads the owner/repo#123 form the prompt asks for', () => {
     // src/constants/prompts.ts:438 — "so they render as clickable links".
+    // owner/repo 跟随输入与 url（仓库已改名为 KyuuKyuuStone/claude-code-heihei）；
+    // 旧期望值 'cc-heihei' 与自身 url 期望矛盾，疑为改名时批量替换误伤。
     expect(matchGitHubRef('KyuuKyuuStone/claude-code-heihei#1146')).toMatchObject({
-      owner: 'cc-heihei',
-      repo: 'cc-heihei',
+      owner: 'KyuuKyuuStone',
+      repo: 'claude-code-heihei',
       number: 1146,
       url: 'https://github.com/KyuuKyuuStone/claude-code-heihei/issues/1146',
     })

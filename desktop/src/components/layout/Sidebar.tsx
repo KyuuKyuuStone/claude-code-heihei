@@ -1193,7 +1193,7 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
                                           className={`flex-shrink-0 h-2 w-2 rounded-full ${
                                             status === 'busy'
                                               ? 'bg-[var(--color-success)]'
-                                              : 'bg-[var(--color-text-quaternary,#9aa0a6)]'
+                                              : 'bg-[var(--color-text-tertiary)]'
                                           }`}
                                           title={title}
                                         />

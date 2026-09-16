@@ -2549,7 +2549,7 @@ export const kr: Record<TranslationKey, string> = {
   'sidebar.servantStatusWaiting': '대기 중(다음 작업 대기)',
     'sidebar.servantStatusIdle': '미실행',
   'sidebar.wakeServant': '워커 깨우기(중단 후 재시작 힌트 삽입)',
-  'sidebar.wakeNudge': '이전 작업이 비정상 중단되었습니다. 현재 진행 상황부터 이어서 완료하세요. 도구 오류 시 먼저 ToolSearch로 select:Bash,Read,Write,Glob,Grep를 실행해 도구를 다시 로드하고, 완료 후 규정대로 슈퍼바이저에게 보고하세요.',
+  'sidebar.wakeNudge': '이전 작업이 비정상 중단되었습니다. 현재 진행 상황부터 이어서 완료하세요. 도구 오류 시 핵심 도구(Bash/Read/Write/Glob/Grep)는 처음부터 인라인으로 로드되어 있으므로 ToolSearch로 다시 로드하지 말고 직접 호출하세요. 다른 지연 도구가 필요할 때만 select:(예: select:NotebookEdit,WebFetch)를 사용하고, 완료 후 규정대로 슈퍼바이저에게 보고하세요.',
   'sidebar.wakeDone': '깨우기 신호 전송됨',
   'sidebar.wakeFailed': '깨우기 실패, 서버 상태를 확인하세요',
     'sidebar.broadcastToServants': '프로젝트 워커에게 브로드캐스트…',

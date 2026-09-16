@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import css from './globals.css?raw'
+import rawCss from './globals.css?raw'
+
+// 归一化换行：Windows 检出（core.autocrlf=true，仓库无 .gitattributes）下 globals.css
+// 是 CRLF，而 THEME_BLOCKS 的选择器字面量用 LF 拼接，`indexOf` 会因此整文件失败。
+const css = rawCss.replace(/\r\n/g, '\n')
 
 /**
  * Contrast guard for the status palette.

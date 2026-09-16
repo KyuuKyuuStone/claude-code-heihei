@@ -33,7 +33,13 @@ describe('groupProviderModels', () => {
       '其他',
     )
 
-    expect(groups.map((group) => group.group)).toEqual(['xai', '其他'])
+    // 分组顺序由实现按 localeCompare(默认 locale) 排序决定：'其他' 与 'xai' 的先后随
+    // 系统 locale 变化（本机 zh-CN 下 '其他' 在前，en-US 下 'xai' 在前）。故断言"结果与
+    // 同一排序器一致 + 两个分组都在"，不再硬编码跨 locale 不成立的顺序。
+    // 建议（仅记录，本批不改实现）：实现可显式传 locale（如 'en'）让排序跨机稳定。
+    const order = groups.map((group) => group.group)
+    expect(order).toEqual([...order].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })))
+    expect(new Set(order)).toEqual(new Set(['xai', '其他']))
     expect(groups.find((group) => group.group === '其他')?.models.map((m) => m.id))
       .toEqual(['no-owner', 'blank-owner'])
   })

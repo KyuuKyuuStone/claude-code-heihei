@@ -2549,7 +2549,7 @@ export const zh: Record<TranslationKey, string> = {
   'sidebar.servantStatusWaiting': '待命中（等待下一個任務）',
     'sidebar.servantStatusIdle': '未執行',
   'sidebar.wakeServant': '喚醒員工（中斷並注入續跑提示）',
-  'sidebar.wakeNudge': '你好，先前的任務因異常中斷了。請從當前進度繼續完成；如遇工具報錯，先用 ToolSearch 執行 select:Bash,Read,Write,Glob,Grep 重新載入工具；完成後按規範向主管匯報。',
+  'sidebar.wakeNudge': '你好，先前的任務因異常中斷了。請從當前進度繼續完成；如遇工具報錯，核心工具（Bash/Read/Write/Glob/Grep）本就內建可直接調用，無需用 ToolSearch 重新載入；確需載入其他延遲工具時再使用 select:（如 select:NotebookEdit,WebFetch）；完成後按規範向主管匯報。',
   'sidebar.wakeDone': '已發送喚醒指令',
   'sidebar.wakeFailed': '喚醒失敗，請檢查服務狀態',
     'sidebar.broadcastToServants': '廣播到本專案員工…',

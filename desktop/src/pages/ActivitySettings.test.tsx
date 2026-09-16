@@ -400,7 +400,8 @@ describe('ActivitySettings', () => {
 
     expect(deleteProfileAvatarMock).toHaveBeenCalled()
     expect(screen.getByAltText('cc-heihei avatar')).toHaveAttribute('src', '/app-icon.png')
-  })
+    // 头像上传/移除全流程用例：全量并行（285 文件）下实测 5s 默认超时被击穿，单文件复跑 4.81s 全过。
+  }, 30_000)
 
   it('shows localized duration details and the empty usage state', async () => {
     useSettingsStore.setState({ locale: 'zh' })

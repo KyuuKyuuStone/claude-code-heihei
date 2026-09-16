@@ -1206,12 +1206,12 @@ describe('Sidebar', () => {
   it('shows the brand mark only on the rail, where the wordmark is clamped away', async () => {
     render(<Sidebar />)
 
-    // Scope to the wordmark's own row — the GitHub link in the same header is
-    // also an svg and would answer a looser query.
+    // Scope to the wordmark's own row. BrandSeal 现在是 <img>（fa38af8 从内联 SVG 改来），
+    // 而同 header 的 GitHub 链接仍是 <svg>，所以查 img 反而更精确。
     const brandRow = () => screen.getByText('heihei').closest('div')
 
     // Expanded, the name carries the brand and the mark beside it is clutter.
-    expect(brandRow()?.querySelector('svg')).toBeNull()
+    expect(brandRow()?.querySelector('img')).toBeNull()
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
@@ -1219,7 +1219,7 @@ describe('Sidebar', () => {
 
     // Collapsed, the copy is width-clamped to zero, so the mark is the only
     // thing left to identify the app.
-    expect(brandRow()?.querySelector('svg')).not.toBeNull()
+    expect(brandRow()?.querySelector('img')).not.toBeNull()
   })
 
   it('renders search controls without the removed embedded project filter', () => {

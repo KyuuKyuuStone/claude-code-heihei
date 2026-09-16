@@ -2547,7 +2547,7 @@ export const en = {
   'sidebar.servantStatusWaiting': 'Standing by (waiting for next task)',
     'sidebar.servantStatusIdle': 'Not running',
   'sidebar.wakeServant': 'Wake servant (interrupt + re-push hint)',
-  'sidebar.wakeNudge': 'Your previous task was interrupted. Please continue from where you left off; if tool calls are failing, reload tools first with ToolSearch select:Bash,Read,Write,Glob,Grep, then report to the supervisor when done.',
+  'sidebar.wakeNudge': 'Your previous task was interrupted. Please continue from where you left off; if tool calls are failing, core tools (Bash/Read/Write/Glob/Grep) are always loaded inline — call them directly, no need to reload via ToolSearch; use select: (e.g. select:NotebookEdit,WebFetch) only when you need other deferred tools; report to the supervisor when done.',
   'sidebar.wakeDone': 'Wake signal sent',
   'sidebar.wakeFailed': 'Wake failed, check server status',
     'sidebar.broadcastToServants': 'Broadcast to project servants…',

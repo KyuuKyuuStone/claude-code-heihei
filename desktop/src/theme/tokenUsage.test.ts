@@ -57,7 +57,8 @@ describe('css custom property usage', () => {
       // preview-agent 是注入到第三方页面的独立脚本：它的样式活在 Shadow DOM 里，
       // 页面上不存在 globals.css，token 由那段样式自己定义自己消费。自洽性由
       // preview-agent/editBubble.test.ts 用同等强度的检查守住。
-      if (file.includes('/preview-agent/')) continue
+      // 按路径段判断：Windows 上 SRC_ROOT 用反斜杠，`includes('/preview-agent/')` 会漏判。
+      if (file.split(/[\\/]/).includes('preview-agent')) continue
 
       const lines = readFileSync(file, 'utf8').split('\n')
       lines.forEach((line, index) => {
@@ -101,5 +102,6 @@ describe('css custom property usage', () => {
     // MobileBottomSheet used `z-[10000]`, both chosen to win a fight the
     // layering scale now settles by name.
     expect(offenders).toEqual([])
-  })
+    // 全量并行（286 文件）时事件循环被抢占，实测 5s 默认超时被击穿；本用例单跑 68ms。
+  }, 30_000)
 })

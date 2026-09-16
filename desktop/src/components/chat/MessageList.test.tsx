@@ -366,7 +366,8 @@ describe('MessageList nested tool calls', () => {
     })
     await waitFor(() => expect(screen.getByText('2 / 3')).toBeTruthy())
     expect(highlights.get('cc-find-active')?.ranges[0]?.startContainer.parentElement?.closest('[data-chat-render-item-key]')?.getAttribute('data-chat-render-item-key')).toBe('assistant-64')
-  })
+    // 130 项虚拟窗口用例：全量并行（286 文件）下实测 5s 默认超时被击穿，单文件复跑通过。
+  }, 30_000)
 
   it('bounds semantic conversation matches and ignores hidden tool payloads', async () => {
     const highlights = new Map<string, { ranges: Range[] }>()
@@ -2769,7 +2770,9 @@ describe('MessageList nested tool calls', () => {
       'finish the selection',
       { left: 160, top: 80, right: 520, bottom: 160, width: 360, height: 80 },
     )
-    const floatingAddButton = screen.getByRole('button', { name: 'Add to chat' })
+    // 异步查询：选择菜单由选择事件后的状态更新挂载，全量并行时渲染可能晚于此处断言
+    // （run2 曾报 Unable to find button「Add to chat」）。findByRole 会重试，不再依赖时序。
+    const floatingAddButton = await screen.findByRole('button', { name: 'Add to chat' })
 
     expect(floatingAddButton.style.left).toBe('530px')
     expect(floatingAddButton.style.top).toBe('98px')

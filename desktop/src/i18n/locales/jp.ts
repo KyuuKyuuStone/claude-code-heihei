@@ -2549,7 +2549,7 @@ export const jp: Record<TranslationKey, string> = {
   'sidebar.servantStatusWaiting': '待機中（次のタスクを待っています）',
     'sidebar.servantStatusIdle': '未実行',
   'sidebar.wakeServant': 'ワーカーを起床（中断して継続ヒントを注入）',
-  'sidebar.wakeNudge': '先ほどのタスクが異常中断しました。進捗から再開してください。ツールエラー時は先に ToolSearch で select:Bash,Read,Write,Glob,Grep を実行してツールを再読込し、完了後は規定通りスーパーバイザーへ報告してください。',
+  'sidebar.wakeNudge': '先ほどのタスクが異常中断しました。進捗から再開してください。ツールエラー時は、コアツール（Bash/Read/Write/Glob/Grep）は最初からインラインで利用可能なため ToolSearch で再読込せず直接呼び出してください。他の遅延ツールが必要な場合のみ select:（例：select:NotebookEdit,WebFetch）を使用し、完了後は規定通りスーパーバイザーへ報告してください。',
   'sidebar.wakeDone': '起床シグナルを送信しました',
   'sidebar.wakeFailed': '起床に失敗しました。サーバー状態を確認してください',
     'sidebar.broadcastToServants': 'ワーカー全員にブロードキャスト…',

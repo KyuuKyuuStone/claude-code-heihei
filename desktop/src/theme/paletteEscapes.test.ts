@@ -33,11 +33,10 @@ const PALETTE_CLASS = new RegExp(
 /**
  * Known offenders, with the count they are allowed to keep.
  *
- * - `Settings.tsx` — two neutrals inside the H5-access QR panel. That panel is a
- *   hardcoded `bg-white` box because scanners need the contrast, so its text has
- *   to stay dark under `data-theme="dark"` as well. Theme tokens are the wrong
- *   answer here; the right one is a token pair for content on a permanently
- *   light surface, which does not exist yet.
+ * `Settings.tsx` used to sit here with 2 — two neutrals inside the H5-access QR
+ * panel. That panel is no longer in the file, so the entry is gone (the allowlist
+ * is empty now). Keep this list empty unless a genuinely permanent-light surface
+ * forces a stock neutral back in.
  *
  * `StreamingIndicator.tsx` used to sit here with 20. Its retry banner is now on
  * the `warning` token pair, so it needed no `dark:` variants at all — the entry
@@ -52,9 +51,7 @@ const PALETTE_CLASS = new RegExp(
  * `-container` pairs, which also retired the `/5`–`/30` alpha modifiers that
  * Safari 15 drops entirely.
  */
-const ALLOWED: Record<string, number> = {
-  'pages/Settings.tsx': 2,
-}
+const ALLOWED: Record<string, number> = {}
 
 function collectSources(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {

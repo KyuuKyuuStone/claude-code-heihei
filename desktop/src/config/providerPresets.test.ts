@@ -63,7 +63,9 @@ describe('bundled provider presets', () => {
 
     const selectableIds = selectableProviderPresets(BUNDLED_PROVIDER_PRESETS).map((p) => p.id)
     expect(selectableIds).not.toContain('shengsuanyun')
-    expect(selectableIds).toContain('teamorouter')
+    // teamorouter 于 db6dc04「teamorouter 退役预置清理」一并退役：预置仍保留在 bundle 里
+    // （已有 provider 的 presetId 仍可解析），但不再出现在可选列表中。
+    expect(selectableIds).not.toContain('teamorouter')
     expect(selectableIds).toContain('custom')
   })
 
