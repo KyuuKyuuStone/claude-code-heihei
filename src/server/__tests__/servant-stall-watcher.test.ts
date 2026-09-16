@@ -20,6 +20,8 @@ const MIN = 60_000
 let nowMs = 0
 /** 处于「回合进行中」的会话集合（v1.2.2 降噪后假死判定的前置条件） */
 const turnInProgress = new Set<string>()
+/** 会话 → 未被消费的派活条数（告警二期的触发条件） */
+const pendingDispatches = new Map<string, number>()
 const deliverMock = mock(async (_target: string, _content: string, _host: string) => true)
 const listServantsMock = mock(
   async (_options: { includeAll: boolean; forSessionId?: string }): Promise<StallServantInfo[]> => [],
@@ -63,6 +65,7 @@ function makeWatcher(): ServantStallWatcher {
     recordEvent: recordEventMock,
     now: () => nowMs,
     isTurnInProgress: (sessionId: string) => turnInProgress.has(sessionId),
+    countUnconsumedDispatches: (sessionId: string) => pendingDispatches.get(sessionId) ?? 0,
   }
   return new ServantStallWatcher(deps)
 }
@@ -83,6 +86,7 @@ function actionsLogged(): string[] {
 beforeEach(() => {
   nowMs = Date.parse('2026-09-16T10:00:00.000Z')
   turnInProgress.clear()
+  pendingDispatches.clear()
   // 除专门验证"空闲待命"的用例外，默认认为员工正跑着回合
   turnInProgress.add(EMP)
   deliverMock.mockClear()
@@ -128,15 +132,18 @@ describe('ServantStallWatcher', () => {
 
     await watcher.watch()
     expect(deliveredTo(EMP)).toHaveLength(MAX_AUTO_REPUSH)
-    const toSup = deliveredTo(SUP)
-    expect(toSup).toHaveLength(1)
-    expect(toSup[0]).toContain('假死未恢复')
-    expect(toSup[0]).toContain(EMP)
+    // v1.2.3：升级降为日志级——不再注入任何会话，只写诊断
+    expect(deliveredTo(SUP)).toHaveLength(0)
     expect(actionsLogged()).toContain('escalate')
+    const escalateLog = recordEventMock.mock.calls.find(
+      (call) => (call[0].details as { action?: string } | undefined)?.action === 'escalate',
+    )
+    expect(escalateLog?.[0].sessionId).toBe(EMP)
 
-    // episode 已升级，不再重复
+    // episode 已升级，不再重复记
+    const before = actionsLogged().filter((action) => action === 'escalate').length
     await watcher.watch()
-    expect(deliveredTo(SUP)).toHaveLength(1)
+    expect(actionsLogged().filter((action) => action === 'escalate')).toHaveLength(before)
   })
 
   test('activity recovery resets the episode', async () => {
@@ -163,7 +170,85 @@ describe('ServantStallWatcher', () => {
     expect(deliveredTo(EMP)[2]).toContain(`自动重推 1/${MAX_AUTO_REPUSH}`)
   })
 
-  test('running=false only alerts the supervisor and never delivers to the employee', async () => {
+  test('an idle session without pending dispatches gets no message at all', async () => {
+    const last = nowMs
+    nowMs = last + 26 * MIN
+    listServantsMock.mockImplementation(async () =>
+      roster({ lastActivityAt: iso(last), running: false }),
+    )
+    // 干完活、进程回收、没有悬着的派活 = 正常闲置
+    const watcher = makeWatcher()
+
+    await watcher.watch()
+    await watcher.watch()
+
+    // 不向任何会话发消息（既不打扰主管，也绝不向员工投递＝不自动拉起）
+    expect(deliverMock).not.toHaveBeenCalled()
+    expect(actionsLogged()).toContain('skip-idle-no-dispatch')
+    expect(actionsLogged()).not.toContain('no-process-alert')
+    // 同一 episode 只记一次（否则每 60s 一条 info 是纯噪音）
+    expect(
+      actionsLogged().filter((action) => action === 'skip-idle-no-dispatch'),
+    ).toHaveLength(1)
+
+    // 新的 episode（活动时间变了）→ 允许再记一次
+    const next = last + 40 * MIN
+    nowMs = next + 26 * MIN
+    listServantsMock.mockImplementation(async () =>
+      roster({ lastActivityAt: iso(next), running: false }),
+    )
+    await watcher.watch()
+    expect(
+      actionsLogged().filter((action) => action === 'skip-idle-no-dispatch'),
+    ).toHaveLength(2)
+  })
+
+  test('an idle session with pending dispatches writes a neutral warn diagnostic, no session message', async () => {
+    const last = nowMs
+    nowMs = last + 26 * MIN
+    listServantsMock.mockImplementation(async () =>
+      roster({ lastActivityAt: iso(last), running: false }),
+    )
+    pendingDispatches.set(EMP, 2)
+    const watcher = makeWatcher()
+
+    await watcher.watch()
+
+    // v1.2.3：不注入任何会话（既不打扰主管，也绝不向员工投递＝不自动拉起）
+    expect(deliverMock).not.toHaveBeenCalled()
+    expect(actionsLogged()).toContain('no-process-alert')
+    const alertLog = recordEventMock.mock.calls.find(
+      (call) => (call[0].details as { action?: string } | undefined)?.action === 'no-process-alert',
+    )!
+    expect(alertLog[0].severity).toBe('warn')
+    expect(alertLog[0].sessionId).toBe(EMP)
+    expect(alertLog[0].summary).toContain('2 条派活未被消费')
+    expect(alertLog[0].summary).toContain('26 分钟')
+    expect(alertLog[0].details).toMatchObject({ running: false, pendingDispatches: 2 })
+    // 文案不得出现惊悚词（v1.2.2 用户反馈：客户会以为产品坏了）
+    for (const scary of ['假死', '不会自愈', '无效', '异常']) {
+      expect(alertLog[0].summary).not.toContain(scary)
+    }
+
+    // 同一 episode 只记一次
+    await watcher.watch()
+    expect(
+      actionsLogged().filter((action) => action === 'no-process-alert'),
+    ).toHaveLength(1)
+
+    // 新的 episode（活动时间变了，且再次越过阈值）→ 再记一次
+    const second = last + 20 * MIN
+    nowMs = second + 11 * MIN
+    listServantsMock.mockImplementation(async () =>
+      roster({ lastActivityAt: iso(second), running: false }),
+    )
+    await watcher.watch()
+    expect(
+      actionsLogged().filter((action) => action === 'no-process-alert'),
+    ).toHaveLength(2)
+  })
+
+  test('a dispatch arriving later in the same episode still gets recorded', async () => {
     const last = nowMs
     nowMs = last + 26 * MIN
     listServantsMock.mockImplementation(async () =>
@@ -172,29 +257,17 @@ describe('ServantStallWatcher', () => {
     const watcher = makeWatcher()
 
     await watcher.watch()
+    expect(deliverMock).not.toHaveBeenCalled()
+    expect(actionsLogged()).toContain('skip-idle-no-dispatch')
 
-    // 关键：绝不向员工投递（投递通道对未运行会话会 startSession = 自动拉起）
-    expect(deliveredTo(EMP)).toHaveLength(0)
-    const toSup = deliveredTo(SUP)
-    expect(toSup).toHaveLength(1)
-    expect(toSup[0]).toContain('无运行进程')
-    expect(toSup[0]).toContain('running=false')
-    expect(toSup[0]).toContain(`staleForMs=${26 * MIN}`)
-    expect(toSup[0]).toContain('建议手动唤醒')
-    expect(actionsLogged()).toContain('no-process-alert')
-
-    // 同一 episode 只告警一次
+    // 正常闲置期间又来了一条派活（同 episode）→ 必须记 warn，不能被去重吃掉
+    pendingDispatches.set(EMP, 1)
     await watcher.watch()
-    expect(deliveredTo(SUP)).toHaveLength(1)
-
-    // 新的 episode（活动时间变了，且再次越过阈值）→ 再告警一次
-    const second = last + 20 * MIN
-    nowMs = second + 11 * MIN
-    listServantsMock.mockImplementation(async () =>
-      roster({ lastActivityAt: iso(second), running: false }),
-    )
-    await watcher.watch()
-    expect(deliveredTo(SUP)).toHaveLength(2)
+    const alertLog = recordEventMock.mock.calls.find(
+      (call) => (call[0].details as { action?: string } | undefined)?.action === 'no-process-alert',
+    )!
+    expect(alertLog[0].summary).toContain('1 条派活未被消费')
+    expect(deliverMock).not.toHaveBeenCalled()
   })
 
   test('a failed delivery is not counted as a repush', async () => {

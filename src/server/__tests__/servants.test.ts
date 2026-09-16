@@ -447,7 +447,7 @@ describe('Servants API', () => {
     expect(deliverMock).toHaveBeenCalledTimes(1)
   })
 
-  it('should notify the supervisor when a new worker is registered', async () => {
+  it('should not inject a session message when a new worker is registered (diagnostic only)', async () => {
     const supervisor = await sessionService.createSession(tmpDir)
     await handleServantsApi(
       jsonReq(`http://localhost/api/servant-sessions/${supervisor.sessionId}`, 'PUT', {
@@ -470,9 +470,22 @@ describe('Servants API', () => {
       ['api', 'servant-sessions', sessionId],
     )
     await new Promise((r) => setTimeout(r, 100))
-    expect(deliverMock).toHaveBeenCalledTimes(3)
-    expect(deliverMock.mock.calls[2][0]).toBe(supervisor.sessionId)
-    expect(deliverMock.mock.calls[2][1]).toContain('新员工')
+    // 只应有两条功能性上岗消息（主管履新 + 员工上岗）；「新员工已加入本项目」
+    // 这类系统通知自 v1.2.3 起降为诊断事件，不再注入任何会话
+    expect(deliverMock).toHaveBeenCalledTimes(2)
+    expect(deliverMock.mock.calls.some((call) => String(call[1]).includes('新员工'))).toBe(false)
+
+    // 但必须能在诊断日志里查到（维护可查）：真实落盘到 <configDir>/cc-heihei/diagnostics
+    const diagnosticsPath = path.join(tmpDir, 'cc-heihei', 'diagnostics', 'diagnostics.jsonl')
+    let logged = ''
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      logged = await fs.readFile(diagnosticsPath, 'utf-8').catch(() => '')
+      if (logged.includes('servant_registered')) break
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    expect(logged).toContain('servant_registered')
+    expect(logged).toContain(sessionId)
+    expect(logged).toContain('写作')
   })
 })
 

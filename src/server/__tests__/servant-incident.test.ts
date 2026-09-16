@@ -15,6 +15,13 @@ const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
 const deliverMock = mock(async () => true)
 const getServantMock = mock(async (id: string) => null)
 const listServantsMock = mock(async () => [])
+const recordEventMock = mock((_input: {
+  type: string
+  severity?: 'info' | 'warn' | 'error'
+  summary: string
+  sessionId?: string
+  details?: unknown
+}) => {})
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-heihei-incident-'))
@@ -22,6 +29,7 @@ beforeEach(async () => {
   deliverMock.mockClear()
   getServantMock.mockClear()
   listServantsMock.mockClear()
+  recordEventMock.mockClear()
   deliverMock.mockImplementation(async () => true)
   getServantMock.mockImplementation(async () => null)
   listServantsMock.mockImplementation(async () => [])
@@ -30,6 +38,7 @@ beforeEach(async () => {
     getServant: getServantMock,
     listServants: listServantsMock,
     getServerPort: () => 61694,
+    recordEvent: recordEventMock,
   })
   resetServantIncidentState()
 })
@@ -54,22 +63,30 @@ describe('onServantTurnError', () => {
     ])
     await onServantTurnError({ sessionId: 'emp-1', streak: 1, summary: 'API 超时' })
     await onServantTurnError({ sessionId: 'emp-1', streak: 2, summary: 'API 超时' })
+    // 续跑提示注入员工自身是功能动作 → 保留
     expect(deliverMock).toHaveBeenCalledTimes(2)
     expect(deliverMock.mock.calls[0][0]).toBe('emp-1')
     expect(deliverMock.mock.calls[0][1]).toContain('自动续跑 1/2')
     expect(deliverMock.mock.calls[1][1]).toContain('自动续跑 2/2')
 
+    // 第 3 轮起升级：v1.2.3 起只写诊断，不再注入主管会话
     await onServantTurnError({ sessionId: 'emp-1', streak: 3, summary: '仍然失败' })
-    expect(deliverMock).toHaveBeenCalledTimes(3)
-    expect(deliverMock.mock.calls[2][0]).toBe('sup-1')
-    expect(deliverMock.mock.calls[2][1]).toContain('连续 3 轮报错')
+    expect(deliverMock).toHaveBeenCalledTimes(2)
+    expect(recordEventMock).toHaveBeenCalledTimes(1)
+    expect(recordEventMock.mock.calls[0][0]).toMatchObject({
+      type: 'servant_turn_error_escalated',
+      severity: 'warn',
+      sessionId: 'emp-1',
+    })
+    expect(recordEventMock.mock.calls[0][0].details).toMatchObject({ streak: 3, summary: '仍然失败' })
 
     await onServantTurnError({ sessionId: 'emp-1', streak: 4, summary: '仍然失败' })
-    expect(deliverMock).toHaveBeenCalledTimes(3)
+    expect(deliverMock).toHaveBeenCalledTimes(2)
+    expect(recordEventMock).toHaveBeenCalledTimes(1)
 
     resetServantIncidentState()
     await onServantTurnError({ sessionId: 'emp-1', streak: 1, summary: 'API 超时' })
-    expect(deliverMock).toHaveBeenCalledTimes(4)
+    expect(deliverMock).toHaveBeenCalledTimes(3)
   })
 
   test('non-servant sessions are not auto-nudged', async () => {
@@ -79,7 +96,7 @@ describe('onServantTurnError', () => {
 })
 
 describe('notifyServantCrash', () => {
-  test('notifies the project supervisor with role, exit code, and handling advice', async () => {
+  test('records a crash diagnostic instead of injecting a session message', async () => {
     getServantMock.mockImplementation(async (id: string) =>
       id === 'emp-1' ? { sessionId: 'emp-1', role: '前端', enabled: true } : null,
     )
@@ -90,14 +107,16 @@ describe('notifyServantCrash', () => {
 
     await notifyServantCrash({ sessionId: 'emp-1', exitCode: 4 })
 
-    expect(deliverMock).toHaveBeenCalledTimes(1)
-    expect(deliverMock.mock.calls[0][0]).toBe('sup-1')
-    const content = deliverMock.mock.calls[0][1] as string
-    expect(content).toContain('前端')
-    expect(content).toContain('emp-1')
-    expect(content).toContain('exit code 4')
-    expect(content).toContain('/interrupt')
-    expect(deliverMock.mock.calls[0][2]).toBe('127.0.0.1:61694')
+    // v1.2.3：崩溃属于系统事件，只落诊断，不再注入任何会话
+    expect(deliverMock).not.toHaveBeenCalled()
+    expect(recordEventMock).toHaveBeenCalledTimes(1)
+    const event = recordEventMock.mock.calls[0][0]
+    expect(event.type).toBe('servant_crash')
+    expect(event.severity).toBe('error')
+    expect(event.sessionId).toBe('emp-1')
+    expect(event.summary).toContain('前端')
+    expect(event.summary).toContain('exit code 4')
+    expect(event.details).toMatchObject({ sessionId: 'emp-1', exitCode: 4, role: '前端' })
   })
 
   test('ignores sessions that are not registered servants', async () => {

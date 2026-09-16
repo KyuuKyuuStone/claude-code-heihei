@@ -9,6 +9,8 @@
  * 避免 conversationService ↔ servantService/sessionMessenger 静态依赖环。
  */
 
+import { diagnosticsService } from './diagnosticsService.js'
+
 export type ServantCrashInput = {
   sessionId: string
   exitCode: number | null
@@ -39,6 +41,14 @@ export type ServantIncidentDeps = {
   getServerPort: () => number
   /** 中断指定会话当前轮次（SDK 优雅中断，保留会话与历史） */
   interrupt: (sessionId: string) => void
+  /** 写诊断事件（v1.2.3 起：面向主管的"通知"一律降为日志级，只落诊断不再注入会话） */
+  recordEvent: (input: {
+    type: string
+    severity?: 'info' | 'warn' | 'error'
+    summary: string
+    sessionId?: string
+    details?: unknown
+  }) => void
 }
 
 const defaultDeps: ServantIncidentDeps = {
@@ -57,6 +67,9 @@ const defaultDeps: ServantIncidentDeps = {
         conversationService.sendInterrupt(sessionId)
       })
       .catch(() => {})
+  },
+  recordEvent: (input) => {
+    void diagnosticsService.recordEvent(input).catch(() => {})
   },
 }
 
@@ -78,20 +91,22 @@ export async function notifyServantCrash(input: ServantCrashInput): Promise<void
   const entry = await incidentDeps.getServant(input.sessionId).catch(() => null)
   if (!entry?.enabled) return
 
-  const all = await incidentDeps
-    .listServants({ includeAll: true, forSessionId: input.sessionId })
-    .catch(() => [])
-  const supervisor = all.find((s) => s.supervisor && s.sessionId !== input.sessionId)
-  if (!supervisor) return
-
-  const roleText = entry.role ? `${entry.role}（${entry.description || '未填写特性'}）` : '未命名角色'
-  const codeText = input.exitCode === null ? '未知原因' : `exit code ${input.exitCode}`
-  const content = [
-    `【系统】员工会话异常退出：${roleText}（会话 ID：${entry.sessionId}），${codeText}。其正在执行的任务很可能已中断。`,
-    `建议处理：1) 重新派活让其继续（附上原任务要点与已完成部分）；2) 现场混乱时先 POST /api/sessions/${entry.sessionId}/interrupt 清理，再重新派活；3) 已完成部分可从其产出文件核对。`,
-  ].join('\n')
-
-  await incidentDeps.deliver(supervisor.sessionId, content, `127.0.0.1:${incidentDeps.getServerPort()}`)
+  // v1.2.3 用户规则：对话流只放"需要人响应/决策"的消息（员工汇报）。员工崩溃属于
+  // 维护可查的系统事件，降为日志级——写诊断，不再向主管注入会话消息。
+  incidentDeps.recordEvent({
+    type: 'servant_crash',
+    severity: 'error',
+    summary: `员工会话异常退出（exit code ${input.exitCode ?? 'unknown'}）：${
+      entry.role ? `${entry.role}（${entry.description || '未填写特性'}）` : '未命名角色'
+    }`,
+    ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
+    details: {
+      sessionId: entry.sessionId,
+      exitCode: input.exitCode,
+      role: entry.role,
+      description: entry.description,
+    },
+  })
 }
 
 /* ── 员工轮次报错自动续跑（有界）─────────────────────────────────────────────
@@ -122,22 +137,23 @@ export async function onServantTurnError(input: {
     return
   }
 
-  // 达到自动续跑上限：升级通知主管一次，之后保持静默等成功轮重置
+  // 达到自动续跑上限：升级一次（v1.2.3 起降为日志级），之后保持静默等成功轮重置
   if (input.streak > TURN_ERROR_MAX_AUTO_NUDGES) {
     if (!turnErrorEscalated.has(input.sessionId)) {
       turnErrorEscalated.add(input.sessionId)
-      const all = await incidentDeps
-        .listServants({ includeAll: true, forSessionId: input.sessionId })
-        .catch(() => [])
-      const supervisor = all.find((s) => s.supervisor && s.sessionId !== input.sessionId)
-      if (supervisor) {
-        const roleText = entry.role ? `${entry.role}（${entry.description || '未填写特性'}）` : '未命名角色'
-        await incidentDeps.deliver(
-          supervisor.sessionId,
-          `【系统】员工会话连续 ${input.streak} 轮报错，已停止自动续跑，请人工介入：${roleText}（会话 ID：${input.sessionId}）。最近错误摘要：${input.summary || '（无详情）'}`,
-          `127.0.0.1:${incidentDeps.getServerPort()}`,
-        )
-      }
+      incidentDeps.recordEvent({
+        type: 'servant_turn_error_escalated',
+        severity: 'warn',
+        summary: `员工会话连续 ${input.streak} 轮报错，已停止自动续跑：${
+          entry.role ? `${entry.role}（${entry.description || '未填写特性'}）` : '未命名角色'
+        }`,
+        sessionId: input.sessionId,
+        details: {
+          sessionId: input.sessionId,
+          streak: input.streak,
+          summary: input.summary,
+        },
+      })
     }
     return
   }
@@ -235,21 +251,27 @@ export async function onServantToolResult(input: {
     return false
   }
 
+  // 中断是功能动作，保留（不是通知）。
   incidentDeps.interrupt(input.sessionId)
 
-  // 同一次连续窗口内只通知一次，避免每多调一次就再吵一次主管
+  // 同一次连续窗口内只记一次诊断，避免刷屏
   if (unknownToolTripped.has(input.sessionId)) return true
   unknownToolTripped.add(input.sessionId)
 
-  const supervisor = all.find((s) => s.supervisor && s.sessionId !== input.sessionId)
-  if (!supervisor) return true
-
   const roleText = entry.role ? `${entry.role}（${entry.description || '未填写特性'}）` : '未命名角色'
   const toolText = extractUnknownToolName(input.resultText)
-  await incidentDeps.deliver(
-    supervisor.sessionId,
-    `【系统】员工会话连续 ${streak} 次调用不存在的工具「${toolText}」，已自动中断该轮次（会话与历史保留）：${roleText}（会话 ID：${input.sessionId}）。`,
-    `127.0.0.1:${incidentDeps.getServerPort()}`,
-  )
+  // v1.2.3 用户规则：这类系统通知不进对话流（客户看到也不能干啥），降为日志级。
+  incidentDeps.recordEvent({
+    type: 'servant_unknown_tool_circuit',
+    severity: 'warn',
+    summary: `员工会话连续 ${streak} 次调用不存在的工具「${toolText}」，已自动中断该轮次：${roleText}`,
+    sessionId: input.sessionId,
+    details: {
+      sessionId: input.sessionId,
+      toolName: toolText,
+      streak,
+      action: 'interrupt-turn',
+    },
+  })
   return true
 }

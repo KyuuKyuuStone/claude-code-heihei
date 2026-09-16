@@ -18,6 +18,7 @@ import { sessionService } from '../services/sessionService.js'
 import { collabEnvironmentService } from '../services/collabEnvironmentService.js'
 import { dispatchMailboxService } from '../services/dispatchMailboxService.js'
 import { forgetReceipt, getReceipt, listReceipts, recordDelivery } from '../services/dispatchReceiptService.js'
+import { diagnosticsService } from '../services/diagnosticsService.js'
 import {
   DISPATCH_PROTOCOL_MD,
   WORK_ORCHESTRATOR_SKILL_NAME,
@@ -98,7 +99,7 @@ export async function handleServantsApi(
               error,
             )
           })
-        void notifySupervisorOfNewWorker(entry, host)
+        void notifySupervisorOfNewWorker(entry)
       }
       // 花名册变化后收敛文件信箱监听目录（新增/移除员工的项目）
       void dispatchMailboxService.sync()
@@ -397,35 +398,37 @@ function buildWorkerOrientation(
   ].join('\n')
 }
 
+/**
+ * 员工登记的记录（v1.2.3 用户规则：系统通知不进对话流）。
+ *
+ * 原先这里会向主管注入一条「新员工已加入本项目」。用户拍板：对话流只放"需要人响应/
+ * 决策"的消息（员工汇报），这类登记属于维护可查的系统事件 → 降为诊断事件。
+ * 关键字段（sessionId / role / description / workDir）全部落到诊断里，
+ * 排查"为什么花名册里看不到某员工"时照样能看（含项目隔离导致的情况）。
+ */
 async function notifySupervisorOfNewWorker(
   entry: { sessionId: string; role?: string; description?: string },
-  host: string,
 ): Promise<void> {
-  try {
-    const all = await servantService.listServants({
-      includeAll: true,
-      forSessionId: entry.sessionId,
+  const roleText = entry.role
+    ? `${entry.role}（${entry.description || '未填写特性'}）`
+    : '未命名角色'
+  // 附上 workDir：花名册按项目隔离过滤，若查不到这位员工，
+  // 一眼能核对是不是工作目录不同（而不是登记丢失）
+  const workDir = await sessionService
+    .getSessionWorkDir(entry.sessionId)
+    .catch(() => null)
+  void diagnosticsService
+    .recordEvent({
+      type: 'servant_registered',
+      severity: 'info',
+      summary: `新员工已登记：${roleText}`,
+      sessionId: entry.sessionId,
+      details: {
+        sessionId: entry.sessionId,
+        role: entry.role,
+        description: entry.description,
+        workDir,
+      },
     })
-    const supervisor = all.find((s) => s.supervisor)
-    if (!supervisor || supervisor.sessionId === entry.sessionId) return
-
-    const roleText = entry.role
-      ? `${entry.role}（${entry.description || '未填写特性'}）`
-      : '未命名角色'
-    // 附上 sessionId 与 workDir：花名册按项目隔离过滤，若主管查不到这位员工，
-    // 一眼能核对是不是工作目录不同（而不是登记丢失）
-    const workDir = await sessionService
-      .getSessionWorkDir(entry.sessionId)
-      .catch(() => null)
-    await sessionMessenger.deliver(
-      supervisor.sessionId,
-      `【系统】新员工已加入本项目：${roleText}。会话 ID：${entry.sessionId}${workDir ? `，工作目录：${workDir}` : ''}。花名册已更新，你现在可以给这位员工派活了；若花名册里查不到它，多半是其工作目录与你的项目不同（项目隔离），而非登记丢失。`,
-      host,
-    )
-  } catch (error) {
-    console.error(
-      `[Servants] Failed to notify supervisor about new worker ${entry.sessionId}:`,
-      error,
-    )
-  }
+    .catch(() => {})
 }

@@ -15,7 +15,7 @@
  */
 
 import { diagnosticsService } from './diagnosticsService.js'
-import { isSessionTurnInProgress } from './dispatchReceiptService.js'
+import { countUnconsumedReceipts, isSessionTurnInProgress } from './dispatchReceiptService.js'
 import { servantService } from './servantService.js'
 import { sessionMessenger } from './sessionMessenger.js'
 import { ProviderService } from './providerService.js'
@@ -55,6 +55,8 @@ export type ServantStallWatcherDeps = {
   now: () => number
   /** 该会话是否处于「回合进行中」（假死判定只用它，见 isSessionTurnInProgress） */
   isTurnInProgress: (sessionId: string) => boolean
+  /** 该会话还有多少条未被消费的派活（0 = 没有悬着的活，见 countUnconsumedReceipts） */
+  countUnconsumedDispatches: (sessionId: string) => number
 }
 
 const defaultDeps: ServantStallWatcherDeps = {
@@ -67,6 +69,7 @@ const defaultDeps: ServantStallWatcherDeps = {
   },
   now: () => Date.now(),
   isTurnInProgress: (sessionId) => isSessionTurnInProgress(sessionId),
+  countUnconsumedDispatches: (sessionId) => countUnconsumedReceipts(sessionId),
 }
 
 export class ServantStallWatcher {
@@ -75,6 +78,8 @@ export class ServantStallWatcher {
   private stallStates = new Map<string, StallState>()
   /** sessionId → 已告警过的「无运行进程」episode 的活动时间戳（同一 episode 只告警一次） */
   private noProcessAlertedAt = new Map<string, number>()
+  /** sessionId → 已记过「正常闲置」的 episode 活动时间戳（同一 episode 只记一次，避免 60s 一条的日志噪音） */
+  private noProcessSkippedAt = new Map<string, number>()
 
   constructor(private deps: ServantStallWatcherDeps = defaultDeps) {}
 
@@ -87,6 +92,7 @@ export class ServantStallWatcher {
   resetState(): void {
     this.stallStates.clear()
     this.noProcessAlertedAt.clear()
+    this.noProcessSkippedAt.clear()
   }
 
   start(): void {
@@ -148,6 +154,7 @@ export class ServantStallWatcher {
       if (servant.supervisor) {
         this.stallStates.delete(key)
         this.noProcessAlertedAt.delete(key)
+        this.noProcessSkippedAt.delete(key)
         continue
       }
 
@@ -171,6 +178,7 @@ export class ServantStallWatcher {
         // 有活动 = 恢复正常，重置该 episode
         this.stallStates.delete(key)
         this.noProcessAlertedAt.delete(key)
+        this.noProcessSkippedAt.delete(key)
         continue
       }
 
@@ -251,11 +259,17 @@ export class ServantStallWatcher {
   }
 
   /**
-   * 进程不在了（running=false）但会话长时间无活动：只告警，不自动拉起。
+   * 进程不在了（running=false）且长时间无活动：**只在"有活悬着"时**提醒主管。
    *
    * 为什么不自动拉起：投递通道 `sessionMessenger.deliver()` 对未运行会话会
    * `startSession()`（`sessionMessenger.ts:40-73`），等于替用户做"自动重开会话"的
-   * 决定——一期口径是保守的，交给主管手动唤醒/重新派活（自动拉起列二期选项）。
+   * 决定——口径保守，交给主管手动唤醒/重新派活（自动拉起列二期选项）。
+   *
+   * 为什么要收紧条件（v1.2.2 用户反馈）：员工干完活、进程回收后**正常闲置**是常态，
+   * 旧实现一律告警，还把常态渲染成"假死 / 不会自愈"，用户看到会以为产品坏了
+   * （「让客户看见会以为有问题」）。现在只有该会话**还有未被消费的派活**（活悬着、
+   * 没人接）才提醒——这时主管确实需要动作；无悬置派活 = 不向任何会话发消息
+   * （侧边栏状态灯已有"未运行"态，够用了）。
    */
   private async alertNoProcess(
     servant: StallServantInfo,
@@ -263,40 +277,42 @@ export class ServantStallWatcher {
     lastActivityMs: number,
   ): Promise<void> {
     const key = servant.sessionId
+
+    const pendingDispatches = this.deps.countUnconsumedDispatches(key)
+    if (pendingDispatches === 0) {
+      // 正常闲置：不发任何消息，只留一条诊断（便于"为什么没提醒"可自证）。
+      // 同一 episode 只记一次——否则每 60s 扫描都会写一条 info，纯噪音。
+      // 注意用独立的去重表：不能借用 noProcessAlertedAt，否则同 episode 里
+      // 后来出现的"有悬置派活"会被这条 dedupe 键吃掉而漏记。
+      if (this.noProcessSkippedAt.get(key) !== lastActivityMs) {
+        this.noProcessSkippedAt.set(key, lastActivityMs)
+        this.report(
+          'info',
+          'skip-idle-no-dispatch',
+          `会话未运行且长时间无活动，但没有未被消费的派活（正常闲置，不打扰）：${servant.role ? `${servant.role}（${servant.title}）` : servant.title}`,
+          key,
+          { staleForMs, running: false, pendingDispatches: 0 },
+        )
+      }
+      return
+    }
+
+    // episode 去重只在"真的要发"时才记：否则同一 episode 里后来的新派活会被漏掉
     if (this.noProcessAlertedAt.get(key) === lastActivityMs) return
     this.noProcessAlertedAt.set(key, lastActivityMs)
 
-    const all = await this.listSafely(servant.sessionId)
-    const supervisor = all.find((s) => s.supervisor && s.sessionId !== servant.sessionId)
-
     const roleText = servant.role ? `${servant.role}（${servant.title}）` : servant.title
+    const idleMinutes = Math.round(staleForMs / 60_000)
+    // v1.2.3 用户规则：系统通知不进对话流（"客户看到也不能干啥，就是 LOG 级别的东西"）。
+    // 这里只写诊断；可行动与否决定级别——有悬置派活 = warn（维护/排查时值得看），
+    // 无悬置的正常闲置走上面的 info（skip-idle-no-dispatch）。
     this.report(
       'warn',
       'no-process-alert',
-      `员工会话已无运行进程且 ${Math.round(staleForMs / 60_000)} 分钟无活动，不会自愈：${roleText}（会话 ID：${servant.sessionId}）`,
-      servant.sessionId,
-      { staleForMs, running: false },
+      `会话未运行且有 ${pendingDispatches} 条派活未被消费（闲置 ${idleMinutes} 分钟）：${roleText}（会话 ID：${key}）`,
+      key,
+      { staleForMs, running: false, pendingDispatches, idleMinutes },
     )
-
-    if (!supervisor) return
-    await this.tryDeliver(
-      supervisor.sessionId,
-      `【系统】员工会话假死且**已无运行进程**：${roleText}（会话 ID：${servant.sessionId}）已 ${Math.round(staleForMs / 60_000)} 分钟无活动（running=false，staleForMs=${staleForMs}）。这类会话不会自愈，自动重推对其无效。建议手动唤醒：向该会话注入一条消息（投递通道会自动重新拉起会话），或直接重新派活；若已不需要，请在花名册里禁用它。`,
-    )
-  }
-
-  private async listSafely(forSessionId: string): Promise<StallServantInfo[]> {
-    try {
-      return await this.deps.listServants({ includeAll: true, forSessionId })
-    } catch (error) {
-      this.report(
-        'warn',
-        'roster-read-failed',
-        `读取花名册（用于找回主管）失败：${describeError(error)}`,
-        forSessionId,
-      )
-      return []
-    }
   }
 
   private async tryDeliver(targetSessionId: string, content: string): Promise<boolean> {
@@ -317,21 +333,15 @@ export class ServantStallWatcher {
     }
   }
 
+  /** 重推用尽后的升级：v1.2.3 起只写诊断，不再向主管注入会话消息 */
   private async notifySupervisor(servant: StallServantInfo, staleForMs: number): Promise<void> {
-    const all = await this.listSafely(servant.sessionId)
-    const supervisor = all.find((s) => s.supervisor && s.sessionId !== servant.sessionId)
     const roleText = servant.role ? `${servant.role}（${servant.title}）` : servant.title
     this.report(
       'warn',
       'escalate',
-      `假死自动重推 ${MAX_AUTO_REPUSH} 次无效，升级主管：${roleText}（会话 ID：${servant.sessionId}）`,
+      `自动重推 ${MAX_AUTO_REPUSH} 次未见响应，升级：${roleText}（会话 ID：${servant.sessionId}）`,
       servant.sessionId,
-      { staleForMs, running: true },
-    )
-    if (!supervisor) return
-    await this.tryDeliver(
-      supervisor.sessionId,
-      `【系统】员工会话假死未恢复：${roleText}（会话 ID：${servant.sessionId}）已 ${Math.round(staleForMs / 60_000)} 分钟无活动，自动重推 ${MAX_AUTO_REPUSH} 次无效。建议人工介入：检查该会话现场，或 POST /api/sessions/${servant.sessionId}/interrupt 后重新派活。`,
+      { staleForMs, running: true, nudges: MAX_AUTO_REPUSH },
     )
   }
 }

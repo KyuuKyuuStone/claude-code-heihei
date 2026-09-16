@@ -37,6 +37,13 @@ const listServantsMock = mock(async (_options: { includeAll: boolean; forSession
   enabled: boolean
 }>)
 const interruptMock = mock((_sessionId: string) => {})
+const recordEventMock = mock((_input: {
+  type: string
+  severity?: 'info' | 'warn' | 'error'
+  summary: string
+  sessionId?: string
+  details?: unknown
+}) => {})
 
 /** toolExecution.ts:401 真正产出的文本形状 */
 const unknownToolResult = (toolName: string) =>
@@ -62,6 +69,7 @@ beforeEach(async () => {
   getServantMock.mockClear()
   listServantsMock.mockClear()
   interruptMock.mockClear()
+  recordEventMock.mockClear()
   deliverMock.mockImplementation(async () => true)
   getServantMock.mockImplementation(async () => null)
   listServantsMock.mockImplementation(async () => [])
@@ -71,6 +79,7 @@ beforeEach(async () => {
     listServants: listServantsMock,
     getServerPort: () => 61694,
     interrupt: interruptMock,
+    recordEvent: recordEventMock,
   })
   resetServantIncidentState()
 })
@@ -110,7 +119,7 @@ describe('onServantToolResult', () => {
     expect(interruptMock).not.toHaveBeenCalled()
     expect(deliverMock).not.toHaveBeenCalled()
 
-    // 达到阈值：中断该轮次 + 通知主管（一次）
+    // 达到阈值：中断该轮次（功能动作保留）+ 记一条诊断（不再注入主管会话）
     const tripped = await onServantToolResult({
       sessionId: 'emp-1',
       resultText: unknownToolResult('NoSuchTool'),
@@ -119,21 +128,28 @@ describe('onServantToolResult', () => {
     expect(tripped).toBe(true)
     expect(interruptMock).toHaveBeenCalledTimes(1)
     expect(interruptMock.mock.calls[0][0]).toBe('emp-1')
-    expect(deliverMock).toHaveBeenCalledTimes(1)
-    expect(deliverMock.mock.calls[0][0]).toBe('sup-1')
-    const notice = String(deliverMock.mock.calls[0][1])
-    expect(notice).toContain('NoSuchTool')
-    expect(notice).toContain(`连续 ${UNKNOWN_TOOL_STREAK_LIMIT} 次`)
-    expect(notice).toContain('emp-1')
+    expect(deliverMock).not.toHaveBeenCalled()
+    expect(recordEventMock).toHaveBeenCalledTimes(1)
+    const event = recordEventMock.mock.calls[0][0]
+    expect(event.type).toBe('servant_unknown_tool_circuit')
+    expect(event.severity).toBe('warn')
+    expect(event.sessionId).toBe('emp-1')
+    expect(event.summary).toContain('NoSuchTool')
+    expect(event.summary).toContain(`连续 ${UNKNOWN_TOOL_STREAK_LIMIT} 次`)
+    expect(event.details).toMatchObject({
+      sessionId: 'emp-1',
+      toolName: 'NoSuchTool',
+      streak: UNKNOWN_TOOL_STREAK_LIMIT,
+    })
 
-    // 同一连续窗口内继续调用：仍会中断，但不再重复吵主管
+    // 同一连续窗口内继续调用：仍会中断，但不再重复记诊断
     await onServantToolResult({
       sessionId: 'emp-1',
       resultText: unknownToolResult('NoSuchTool'),
       isError: true,
     })
     expect(interruptMock).toHaveBeenCalledTimes(2)
-    expect(deliverMock).toHaveBeenCalledTimes(1)
+    expect(recordEventMock).toHaveBeenCalledTimes(1)
   })
 
   test('a successful tool call resets the streak', async () => {
@@ -204,7 +220,7 @@ describe('onServantToolResult', () => {
     expect(deliverMock).not.toHaveBeenCalled()
   })
 
-  test('trips without notifying when the roster has no supervisor', async () => {
+  test('trips and records a diagnostic even when the roster has no supervisor', async () => {
     enableServant('emp-1')
     listServantsMock.mockImplementation(async () => [
       { sessionId: 'emp-1', supervisor: false, enabled: true },
@@ -214,6 +230,7 @@ describe('onServantToolResult', () => {
       await onServantToolResult({ sessionId: 'emp-1', resultText: unknownToolResult('X'), isError: true })
     }
     expect(interruptMock).toHaveBeenCalledTimes(1)
+    expect(recordEventMock).toHaveBeenCalledTimes(1)
     expect(deliverMock).not.toHaveBeenCalled()
   })
 })
