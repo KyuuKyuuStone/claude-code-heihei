@@ -798,7 +798,10 @@ describe('DiagnosticsService', () => {
 
     expect((await service.readRecentEvents()).map((event) => event.type)).toEqual(['fresh'])
     await expect(fs.stat(service.getDiagnosticsPath())).resolves.toBeTruthy()
-  })
+    // 该用例构造 51MB 字符串 + 写盘 + 强制压缩，CI Windows runner 首跑实测 6975ms，击穿
+    // 5000ms 默认超时导致 Server gate 变红（本地 38/38 全绿）。给足余量，断言不弱化。
+    // 先例：v1.1.0 的 stderr 可见性用例同样按此方式补超时。
+  }, 30_000)
 
   test('serializes concurrent writes with forced compaction so neither event is lost', async () => {
     const service = new DiagnosticsService()

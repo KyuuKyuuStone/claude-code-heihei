@@ -55,6 +55,44 @@ import { StreamWatchdogTimeoutError } from './streamWatchdog.js'
 
 export const API_ERROR_MESSAGE_PREFIX = 'API Error'
 
+/**
+ * 从 429 的原始错误文本里抠出可读细节与重置时间。
+ *
+ * SDK 的 `APIError.makeMessage` 会前置 "429 " 并把响应体 JSON 化，第三方 provider 的
+ * 原文藏在 `"message"` 字段里。智谱实测样例：
+ *   `429 {"type":"error","error":{"type":"rate_limit_error","code":"1308",
+ *     "message":"[1308][已达到 5 小时的使用上限。您的限额将在 2026-09-16 13:42:53 重置。][2026…]"}}`
+ */
+export function extractQuotaExhaustedDetail(rawMessage: string): {
+  detail: string
+  resetsAt: string | null
+} {
+  const stripped = rawMessage.replace(/^429\s+/, '')
+  const inner = stripped.match(/"message"\s*:\s*"([^"]*)"/)?.[1]
+  const detail = (inner || stripped).trim()
+  const resetMatch =
+    detail.match(/(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?)/) ??
+    detail.match(/(?:将在|恢复时间|reset(?:s)?\s*(?:at|on))\s*([^，。;；\]]+)/i)
+  const resetsAt = resetMatch?.[1]?.trim()
+  return { detail, resetsAt: resetsAt ? resetsAt : null }
+}
+
+/**
+ * 429（额度耗尽 / 限流）的用户可见文案。
+ *
+ * 契约：**任何情况下都不能返回空串**——这类错误以前是静默的，用户只能看到"停止输出"。
+ * 有重置时间就给明确恢复时刻；没有就给降级文案（明确告知"解析不到重置时间"并给出替代动作）。
+ */
+export function buildQuotaExhaustedMessage(rawMessage: string): string {
+  const { detail, resetsAt } = extractQuotaExhaustedDetail(rawMessage || '')
+  const head = `${API_ERROR_MESSAGE_PREFIX}: ${
+    detail || '请求被拒绝（429）——额度已耗尽或触发限流。'
+  }`
+  return resetsAt
+    ? `${head}\n额度预计于 ${resetsAt} 重置；在此之前重试仍会失败，请等待恢复，或改用其他 provider / 模型。`
+    : `${head}\n未能从响应中解析出重置时间；请稍后重试，或改用其他 provider / 模型。`
+}
+
 export function startsWithApiErrorPrefix(text: string): boolean {
   return (
     text.startsWith(API_ERROR_MESSAGE_PREFIX) ||
@@ -620,6 +658,19 @@ export function getAssistantMessageFromError(
     const detail = innerMessage || stripped
     return createAssistantAPIErrorMessage({
       content: `${API_ERROR_MESSAGE_PREFIX}: Request rejected (429) · ${detail || 'this may be a temporary capacity issue — check status.anthropic.com'}`,
+      error: 'rate_limit',
+    })
+  }
+
+  // 非 Claude AI 订阅者走不到上面的配额分支：`shouldProcessRateLimits(isClaudeAISubscriber())`
+  // 对第三方 provider（智谱 / DeepSeek / OpenAI 兼容端点…）恒为 false，整块 429 处理被跳过，
+  // 429 就静默落空——用户只看到"突然停止输出、无报错"（2026-09-16 实战：智谱 code 1308
+  // 五小时配额耗尽，后端会话静默 17 分钟；见《批次2_会话冻结根因调查报告》P0-①）。
+  // 这里统一兜底：任何 429 都变成一条用户可见的会话消息，带上 provider 原文与能解析出的
+  // 重置时间——没有重置时间时给降级文案，绝不静默。
+  if (error instanceof APIError && error.status === 429) {
+    return createAssistantAPIErrorMessage({
+      content: buildQuotaExhaustedMessage(error.message),
       error: 'rate_limit',
     })
   }

@@ -82,6 +82,12 @@ const MAX_DIAGNOSTICS_BYTES = 20 * 1024 * 1024
 const MAX_AUXILIARY_LOG_BYTES = 5 * 1024 * 1024
 const MAX_CLI_COMPLETED_SEGMENTS_BYTES = 5 * 1024 * 1024
 const MAX_EXPORT_DIRECTORY_BYTES = 14 * 1024 * 1024
+/**
+ * 降级旁路文件（`diagnostics-fallback-<日期>.jsonl` / `runtime-errors-fallback-<日期>.log`）
+ * 每类最多保留的个数。与 RETENTION_DAYS 同日数：正常一天一个，7 个刚好覆盖保留窗口；
+ * 多出的（例如 mtime 被刷新过、日期比窗口更早的残留）按最旧优先删掉，避免目录缓慢堆积。
+ */
+const MAX_FALLBACK_FILES = 7
 const MAX_SHARED_EVENTS = 5_000
 const MAX_ISSUE_REPORT_EVENTS = 100
 const MAX_STRING_LENGTH = 4096
@@ -93,6 +99,12 @@ const TRUNCATED_OLDER_CONTENT_MARKER = '[TRUNCATED OLDER CONTENT]\n'
 const SENSITIVE_KEY_RE = /(api[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|session[_-]?token|\btoken\b|secret|password|authorization|cookie|oauth)/i
 
 export class DiagnosticsService {
+  /**
+   * 时钟依赖（可注入，测试用）：保留策略的时间基准。
+   * 默认 `Date.now`，生产行为不变。
+   */
+  constructor(private readonly clock: () => number = Date.now) {}
+
   private consoleCaptureInstalled = false
   private processCaptureInstalled = false
   private originalConsoleError: typeof console.error | null = null
@@ -952,13 +964,13 @@ export class DiagnosticsService {
 
   private async enforceRetention(force = false, compactStructured = true): Promise<void> {
     const diagnosticsPath = this.getDiagnosticsPath()
-    const cutoff = Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000
+    const now = this.clock()
+    const cutoff = now - RETENTION_DAYS * 24 * 60 * 60 * 1000
     const stat = await fs.stat(diagnosticsPath).catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') return null
       throw error
     })
     const forceCompaction = (stat?.size ?? 0) > MAX_DIAGNOSTICS_BYTES
-    const now = Date.now()
     if (!force && !forceCompaction && now - this.lastRetentionSweepAt < RETENTION_SWEEP_INTERVAL_MS) return
     if (stat) {
       const scan = await this.scanDiagnosticsFile()
@@ -986,7 +998,48 @@ export class DiagnosticsService {
       this.enforceCliCompletedSegmentRetention(cutoff),
     ])
     await this.enforceExportRetention(cutoff)
+    await this.enforceFallbackRetention(cutoff)
     this.lastRetentionSweepAt = now
+  }
+
+  /**
+   * 降级旁路文件保留策略：**天数（沿用 RETENTION_DAYS）+ 每类个数（MAX_FALLBACK_FILES）**。
+   *
+   * 为什么也要个数上限：天数窗口靠 mtime 判断，而旁路文件是按"写入当天"命名的——
+   * 只要有一天主文件被锁、旁路被写入，那天就留下一个文件；窗口内有 7 天 → 最多 7 个。
+   * 若 mtime 被外部刷新（备份/同步还原）或命名日期与 mtime 不一致，天数判断会失效，
+   * 个数上限就是兜底，保证目录不会缓慢堆积（交接文档 P2 条目）。
+   *
+   * 只处理本目录下的旁路文件，**不动**：主文件（diagnostics.jsonl / runtime-errors.log）、
+   * CLI 分段、electron-host.log、exports 子目录，以及**当天**的旁路文件（它可能正是当前
+   * 降级写入的目标，即使 mtime 异常也不能删）。
+   */
+  private async enforceFallbackRetention(cutoff: number): Promise<void> {
+    const logDir = this.getLogDir()
+    const fallbackPrefixes = ['diagnostics-fallback-', 'runtime-errors-fallback-'] as const
+    const files = await this.listFiles(logDir)
+
+    for (const prefix of fallbackPrefixes) {
+      const today = new Date(this.clock()).toISOString().slice(0, 10)
+      const todayNames = new Set([`${prefix}${today}.jsonl`, `${prefix}${today}.log`])
+      // 最旧 → 最新
+      const candidates = files
+        .filter((file) => path.dirname(file.path) === logDir)
+        .filter((file) => path.basename(file.path).startsWith(prefix))
+        .filter((file) => !todayNames.has(path.basename(file.path)))
+        .sort((left, right) => left.mtimeMs - right.mtimeMs)
+
+      let kept = 0
+      // 从最新往回数：窗口内且未超个数上限的保留，其余删除
+      for (let index = candidates.length - 1; index >= 0; index -= 1) {
+        const file = candidates[index]!
+        if (file.mtimeMs >= cutoff && kept < MAX_FALLBACK_FILES) {
+          kept += 1
+          continue
+        }
+        await fs.rm(file.path, { force: true })
+      }
+    }
   }
 
   private async readPersistedCorruptLineCount(

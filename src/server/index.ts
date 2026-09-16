@@ -40,16 +40,8 @@ import { H5AccessService } from './services/h5AccessService.js'
 import { refreshDisconnectGraceMs } from './ws/disconnectGraceConfig.js'
 import {
   hasConfiguredLocalAccessToken,
-  hasConfiguredPetAccessToken,
   isLocalAccessAuthorized,
-  isPetAccessAuthorized,
 } from './localAccessAuth.js'
-import {
-  getPetScopedSessionId,
-  isPetHttpRequestAllowed,
-  isPetSessionInProjection,
-  PET_SESSION_LIMIT,
-} from './petAccessPolicy.js'
 import { settleResponseOnRequestAbort } from './requestLifecycle.js'
 
 /**
@@ -221,6 +213,17 @@ export function startServer(port = PORT, host = HOST) {
   if (process.env.NODE_ENV !== 'test') {
     diagnosticsService.installConsoleCapture()
     diagnosticsService.installProcessCapture()
+    // 启动锚点：让"诊断日志到底还在不在写"这件事在生产可自证——此前日志只在
+    // warn/error 时才写，安静期看起来和"写坏了"完全一样（2026-09-14 之后
+    // diagnostics.jsonl 停写两日的排查就卡在这里）。
+    void diagnosticsService
+      .recordEvent({
+        type: 'server_started',
+        severity: 'info',
+        summary: `服务端启动：port=${port} pid=${process.pid} platform=${process.platform}`,
+        details: { port, pid: process.pid, platform: process.platform },
+      })
+      .catch(() => {})
   }
   let serverPort = port
   const localConnectHost =
@@ -271,49 +274,14 @@ export function startServer(port = PORT, host = HOST) {
         const origin = req.headers.get('Origin')
         const clientAddress = server.requestIP(req)?.address ?? null
         const localTokenOverride = url.searchParams.get('localToken') ?? url.searchParams.get('token')
-        // Browser WebSockets cannot set Authorization headers. Keep the pet
-        // query-token exception scoped to /ws; REST pet access remains bearer-only.
-        const petTokenOverride = url.pathname.startsWith('/ws/')
-          ? url.searchParams.get('token')
-          : null
-        const petAccessAuthorized = isPetAccessAuthorized(req, petTokenOverride)
-        if (petAccessAuthorized && !isPetHttpRequestAllowed(req, url)) {
-          return Response.json(
-            {
-              error: 'Forbidden',
-              message: 'The pet token cannot access this capability.',
-            },
-            { status: 403 },
-          )
-        }
-        const petScopedSessionId = petAccessAuthorized
-          ? getPetScopedSessionId(url.pathname)
-          : null
-        if (petScopedSessionId) {
-          const projection = await sessionService.listSessions({
-            limit: PET_SESSION_LIMIT,
-            offset: 0,
-          })
-          if (!isPetSessionInProjection(petScopedSessionId, projection.sessions)) {
-            return Response.json(
-              {
-                error: 'Forbidden',
-                message: 'The pet token cannot access this session.',
-              },
-              { status: 403 },
-            )
-          }
-        }
         const sdkSessionId = url.pathname.startsWith('/sdk/')
           ? url.pathname.split('/').pop() || ''
           : ''
         const sdkToken = url.searchParams.get('token')
         const h5RequestContext = {
           clientAddress,
-          localAccessTokenConfigured:
-            hasConfiguredLocalAccessToken() || hasConfiguredPetAccessToken(),
-          localAccessAuthorized:
-            isLocalAccessAuthorized(req, localTokenOverride) || petAccessAuthorized,
+          localAccessTokenConfigured: hasConfiguredLocalAccessToken(),
+          localAccessAuthorized: isLocalAccessAuthorized(req, localTokenOverride),
           internalSdkAuthorized: Boolean(
             sdkSessionId && sdkToken && conversationService.authorizeSdkConnection(sdkSessionId, sdkToken),
           ),
@@ -364,12 +332,12 @@ export function startServer(port = PORT, host = HOST) {
           }
 
           // Enforce authentication when required
-          if (!petAccessAuthorized && authRequired) {
+          if (authRequired) {
             const authError = await requireH5Token(req, url.searchParams.get('token'))
             if (authError) {
               return withCors(authError, cors)
             }
-          } else if (!petAccessAuthorized && forceAuth) {
+          } else if (forceAuth) {
             const authError = await requireAuth(req, url.searchParams.get('token'))
             if (authError) {
               return withCors(authError, cors)
@@ -386,7 +354,6 @@ export function startServer(port = PORT, host = HOST) {
               sessionId,
               connectedAt: Date.now(),
               channel: 'client',
-              clientKind: petAccessAuthorized ? 'pet' : 'full',
               sdkToken: null,
               serverPort,
               serverHost: localConnectHost,
@@ -422,7 +389,6 @@ export function startServer(port = PORT, host = HOST) {
               sessionId,
               connectedAt: Date.now(),
               channel: 'sdk',
-              clientKind: 'full',
               sdkToken: url.searchParams.get('token'),
               serverPort,
               serverHost: localConnectHost,
@@ -503,12 +469,12 @@ export function startServer(port = PORT, host = HOST) {
           }
 
           // Enforce authentication when required
-          if (!petAccessAuthorized && authRequired) {
+          if (authRequired) {
             const authError = await requireH5Token(req)
             if (authError) {
               return withCors(authError, cors)
             }
-          } else if (!petAccessAuthorized && forceAuth) {
+          } else if (forceAuth) {
             const authError = await requireAuth(req)
             if (authError) {
               return withCors(authError, cors)
@@ -615,9 +581,17 @@ export function startServer(port = PORT, host = HOST) {
       mod.servantStallWatcher.start()
     })
     .catch((error) => {
-      console.warn(
-        `[Server] servant stall watcher failed to start: ${error instanceof Error ? error.message : String(error)}`,
-      )
+      const message = error instanceof Error ? error.message : String(error)
+      // 启动失败必须留痕（诊断事件），否则"假死重推从未生效"这类问题现场无迹可查。
+      console.error(`[Server] servant stall watcher failed to start: ${message}`)
+      void diagnosticsService
+        .recordEvent({
+          type: 'servant_stall',
+          severity: 'error',
+          summary: `假死重推 watcher 启动失败：${message}`,
+          details: { action: 'watcher-start-failed' },
+        })
+        .catch(() => {})
     })
 
   // One-time protocol update notice for already-registered supervisors:

@@ -8,7 +8,19 @@ type DiagnosticLogEntry = {
   timestamp: string
   level: DiagnosticLogLevel
   event: string
+  /**
+   * 会话归属。CLI 进程由服务端拉起时带 `CC_HEIHEI_SESSION_ID`，这里随每条记录落地——
+   * 否则 cli-diagnostics 只有 PID，调查时无法按会话归因（《批次2_会话冻结根因调查报告》
+   * §2.6 盲区清单）。文件名保持 `<base>.<pid>.current.jsonl` 不变（服务端回收策略依赖该形状）。
+   */
+  sessionId?: string
   data: Record<string, unknown>
+}
+
+/** 当前 CLI 进程所属会话（服务端注入；独立运行时为空） */
+function currentDiagnosticsSessionId(): string | undefined {
+  const value = process.env.CC_HEIHEI_SESSION_ID?.trim()
+  return value ? value : undefined
 }
 
 const MAX_SEGMENT_BYTES = 1024 * 1024
@@ -38,10 +50,12 @@ export function logForDiagnosticsNoPII(
     return
   }
 
+  const sessionId = currentDiagnosticsSessionId()
   const entry: DiagnosticLogEntry = {
     timestamp: new Date().toISOString(),
     level,
     event,
+    ...(sessionId ? { sessionId } : {}),
     data: data ?? {},
   }
 
