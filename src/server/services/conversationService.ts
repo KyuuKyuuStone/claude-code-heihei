@@ -55,6 +55,7 @@ import {
   type NetworkSettings,
 } from './networkSettings.js'
 import { readTraceCaptureSettings } from './traceCaptureService.js'
+import { observeSessionSdkMessage } from './dispatchReceiptService.js'
 import { logError } from '../../utils/log.js'
 import {
   createImageMetadataText,
@@ -1025,6 +1026,8 @@ export class ConversationService {
         }
         // 员工会话工具可用性观察：连续调用不存在的工具达阈值 → 中断该轮次并通知主管。
         this.observeServantToolResults(sessionId, msg)
+        // 派活消费回执：按回合边界推进「投递成功 ≠ 已消费」的状态（纯内存查表，无副作用）。
+        observeSessionSdkMessage(sessionId, msg?.type)
         const sdkError = this.extractSdkErrorEvent(msg)
         if (sdkError) {
           void diagnosticsService.recordEvent({

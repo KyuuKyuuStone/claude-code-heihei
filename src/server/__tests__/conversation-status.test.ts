@@ -27,14 +27,10 @@ async function getStatus(sessionId: string): Promise<string> {
   return body.activityState
 }
 
-function makeClientSocket(
-  sessionId: string,
-  clientKind: WebSocketData['clientKind'] = 'full',
-): ServerWebSocket<WebSocketData> {
+function makeClientSocket(sessionId: string): ServerWebSocket<WebSocketData> {
   return {
     data: {
       sessionId,
-      clientKind,
       connectedAt: Date.now(),
       channel: 'client',
       sdkToken: null,
@@ -128,11 +124,11 @@ describe('read-only session chat activity status', () => {
     expect(await getStatus(sessionId)).toBe('running')
   })
 
-  it('keeps a successful completed turn idle when the last full client closes', async () => {
+  it('keeps a successful completed turn idle when the last client closes', async () => {
     const sessionId = `status-review-close-${crypto.randomUUID()}`
-    const pet = makeClientSocket(sessionId, 'pet')
+    const other = makeClientSocket(sessionId)
     const ws = makeClientSocket(sessionId)
-    handleWebSocket.open(pet)
+    handleWebSocket.open(other)
     handleWebSocket.open(ws)
     __markActiveTurnForTests(sessionId)
     __settleActiveTurnForTests(sessionId, {
