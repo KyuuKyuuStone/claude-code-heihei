@@ -203,6 +203,85 @@ describe('ServantService', () => {
     const launchInfo = await sessionService.getSessionLaunchInfo(sessionId)
     expect(launchInfo.effortLevel).toBeUndefined()
   })
+
+  // ─── whitelist 约束档（A3）─────────────────────────────────────────────────
+
+  it('should reject an unsupported constraint value', async () => {
+    await expect(
+      service.setServant(sessionId, { enabled: true, constraint: 'sandbox' as 'readonly' }),
+    ).rejects.toThrow('constraint')
+  })
+
+  it('should reject whitelist without writeDirs', async () => {
+    await expect(
+      service.setServant(sessionId, { enabled: true, constraint: 'whitelist' }),
+    ).rejects.toThrow('at least one write directory')
+  })
+
+  it('should reject whitelist with an empty writeDirs array', async () => {
+    await expect(
+      service.setServant(sessionId, { enabled: true, constraint: 'whitelist', writeDirs: [] }),
+    ).rejects.toThrow('at least one write directory')
+  })
+
+  it('should reject non-absolute and root writeDirs entries', async () => {
+    await expect(
+      service.setServant(sessionId, {
+        enabled: true,
+        constraint: 'whitelist',
+        writeDirs: ['relative/dir'],
+      }),
+    ).rejects.toThrow('absolute paths')
+    await expect(
+      service.setServant(sessionId, {
+        enabled: true,
+        constraint: 'whitelist',
+        writeDirs: [path.parse(tmpDir).root],
+      }),
+    ).rejects.toThrow('filesystem roots')
+  })
+
+  it('should normalize whitelist writeDirs (resolve/trim/dedupe) and persist', async () => {
+    const projDir = path.join(tmpDir, 'proj')
+    await service.setServant(sessionId, {
+      enabled: true,
+      constraint: 'whitelist',
+      writeDirs: [`  ${projDir}  `, `${projDir}${path.sep}${path.sep}`, `  `, projDir],
+    })
+
+    const entry = await service.getServant(sessionId)
+    expect(entry?.constraint).toBe('whitelist')
+    // 去空、去重、resolve 规范化后恰好一条
+    expect(entry?.writeDirs).toEqual([path.resolve(projDir)])
+  })
+
+  it('should keep writeDirs when constraint is omitted on later updates', async () => {
+    const projDir = path.join(tmpDir, 'proj')
+    await service.setServant(sessionId, {
+      enabled: true,
+      constraint: 'whitelist',
+      writeDirs: [projDir],
+    })
+    // 后续更新不传 constraint/writeDirs：档位与目录都保留
+    await service.setServant(sessionId, { enabled: true })
+    const entry = await service.getServant(sessionId)
+    expect(entry?.constraint).toBe('whitelist')
+    expect(entry?.writeDirs).toEqual([path.resolve(projDir)])
+  })
+
+  it('should drop writeDirs when switching away from whitelist', async () => {
+    const projDir = path.join(tmpDir, 'proj')
+    await service.setServant(sessionId, {
+      enabled: true,
+      constraint: 'whitelist',
+      writeDirs: [projDir],
+    })
+    await service.setServant(sessionId, { enabled: true, constraint: 'readonly' })
+
+    const entry = await service.getServant(sessionId)
+    expect(entry?.constraint).toBe('readonly')
+    expect(entry?.writeDirs).toBeUndefined()
+  })
 })
 
 // ─── Servants API tests ─────────────────────────────────────────────────────

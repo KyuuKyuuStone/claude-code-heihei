@@ -26,8 +26,10 @@ export type ServantEntry = {
   enabled: boolean
   /** 是否被用户任命为主管。每个项目（workDir）最多一名 */
   supervisor?: boolean
-  /** 约束档位：readonly=只读观察（禁改文件，信箱汇报放行） */
-  constraint?: 'readonly'
+  /** 约束档位：readonly=只读观察（禁改文件，信箱汇报放行）；whitelist=目录白名单（仅 writeDirs 内可写） */
+  constraint?: 'readonly' | 'whitelist'
+  /** whitelist 档的可写目录（服务端已 resolve 规范化/去重/拒绝根路径） */
+  writeDirs?: string[]
   updatedAt: number
 }
 
@@ -48,6 +50,40 @@ type ServantsFile = {
 
 const SERVANTS_SCHEMA_VERSION = 1
 const FILE_WRITE_ATTEMPTS = 2
+
+const WRITE_DIRS_MAX_ENTRIES = 16
+const WRITE_DIRS_MAX_LENGTH = 1024
+
+/**
+ * whitelist 档可写目录规范化：trim/去空行 → 必须绝对路径 → resolve →
+ * 拒绝文件系统根（全盘白名单等于没有白名单）→ 去重。
+ */
+function normalizeWriteDirs(dirs: readonly string[]): string[] {
+  if (dirs.length > WRITE_DIRS_MAX_ENTRIES) {
+    throw ApiError.badRequest(`Field "writeDirs" allows at most ${WRITE_DIRS_MAX_ENTRIES} entries`)
+  }
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of dirs) {
+    const dir = raw.trim()
+    if (!dir) continue
+    if (dir.length > WRITE_DIRS_MAX_LENGTH) {
+      throw ApiError.badRequest('writeDirs entries must be at most 1024 characters')
+    }
+    if (!path.isAbsolute(dir)) {
+      throw ApiError.badRequest(`writeDirs entries must be absolute paths: ${dir}`)
+    }
+    const resolved = path.resolve(dir)
+    if (resolved === path.parse(resolved).root) {
+      throw ApiError.badRequest(`writeDirs entries must not be filesystem roots: ${resolved}`)
+    }
+    if (!seen.has(resolved)) {
+      seen.add(resolved)
+      out.push(resolved)
+    }
+  }
+  return out
+}
 
 export class ServantService {
   private getFilePath(): string {
@@ -120,8 +156,10 @@ export class ServantService {
       runtimeProviderId?: string | null
       runtimeModelId?: string
       effortLevel?: string
-      /** 约束档位：readonly=只读观察（禁改文件，信箱汇报放行） */
-      constraint?: 'readonly'
+      /** 约束档位：readonly=只读观察；whitelist=目录白名单（需 writeDirs） */
+      constraint?: 'readonly' | 'whitelist'
+      /** whitelist 档可写目录（绝对路径数组；服务端规范化） */
+      writeDirs?: string[]
     },
   ): Promise<ServantEntry> {
     if (!sessionId || !sessionId.trim()) {
@@ -129,6 +167,20 @@ export class ServantService {
     }
     if (typeof input.enabled !== 'boolean') {
       throw ApiError.badRequest('Field "enabled" must be a boolean')
+    }
+    if (
+      input.constraint !== undefined &&
+      input.constraint !== 'readonly' &&
+      input.constraint !== 'whitelist'
+    ) {
+      throw ApiError.badRequest('Field "constraint" must be "readonly" or "whitelist"')
+    }
+    if (
+      input.writeDirs !== undefined &&
+      (!Array.isArray(input.writeDirs) ||
+        input.writeDirs.some((d) => typeof d !== 'string'))
+    ) {
+      throw ApiError.badRequest('Field "writeDirs" must be an array of strings')
     }
     if (input.role !== undefined && typeof input.role !== 'string') {
       throw ApiError.badRequest('Field "role" must be a string')
@@ -164,6 +216,20 @@ export class ServantService {
 
     const index = data.servants.findIndex((s) => s.sessionId === sessionId)
     const previousConstraint = index !== -1 ? data.servants[index].constraint : undefined
+    const previousWriteDirs = index !== -1 ? data.servants[index].writeDirs : undefined
+
+    // 约束档位与白名单目录一起归一（未传档位时沿用旧档位）
+    const nextConstraint =
+      input.constraint !== undefined ? input.constraint : previousConstraint
+    let nextWriteDirs: string[] | undefined
+    if (nextConstraint === 'whitelist') {
+      nextWriteDirs = input.writeDirs !== undefined ? normalizeWriteDirs(input.writeDirs) : previousWriteDirs
+      if (!nextWriteDirs || nextWriteDirs.length === 0) {
+        throw ApiError.badRequest('whitelist constraint requires at least one write directory')
+      }
+    }
+    // 非 whitelist 档：writeDirs 不落盘（切档自动清除，防脏数据残留）
+
     const entry: ServantEntry = {
       sessionId,
       role: input.role?.trim() || undefined,
@@ -175,11 +241,8 @@ export class ServantService {
           ? { supervisor: data.servants[index].supervisor }
           : {}),
       // 约束档位：未传时保留旧值（禁用员工也保留，重新启用不丢设置）
-      ...(input.constraint !== undefined
-        ? { constraint: input.constraint }
-        : previousConstraint !== undefined
-          ? { constraint: previousConstraint }
-          : {}),
+      ...(nextConstraint ? { constraint: nextConstraint } : {}),
+      ...(nextWriteDirs ? { writeDirs: nextWriteDirs } : {}),
       updatedAt: Date.now(),
     }
     if (index === -1) {

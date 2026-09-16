@@ -56,8 +56,9 @@ export async function handleServantsApi(
         runtimeProviderId: body.runtimeProviderId as string | null | undefined,
         runtimeModelId: body.runtimeModelId as string | undefined,
         effortLevel: body.effortLevel as string | undefined,
-        // 约束档位：readonly=只读观察（禁改文件，信箱汇报放行）
-        constraint: body.constraint as 'readonly' | undefined,
+        // 约束档位：readonly=只读观察；whitelist=目录白名单（writeDirs 必填，真校验在 service 层）
+        constraint: body.constraint as 'readonly' | 'whitelist' | undefined,
+        writeDirs: body.writeDirs as string[] | undefined,
       })
       const host = req.headers.get('host') || '127.0.0.1'
 
