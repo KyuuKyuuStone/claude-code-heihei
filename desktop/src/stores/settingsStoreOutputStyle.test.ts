@@ -24,16 +24,6 @@ vi.mock('../api/models', () => ({
   },
 }))
 
-vi.mock('../api/h5Access', () => ({
-  h5AccessApi: {
-    get: vi.fn(),
-    enable: vi.fn(),
-    disable: vi.fn(),
-    regenerate: vi.fn(),
-    update: vi.fn(),
-  },
-}))
-
 import { useSettingsStore } from './settingsStore'
 
 describe('settingsStore output styles', () => {

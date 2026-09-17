@@ -31,8 +31,6 @@ vi.mock('../../lib/desktopRuntime', () => ({
   initializeDesktopServerUrl: mocks.initializeDesktopServerUrl,
   isTauriRuntime: () => mocks.isTauriRuntime,
   isDesktopRuntime: () => mocks.isTauriRuntime,
-  isH5ConnectionRequiredError: (error: unknown) =>
-    error instanceof Error && error.name === 'H5ConnectionRequiredError',
 }))
 
 vi.mock('../../stores/settingsStore', () => ({
@@ -97,16 +95,6 @@ vi.mock('./ContentRouter', () => ({
 
 vi.mock('./TabBar', () => ({
   TabBar: () => <nav>tabs loaded</nav>,
-}))
-
-vi.mock('./H5ConnectionView', () => ({
-  H5ConnectionView: ({ error, onConnected }: { error?: string | null; onConnected: () => void }) => (
-    <div>
-      <div>h5 connection view</div>
-      <div>{error}</div>
-      <button type="button" onClick={onConnected}>retry h5 bootstrap</button>
-    </div>
-  ),
 }))
 
 vi.mock('../../pages/TraceSession', () => ({
@@ -368,72 +356,30 @@ describe('AppShell boot flow', () => {
     expect(mocks.openTab).toHaveBeenCalledWith('__settings__', 'Settings', 'settings')
   })
 
-  it('shows the H5 connection view in browser mode when startup needs H5 auth', async () => {
+  it('shows the generic startup error in browser mode when startup fails', async () => {
+    // No H5 token screen anymore: the server rejects non-loopback browser
+    // clients with its generic auth, and any startup failure lands here.
     mocks.initializeDesktopServerUrl.mockRejectedValueOnce(
-      Object.assign(new Error('Enter your H5 token to continue.'), {
-        name: 'H5ConnectionRequiredError',
-        serverUrl: 'https://remote.example.com',
-      }),
-    )
-
-    render(<AppShell />)
-
-    expect(await screen.findByText('h5 connection view')).toBeInTheDocument()
-    expect(screen.getByText('Enter your H5 token to continue.')).toBeInTheDocument()
-    expect(screen.queryByText('app.serverFailed')).not.toBeInTheDocument()
-  })
-
-  it('shows the H5 connection view for unreachable remote browser startup failures', async () => {
-    mocks.initializeDesktopServerUrl.mockRejectedValueOnce(
-      Object.assign(new Error('Unable to reach https://remote.example.com. Check the server URL or network access.'), {
-        name: 'H5ConnectionRequiredError',
-        serverUrl: 'https://remote.example.com',
-      }),
-    )
-
-    render(<AppShell />)
-
-    expect(await screen.findByText('h5 connection view')).toBeInTheDocument()
-    expect(screen.getByText('Unable to reach https://remote.example.com. Check the server URL or network access.')).toBeInTheDocument()
-    expect(screen.queryByText('app.serverFailed')).not.toBeInTheDocument()
-  })
-
-  it('retries bootstrap after a successful H5 connection', async () => {
-    mocks.initializeDesktopServerUrl
-      .mockRejectedValueOnce(
-        Object.assign(new Error('The saved H5 token is no longer valid.'), {
-          name: 'H5ConnectionRequiredError',
-          serverUrl: 'https://remote.example.com',
-        }),
-      )
-      .mockResolvedValueOnce('https://remote.example.com')
-
-    render(<AppShell />)
-
-    expect(await screen.findByText('h5 connection view')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'retry h5 bootstrap' }))
-
-    await screen.findByText('sidebar loaded')
-    expect(mocks.initializeDesktopServerUrl).toHaveBeenCalledTimes(2)
-    expect(mocks.fetchAll).toHaveBeenCalledTimes(1)
-  })
-
-  it('keeps the Tauri startup error path unchanged', async () => {
-    mocks.isTauriRuntime = true
-    mocks.initializeDesktopServerUrl.mockRejectedValueOnce(
-      Object.assign(new Error('desktop server startup failed'), {
-        name: 'H5ConnectionRequiredError',
-        serverUrl: 'https://remote.example.com',
-      }),
+      new Error('Unable to reach https://remote.example.com. Check the server URL or network access.'),
     )
 
     render(<AppShell />)
 
     expect(await screen.findByText('app.serverFailed')).toBeInTheDocument()
-    expect(screen.queryByText('h5 connection view')).not.toBeInTheDocument()
   })
 
-  it('renders a mobile drawer toggle and backdrop in browser H5 mode', async () => {
+  it('keeps the Tauri startup error path unchanged', async () => {
+    mocks.isTauriRuntime = true
+    mocks.initializeDesktopServerUrl.mockRejectedValueOnce(
+      new Error('desktop server startup failed'),
+    )
+
+    render(<AppShell />)
+
+    expect(await screen.findByText('app.serverFailed')).toBeInTheDocument()
+  })
+
+  it('renders a mobile drawer toggle and backdrop in browser mode', async () => {
     mocks.isMobile = true
 
     render(<AppShell />)
@@ -500,7 +446,7 @@ describe('AppShell boot flow', () => {
     expect(screen.getByTestId('mobile-sidebar-toggle')).toHaveClass('h-11', 'w-11')
   })
 
-  it('keeps browser H5 mobile on chat tabs when settings was restored as active', async () => {
+  it('keeps browser mobile on chat tabs when settings was restored as active', async () => {
     mocks.isMobile = true
     mocks.tabState.activeTabId = '__settings__'
     mocks.tabState.tabs = [

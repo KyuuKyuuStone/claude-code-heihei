@@ -8,7 +8,7 @@
 import { handleApiRequest } from './router.js'
 import { handleWebSocket, type WebSocketData } from './ws/handler.js'
 import { resolveCors, type CorsResolution } from './middleware/cors.js'
-import { requireAuth, requireH5Token } from './middleware/auth.js'
+import { requireAuth } from './middleware/auth.js'
 import { teamWatcher } from './services/teamWatcher.js'
 import { cronScheduler } from './services/cronScheduler.js'
 import { handleProxyRequest } from './proxy/handler.js'
@@ -27,17 +27,11 @@ import { ensureDesktopCliLauncherInstalled } from './services/desktopCliLauncher
 import { enableConfigs } from '../utils/config.js'
 import { diagnosticsService } from './services/diagnosticsService.js'
 import { ensurePersistentStorageUpgraded } from './services/persistentStorageMigrations.js'
-import { handleStaticH5Request } from './staticH5.js'
 import {
-  classifyH5Request,
-  isH5AccessControlPath,
-  requiresLocalAccessCredential,
-  shouldBlockDisabledH5Access,
-  shouldRequireH5Token,
-  type H5RequestContext,
-} from './h5AccessPolicy.js'
-import { H5AccessService } from './services/h5AccessService.js'
-import { refreshDisconnectGraceMs } from './ws/disconnectGraceConfig.js'
+  classifyRequest,
+  shouldBlockRemoteAccess,
+  type RequestContext,
+} from './localRequestPolicy.js'
 import {
   hasConfiguredLocalAccessToken,
   isLocalAccessAuthorized,
@@ -154,59 +148,19 @@ function corsRejectedResponse(cors: CorsResolution): Response {
   )
 }
 
-function h5AccessControlRejectedResponse(): Response {
+function remoteAccessRejectedResponse(): Response {
   return Response.json(
     {
       error: 'Forbidden',
-      message: 'H5 access settings can only be changed from the local desktop app.',
+      message: 'This server only accepts requests from the local desktop app.',
     },
     { status: 403 },
   )
 }
 
-function h5AccessDisabledResponse(): Response {
-  return Response.json(
-    {
-      error: 'Forbidden',
-      message: 'H5 access is disabled. Enable H5 access from the local desktop app first.',
-    },
-    { status: 403 },
-  )
-}
-
-function isH5AccessControlRequest(
-  req: Request,
-  url: URL,
-  context: H5RequestContext,
-): boolean {
-  if (!isH5AccessControlPath(url.pathname)) {
-    return false
-  }
-
-  if (requiresLocalAccessCredential(url.pathname, context)) {
-    return true
-  }
-
-  return classifyH5Request(req, url, context) !== 'local-trusted'
-}
-
-function originFromUrl(value: string | null): string | null {
-  if (!value) {
-    return null
-  }
-
-  try {
-    return new URL(value).origin
-  } catch {
-    return null
-  }
-}
 
 export function startServer(port = PORT, host = HOST) {
   enableConfigs()
-  // Warm the synchronous disconnect-grace cache from managed settings so the
-  // first client disconnect honors the configured value (issue #764).
-  void refreshDisconnectGraceMs()
   // Don't hijack the global console / process handlers under `bun test`:
   // a test that boots the server would otherwise route every test-side
   // console.error/warn into the user's real diagnostics file.
@@ -236,13 +190,12 @@ export function startServer(port = PORT, host = HOST) {
   // request waiting for response headers until the renderer's 120s deadline.
   // Let the client own the lifetime of these local pooled connections instead.
   /**
-   * Explicit deployment auth remains a stronger override than H5-scoped
-   * request gating.
+   * 部署侧显式鉴权（SERVER_AUTH_REQUIRED / authRequired）：打开时远程请求改走
+   * 通用令牌校验，而不是被本机请求策略直接拒绝。
    */
   const forceAuth =
     SERVER_OPTIONS.authRequired ||
     process.env.SERVER_AUTH_REQUIRED === '1'
-  const h5AccessService = new H5AccessService()
 
   let server: ReturnType<typeof Bun.serve<WebSocketData>>
 
@@ -278,7 +231,7 @@ export function startServer(port = PORT, host = HOST) {
           ? url.pathname.split('/').pop() || ''
           : ''
         const sdkToken = url.searchParams.get('token')
-        const h5RequestContext = {
+        const requestContext: RequestContext = {
           clientAddress,
           localAccessTokenConfigured: hasConfiguredLocalAccessToken(),
           localAccessAuthorized: isLocalAccessAuthorized(req, localTokenOverride),
@@ -286,35 +239,17 @@ export function startServer(port = PORT, host = HOST) {
             sdkSessionId && sdkToken && conversationService.authorizeSdkConnection(sdkSessionId, sdkToken),
           ),
         }
-        const h5Settings = await h5AccessService.getSettings()
-        const h5PublicOrigin = originFromUrl(h5Settings.publicBaseUrl)
-        const cors = await resolveCors(origin, url.origin, {
-          h5Enabled: h5Settings.enabled,
-          isOriginAllowed: async (candidateOrigin) =>
-            candidateOrigin === h5PublicOrigin ||
-            await h5AccessService.isOriginAllowed(candidateOrigin),
-        })
-        const authRequired = shouldRequireH5Token({
+        const cors = await resolveCors(origin, url.origin)
+
+        // 非本机受信客户端访问受保护能力路径 → 一律拒绝（服务默认监听 0.0.0.0，
+        // 这是唯一的非本机访问边界；部署侧显式开启 authRequired 时改走通用令牌鉴权）。
+        if (shouldBlockRemoteAccess({
           request: req,
           url,
-          h5Enabled: h5Settings.enabled,
-          context: h5RequestContext,
-        })
-        const h5AccessDisabledBlocked = shouldBlockDisabledH5Access({
-          request: req,
-          url,
-          h5Enabled: h5Settings.enabled,
           explicitAuthRequired: forceAuth,
-          context: h5RequestContext,
-        })
-        const h5AccessControlBlocked = isH5AccessControlRequest(req, url, h5RequestContext)
-
-        if (h5AccessControlBlocked) {
-          return h5AccessControlRejectedResponse()
-        }
-
-        if (h5AccessDisabledBlocked) {
-          return h5AccessDisabledResponse()
+          context: requestContext,
+        })) {
+          return remoteAccessRejectedResponse()
         }
 
         // Handle CORS preflight
@@ -332,12 +267,7 @@ export function startServer(port = PORT, host = HOST) {
           }
 
           // Enforce authentication when required
-          if (authRequired) {
-            const authError = await requireH5Token(req, url.searchParams.get('token'))
-            if (authError) {
-              return withCors(authError, cors)
-            }
-          } else if (forceAuth) {
+          if (forceAuth) {
             const authError = await requireAuth(req, url.searchParams.get('token'))
             if (authError) {
               return withCors(authError, cors)
@@ -365,8 +295,8 @@ export function startServer(port = PORT, host = HOST) {
 
         // Internal SDK WebSocket used by the spawned Claude CLI.
         if (url.pathname.startsWith('/sdk/')) {
-          if (classifyH5Request(req, url, h5RequestContext) !== 'internal-sdk') {
-            return h5AccessControlRejectedResponse()
+          if (classifyRequest(req, url, requestContext) !== 'internal-sdk') {
+            return remoteAccessRejectedResponse()
           }
 
           if (cors.rejected) {
@@ -415,12 +345,7 @@ export function startServer(port = PORT, host = HOST) {
             return corsRejectedResponse(cors)
           }
 
-          if (authRequired) {
-            const authError = await requireH5Token(req)
-            if (authError) {
-              return withCors(authError, cors)
-            }
-          } else if (forceAuth) {
+          if (forceAuth) {
             const authError = await requireAuth(req)
             if (authError) {
               return withCors(authError, cors)
@@ -446,12 +371,7 @@ export function startServer(port = PORT, host = HOST) {
             return corsRejectedResponse(cors)
           }
 
-          if (authRequired) {
-            const authError = await requireH5Token(req)
-            if (authError) {
-              return withCors(authError, cors)
-            }
-          } else if (forceAuth) {
+          if (forceAuth) {
             const authError = await requireAuth(req)
             if (authError) {
               return withCors(authError, cors)
@@ -462,19 +382,15 @@ export function startServer(port = PORT, host = HOST) {
           return withCors(response, cors)
         }
 
-        // REST API
-        if (url.pathname.startsWith('/api/')) {
+        // REST API（/api 无斜杠也要进来——名录端点在 router.ts 两路匹配，
+        // 此前只认 /api/ 前缀，无斜杠的 /api 落到 SPA fallback 返回 HTML）
+        if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
           if (cors.rejected) {
             return corsRejectedResponse(cors)
           }
 
           // Enforce authentication when required
-          if (authRequired) {
-            const authError = await requireH5Token(req)
-            if (authError) {
-              return withCors(authError, cors)
-            }
-          } else if (forceAuth) {
+          if (forceAuth) {
             const authError = await requireAuth(req)
             if (authError) {
               return withCors(authError, cors)
@@ -508,12 +424,7 @@ export function startServer(port = PORT, host = HOST) {
             return corsRejectedResponse(cors)
           }
 
-          if (authRequired) {
-            const authError = await requireH5Token(req)
-            if (authError) {
-              return withCors(authError, cors)
-            }
-          } else if (forceAuth) {
+          if (forceAuth) {
             const authError = await requireAuth(req)
             if (authError) {
               return withCors(authError, cors)
@@ -535,13 +446,6 @@ export function startServer(port = PORT, host = HOST) {
               { status: 500 },
             ), cors)
           }
-        }
-
-        // Static H5 shell/assets are non-secret bootstrap content and must load
-        // before the browser can read the QR token; API/proxy/ws stay protected above.
-        const staticResponse = await handleStaticH5Request(req, url)
-        if (staticResponse) {
-          return staticResponse
         }
 
         return new Response('Not Found', { status: 404 })

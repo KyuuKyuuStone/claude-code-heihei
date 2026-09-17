@@ -1,5 +1,4 @@
 import {
-  api,
   getBaseUrl,
   getDefaultBaseUrl,
   hasExplicitDefaultBaseUrl,
@@ -9,30 +8,6 @@ import {
 import { getDesktopHost } from './desktopHost'
 
 export const H5_SERVER_URL_STORAGE_KEY = 'cc-heihei-h5-server-url'
-export const H5_TOKEN_STORAGE_KEY = 'cc-heihei-h5-token'
-
-type H5ConnectionFailureReason =
-  | 'missing-token'
-  | 'invalid-token'
-  | 'verify-failed'
-  | 'unreachable'
-
-export type StoredH5Connection = {
-  serverUrl: string | null
-  token: string | null
-}
-
-export class H5ConnectionRequiredError extends Error {
-  readonly serverUrl: string
-  readonly reason: H5ConnectionFailureReason
-
-  constructor(message: string, serverUrl: string, reason: H5ConnectionFailureReason) {
-    super(message)
-    this.name = 'H5ConnectionRequiredError'
-    this.serverUrl = serverUrl
-    this.reason = reason
-  }
-}
 
 function getDetectedDesktopHost() {
   return getDesktopHost()
@@ -70,88 +45,17 @@ export function isDesktopRuntime() {
   return getDetectedDesktopHost().isDesktop
 }
 
-export function isBrowserH5Runtime() {
-  return typeof window !== 'undefined' && !isDesktopRuntime()
-}
-
 /**
  * Synchronously return the running local server's base URL (e.g.
  * `http://127.0.0.1:<port>`).
  *
  * The api client caches the resolved base after startup: `initializeDesktopServerUrl`
- * calls `invoke('get_server_url')` (desktop) or resolves a browser/H5 URL, then
+ * calls `invoke('get_server_url')` (desktop) or resolves a browser URL, then
  * `setBaseUrl(...)`. Until that runs, `getBaseUrl()` returns the default
  * (`http://127.0.0.1:3456` or `VITE_DESKTOP_SERVER_URL`).
  */
 export function getServerBaseUrl(): string {
   return getBaseUrl()
-}
-
-export function readStoredH5Connection(): StoredH5Connection {
-  if (typeof window === 'undefined') {
-    return { serverUrl: null, token: null }
-  }
-
-  try {
-    return {
-      serverUrl: normalizeServerUrl(window.localStorage.getItem(H5_SERVER_URL_STORAGE_KEY)),
-      token: normalizeToken(window.localStorage.getItem(H5_TOKEN_STORAGE_KEY)),
-    }
-  } catch {
-    return { serverUrl: null, token: null }
-  }
-}
-
-export function clearStoredH5Connection() {
-  if (typeof window !== 'undefined') {
-    try {
-      window.localStorage.removeItem(H5_SERVER_URL_STORAGE_KEY)
-      window.localStorage.removeItem(H5_TOKEN_STORAGE_KEY)
-    } catch {
-      // Ignore storage failures
-    }
-  }
-
-  setAuthToken(null)
-}
-
-export async function saveAndVerifyH5Connection(serverUrl: string, token: string) {
-  const normalizedServerUrl = normalizeServerUrl(serverUrl)
-  const normalizedToken = normalizeToken(token)
-
-  if (!normalizedServerUrl) {
-    throw new Error('Enter a valid server URL.')
-  }
-
-  if (!normalizedToken) {
-    throw new Error('Enter your H5 access token.')
-  }
-
-  setBaseUrl(normalizedServerUrl)
-  setAuthToken(normalizedToken)
-  rememberStoredH5ServerUrl(normalizedServerUrl)
-
-  try {
-    await waitForHealth(normalizedServerUrl)
-    await verifyH5Access()
-  } catch (error) {
-    clearStoredH5Token()
-    throw normalizeBrowserH5Error(error, normalizedServerUrl)
-  }
-
-  if (typeof window !== 'undefined') {
-    try {
-      window.localStorage.setItem(H5_TOKEN_STORAGE_KEY, normalizedToken)
-    } catch {
-      // Ignore storage failures after a successful verification.
-    }
-  }
-
-  return normalizedServerUrl
-}
-
-export function isH5ConnectionRequiredError(error: unknown): error is H5ConnectionRequiredError {
-  return error instanceof H5ConnectionRequiredError
 }
 
 export async function initializeDesktopServerUrl() {
@@ -190,27 +94,24 @@ async function initializeBrowserServerUrl(fallbackUrl: string) {
     ? new URLSearchParams(window.location.search)
     : null
   const queryUrl = query?.get('serverUrl') ?? null
-  const queryToken = normalizeToken(query?.get('h5Token') ?? query?.get('token'))
-  const stored = readStoredH5Connection()
+  const storedServerUrl = readStoredServerUrl()
   const configuredUrl = getConfiguredBrowserServerUrl(fallbackUrl)
   const sameOriginUrl = getSameOriginServerUrl()
   const requestedUrl =
     normalizeServerUrl(queryUrl) ??
     configuredUrl ??
-    stored.serverUrl ??
+    storedServerUrl ??
     fallbackUrl
   const requestedImplicitSameOrigin =
     !queryUrl &&
     !hasExplicitDefaultBaseUrl() &&
     !!sameOriginUrl &&
     requestedUrl === sameOriginUrl
-  // A bearer token belongs to exactly one H5 server. A query-selected server
-  // must never inherit credentials paired with a different authority.
-  const token = queryToken ?? (stored.serverUrl === requestedUrl ? stored.token : null)
-  const browserH5Runtime = requiresH5AuthForServerUrl(requestedUrl)
 
+  // Browser clients carry no token: the server trusts loopback and rejects
+  // anything else with its generic auth, so there is no client-side gate here.
   setBaseUrl(requestedUrl)
-  setAuthToken(browserH5Runtime ? token : null)
+  setAuthToken(null)
   try {
     await waitForHealth(requestedUrl)
   } catch (error) {
@@ -223,53 +124,13 @@ async function initializeBrowserServerUrl(fallbackUrl: string) {
       setBaseUrl(fallbackUrl)
       setAuthToken(null)
       await waitForHealth(fallbackUrl)
-      await ensureBrowserApiAccessibleWithoutH5(fallbackUrl)
       markDesktopServerReady()
       return fallbackUrl
-    }
-
-    if (browserH5Runtime) {
-      clearStoredH5Token()
-      throw normalizeBrowserH5Error(error, requestedUrl)
     }
     throw error
   }
 
-  if (!browserH5Runtime) {
-    await ensureBrowserApiAccessibleWithoutH5(requestedUrl)
-    markDesktopServerReady()
-    return requestedUrl
-  }
-
-  if (!token) {
-    // Keep the existing recovery UX for a first-time connection, but never
-    // replace a paired server while withholding its token from a new one.
-    if (!stored.token) rememberStoredH5ServerUrl(requestedUrl)
-    clearStoredH5Token()
-    throw new H5ConnectionRequiredError(
-      'Enter your H5 token to continue.',
-      requestedUrl,
-      'missing-token',
-    )
-  }
-
-  try {
-    await verifyH5Access()
-  } catch (error) {
-    clearStoredH5Token()
-    throw normalizeBrowserH5Error(error, requestedUrl)
-  }
-
-  rememberStoredH5ServerUrl(requestedUrl)
-
-  if (queryToken && typeof window !== 'undefined') {
-    try {
-      window.localStorage.setItem(H5_TOKEN_STORAGE_KEY, queryToken)
-    } catch {
-      // Ignore storage failures after successful verification.
-    }
-  }
-
+  rememberStoredServerUrl(requestedUrl)
   markDesktopServerReady()
   return requestedUrl
 }
@@ -311,23 +172,6 @@ async function waitForHealth(serverUrl: string) {
   )
 }
 
-async function verifyH5Access() {
-  await api.post<{ ok: true }>('/api/h5-access/verify')
-}
-
-async function ensureBrowserApiAccessibleWithoutH5(serverUrl: string) {
-  const response = await fetch(`${serverUrl}/api/status`, {
-    cache: 'no-store',
-  })
-  if (response.status === 401) {
-    throw new H5ConnectionRequiredError(
-      'Enter your H5 token to continue.',
-      serverUrl,
-      'missing-token',
-    )
-  }
-}
-
 function normalizeServerUrl(value: string | null | undefined) {
   const trimmed = value?.trim()
   if (!trimmed) return null
@@ -337,11 +181,6 @@ function normalizeServerUrl(value: string | null | undefined) {
   } catch {
     return null
   }
-}
-
-function normalizeToken(value: string | null | undefined) {
-  const trimmed = value?.trim()
-  return trimmed ? trimmed : null
 }
 
 function getSameOriginServerUrl() {
@@ -416,47 +255,19 @@ function isLoopbackIPv4(hostname: string) {
   })
 }
 
-export function requiresH5AuthForServerUrl(serverUrl: string, browserHostname = getBrowserHostname()) {
-  void browserHostname
+function readStoredServerUrl() {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
   try {
-    return !isLoopbackHostname(new URL(serverUrl).hostname)
+    return normalizeServerUrl(window.localStorage.getItem(H5_SERVER_URL_STORAGE_KEY))
   } catch {
-    return false
+    return null
   }
 }
 
-function getBrowserHostname() {
-  if (typeof window === 'undefined') return null
-  return window.location.hostname
-}
-
-function normalizeBrowserH5Error(error: unknown, serverUrl: string) {
-  if (error instanceof H5ConnectionRequiredError) {
-    return error
-  }
-
-  if (error instanceof Error && error.message.startsWith('Server healthcheck failed')) {
-    return new H5ConnectionRequiredError(
-      `Unable to reach ${serverUrl}. Check the server URL or network access.`,
-      serverUrl,
-      'unreachable',
-    )
-  }
-
-  const message =
-    error instanceof Error ? error.message : 'Unable to verify the H5 access token.'
-  const status = typeof error === 'object' && error !== null && 'status' in error
-    ? (error as { status?: unknown }).status
-    : undefined
-  const unauthorized = status === 401 || message.includes('401') || message.toLowerCase().includes('unauthorized')
-  return new H5ConnectionRequiredError(
-    unauthorized ? 'The saved H5 token is no longer valid.' : 'Unable to verify the H5 access token.',
-    serverUrl,
-    unauthorized ? 'invalid-token' : 'verify-failed',
-  )
-}
-
-function rememberStoredH5ServerUrl(serverUrl: string) {
+function rememberStoredServerUrl(serverUrl: string) {
   if (typeof window === 'undefined') return
 
   try {
@@ -464,16 +275,4 @@ function rememberStoredH5ServerUrl(serverUrl: string) {
   } catch {
     // Ignore storage failures.
   }
-}
-
-function clearStoredH5Token() {
-  if (typeof window !== 'undefined') {
-    try {
-      window.localStorage.removeItem(H5_TOKEN_STORAGE_KEY)
-    } catch {
-      // Ignore storage failures.
-    }
-  }
-
-  setAuthToken(null)
 }

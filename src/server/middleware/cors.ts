@@ -1,5 +1,6 @@
 /**
- * CORS middleware for desktop and temporary open H5 access.
+ * CORS middleware：只放行本机桌面源（含 dev 模式渲染层源）与 loopback 页面源。
+ * 远程浏览器源一律拒绝——服务的非本机访问边界见 localRequestPolicy.ts。
  */
 
 export function corsHeaders(origin?: string | null): Record<string, string> {
@@ -28,17 +29,12 @@ export type CorsResolution = {
   headers: Record<string, string>
 }
 
-export type CorsResolutionOptions = {
-  h5Enabled?: boolean
-  isOriginAllowed?: (origin: string) => Promise<boolean>
-}
-
 /**
  * 额外视为"本地桌面"的源白名单。
  *
  * electron:dev 下渲染层从 vite dev server（ELECTRON_RENDERER_URL，如
  * http://localhost:1420）加载，带 http Origin 而非 file://；不放行的话，
- * 一旦配置了本地访问令牌，带 Origin 的请求会被 H5 访问策略当作浏览器
+ * 一旦配置了本地访问令牌，带 Origin 的请求会被本机请求策略当作浏览器
  * 页面拦截——而 CORS 预检（OPTIONS）无法携带令牌，必然失败，dev 模式
  * 全部 API 请求报 Failed to fetch。该变量仅由开发脚本注入并随 sidecar
  * env 继承；打包运行的普通用户没有它，行为不变。安全性不受影响：
@@ -116,7 +112,6 @@ function isLoopbackIPv4(hostname: string): boolean {
 export async function resolveCors(
   origin?: string | null,
   _requestOrigin?: string | null,
-  options: CorsResolutionOptions = {},
 ): Promise<CorsResolution> {
   if (!origin) {
     return {
@@ -126,18 +121,7 @@ export async function resolveCors(
     }
   }
 
-  if (!options.h5Enabled || isLocalOrigin(origin)) {
-    return {
-      allowed: true,
-      rejected: false,
-      headers: {
-        ...baseCorsHeaders(),
-        'Access-Control-Allow-Origin': origin,
-      },
-    }
-  }
-
-  if (options.isOriginAllowed && await options.isOriginAllowed(origin)) {
+  if (isLocalOrigin(origin)) {
     return {
       allowed: true,
       rejected: false,

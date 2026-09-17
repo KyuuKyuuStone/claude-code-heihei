@@ -1,5 +1,5 @@
 // Keep this list aligned with the WHATWG Fetch bad-port table and the desktop
-// port selector. H5 fixed ports must remain reachable from a browser/WebView.
+// port selector. Fixed ports must remain reachable from a browser/WebView.
 // https://fetch.spec.whatwg.org/#bad-port
 const FETCH_BLOCKED_PORTS = new Set([
   0, 1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53,

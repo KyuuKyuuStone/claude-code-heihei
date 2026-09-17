@@ -11,10 +11,8 @@ import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { useElectronWindowDragRegions } from '../../hooks/useElectronWindowDragRegions'
 import { useSidebarResize } from '../../hooks/useSidebarResize'
 import {
-  H5ConnectionRequiredError,
   initializeDesktopServerUrl,
   isDesktopRuntime,
-  isH5ConnectionRequiredError,
 } from '../../lib/desktopRuntime'
 import { getDesktopHost } from '../../lib/desktopHost'
 import { TabBar } from './TabBar'
@@ -23,7 +21,6 @@ import { useTabStore, SETTINGS_TAB_ID } from '../../stores/tabStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTranslation } from '../../i18n'
-import { H5ConnectionView } from './H5ConnectionView'
 import { useMobileViewport } from '../../hooks/useMobileViewport'
 import type { Tab } from '../../stores/tabStore'
 import { getTraceLaunchRequest } from '../../lib/traceLaunch'
@@ -42,8 +39,6 @@ export function AppShell() {
   const setSidebarOpen = useUIStore((s) => s.setSidebarOpen)
   const [ready, setReady] = useState(false)
   const [startupError, setStartupError] = useState<string | null>(null)
-  const [h5StartupError, setH5StartupError] = useState<H5ConnectionRequiredError | null>(null)
-  const [bootstrapNonce, setBootstrapNonce] = useState(0)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const t = useTranslation()
   const traceLaunch = useMemo(() => getTraceLaunchRequest(), [])
@@ -104,7 +99,6 @@ export function AppShell() {
       if (!cancelled) {
         setReady(false)
         setStartupError(null)
-        setH5StartupError(null)
       }
 
       try {
@@ -139,13 +133,7 @@ export function AppShell() {
         })().catch(() => {})
       } catch (error) {
         if (!cancelled) {
-          if (!desktopRuntime && isH5ConnectionRequiredError(error)) {
-            setH5StartupError(error)
-            setStartupError(null)
-          } else {
-            setStartupError(error instanceof Error ? error.message : String(error))
-            setH5StartupError(null)
-          }
+          setStartupError(error instanceof Error ? error.message : String(error))
           setReady(false)
         }
       }
@@ -156,7 +144,7 @@ export function AppShell() {
     return () => {
       cancelled = true
     }
-  }, [bootstrapNonce, fetchSettings, desktopRuntime, traceLaunch])
+  }, [fetchSettings, desktopRuntime, traceLaunch])
 
   // Listen for macOS native menu navigation events (About / Settings)
   useEffect(() => {
@@ -215,16 +203,6 @@ export function AppShell() {
       return
     }
     toggleSidebar()
-  }
-
-  if (!desktopRuntime && h5StartupError) {
-    return (
-      <H5ConnectionView
-        initialServerUrl={h5StartupError.serverUrl}
-        error={h5StartupError.message}
-        onConnected={() => setBootstrapNonce((value) => value + 1)}
-      />
-    )
   }
 
   if (startupError) {

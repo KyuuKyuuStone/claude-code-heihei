@@ -1,4 +1,3 @@
-import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import {
   appendHostDiagnostic,
@@ -34,7 +33,6 @@ import {
 type ServerRuntimeOptions = {
   desktopRoot: string
   appRoot?: string
-  h5DistDir?: string
   diagnosticsFile?: string
   env?: NodeJS.ProcessEnv
   deps?: Partial<ServerRuntimeDeps>
@@ -101,7 +99,6 @@ function createServerStartState(child: SidecarChild): ServerStartState {
 export class ElectronServerRuntime {
   private readonly desktopRoot: string
   private readonly appRoot: string
-  private readonly h5DistDir: string
   private readonly diagnosticsFile?: string
   private readonly baseEnv: NodeJS.ProcessEnv
   private readonly deps: ServerRuntimeDeps
@@ -121,7 +118,6 @@ export class ElectronServerRuntime {
   constructor(options: ServerRuntimeOptions) {
     this.desktopRoot = options.desktopRoot
     this.appRoot = options.appRoot ?? options.desktopRoot
-    this.h5DistDir = options.h5DistDir ?? path.join(options.desktopRoot, 'dist')
     this.diagnosticsFile = options.diagnosticsFile
     this.baseEnv = options.env ?? process.env
     this.deps = { ...DEFAULT_SERVER_RUNTIME_DEPS, ...options.deps }
@@ -212,7 +208,6 @@ export class ElectronServerRuntime {
       desktopRoot: this.desktopRoot,
       appRoot: this.appRoot,
       port,
-      h5DistDir: this.h5DistDir,
       env: this.diagnosticsFile
         ? { ...env, [ELECTRON_DIAGNOSTICS_FILE_ENV]: this.diagnosticsFile }
         : env,
@@ -298,7 +293,6 @@ export class ElectronServerRuntime {
         const child = this.deps.spawnSidecar(createAdapterPlan({
           desktopRoot: this.desktopRoot,
           appRoot: this.appRoot,
-          h5DistDir: this.h5DistDir,
           serverUrl,
           flag,
           env,

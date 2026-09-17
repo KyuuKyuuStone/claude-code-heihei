@@ -12,9 +12,6 @@ import { useChatStore } from '../../stores/chatStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useProviderStore } from '../../stores/providerStore'
 import { useSettingsStore } from '../../stores/settingsStore'
-import { useHeiheiOAuthStore } from '../../stores/heiheiOAuthStore'
-import { useHeiheiOpenAIOAuthStore } from '../../stores/heiheiOpenAIOAuthStore'
-import { useHeiheiGrokOAuthStore } from '../../stores/heiheiGrokOAuthStore'
 import { buildProviderChoices, type ProviderChoice } from '../../lib/modelChoices'
 import { resolveDefaultRuntimeSelection } from '../../lib/runtimeSelection'
 import { useTranslation } from '../../i18n'
@@ -57,16 +54,9 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
   const { providers, activeId, fetchProviders } = useProviderStore()
   const {
     currentModel: globalModelId,
-    availableModels,
     effortLevel: globalEffortLevel,
     activeProviderName,
   } = useSettingsStore()
-  const claudeOAuthStatus = useHeiheiOAuthStore((s) => s.status)
-  const fetchClaudeOAuthStatus = useHeiheiOAuthStore((s) => s.fetchStatus)
-  const openAIOAuthStatus = useHeiheiOpenAIOAuthStore((s) => s.status)
-  const fetchOpenAIOAuthStatus = useHeiheiOpenAIOAuthStore((s) => s.fetchStatus)
-  const grokOAuthStatus = useHeiheiGrokOAuthStore((s) => s.status)
-  const fetchGrokOAuthStatus = useHeiheiGrokOAuthStore((s) => s.fetchStatus)
 
   const [role, setRole] = useState(existing?.role || '')
   const [description, setDescription] = useState(existing?.description || '')
@@ -108,9 +98,6 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
   useEffect(() => {
     if (!open) return
     if (providers.length === 0) void fetchProviders()
-    void fetchClaudeOAuthStatus()
-    void fetchOpenAIOAuthStatus()
-    void fetchGrokOAuthStatus()
     // open 时一次性拉取目录数据；依赖里的 fetch 系列是 store 稳定引用
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
@@ -163,16 +150,9 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
     () => buildProviderChoices(
       providers,
       activeId,
-      availableModels,
-      t('settings.providers.officialName'),
-      t('settings.providers.openaiOfficialName'),
-      t('settings.providers.grokOfficialName'),
       roleLabels,
-      claudeOAuthStatus?.loggedIn === true,
-      openAIOAuthStatus?.loggedIn === true,
-      grokOAuthStatus?.loggedIn === true,
     ),
-    [activeId, availableModels, providers, roleLabels, t, claudeOAuthStatus, grokOAuthStatus, openAIOAuthStatus],
+    [activeId, providers, roleLabels],
   )
 
   const selectedChoice = useMemo(

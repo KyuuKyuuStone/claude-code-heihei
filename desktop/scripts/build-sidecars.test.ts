@@ -116,15 +116,12 @@ function startCompiledSidecar(options: {
  * Loopback is trusted on its own, so reading sessions without the token is the
  * expected behaviour — plenty of legitimate local traffic (the OAuth success
  * page, `/preview-fs` links, plain `curl`) can never carry it. The token is a
- * strictly additive credential, required only on the `/api/h5-access` control
- * plane, where another program on the same box must not be able to publish the
- * user's sessions to the network.
+ * strictly additive credential. The old `/api/h5-access` control plane (the one
+ * loopback path that still required it) was deleted with the H5 access feature,
+ * so the remaining probe is the loopback-trust baseline.
  */
 type CompiledSidecarAuthProof = {
   loopbackWithoutTokenStatus: number
-  controlPlaneMissingTokenStatus: number
-  controlPlaneWrongTokenStatus: number
-  controlPlaneCorrectTokenStatus: number
 }
 
 async function waitForCompiledSidecar(options: {
@@ -163,35 +160,13 @@ async function waitForCompiledSidecar(options: {
       if (!health.ok) throw new Error(`health returned ${health.status}`)
       let pendingAuthProof: CompiledSidecarAuthProof | undefined
       if (!authProbeComplete) {
-        const controlPlaneUrl = `${options.baseUrl}/api/h5-access`
-        const [
-          loopbackWithoutToken,
-          controlPlaneMissingToken,
-          controlPlaneWrongToken,
-          controlPlaneCorrectToken,
-        ] = await Promise.all([
-          fetchBeforeCompiledSidecarDeadline(
-            `${options.baseUrl}/api/sessions?limit=1&offset=0`,
-            {},
-            deadline,
-          ),
-          fetchBeforeCompiledSidecarDeadline(controlPlaneUrl, {}, deadline),
-          fetchBeforeCompiledSidecarDeadline(
-            controlPlaneUrl,
-            { headers: { Authorization: 'Bearer wrong-local-access-token' } },
-            deadline,
-          ),
-          fetchBeforeCompiledSidecarDeadline(
-            controlPlaneUrl,
-            { headers: authorizedHeaders },
-            deadline,
-          ),
-        ])
+        const loopbackWithoutToken = await fetchBeforeCompiledSidecarDeadline(
+          `${options.baseUrl}/api/sessions?limit=1&offset=0`,
+          {},
+          deadline,
+        )
         pendingAuthProof = {
           loopbackWithoutTokenStatus: loopbackWithoutToken.status,
-          controlPlaneMissingTokenStatus: controlPlaneMissingToken.status,
-          controlPlaneWrongTokenStatus: controlPlaneWrongToken.status,
-          controlPlaneCorrectTokenStatus: controlPlaneCorrectToken.status,
         }
       }
       const sessionsResponse = await fetchBeforeCompiledSidecarDeadline(
@@ -639,9 +614,6 @@ describe.skipIf(!compiledSidecarSmokeEnabled)('compiled sidecar local-index smok
       for (const proof of authenticationProofs) {
         expect(proof).toEqual({
           loopbackWithoutTokenStatus: 200,
-          controlPlaneMissingTokenStatus: 403,
-          controlPlaneWrongTokenStatus: 403,
-          controlPlaneCorrectTokenStatus: 200,
         })
       }
     } finally {

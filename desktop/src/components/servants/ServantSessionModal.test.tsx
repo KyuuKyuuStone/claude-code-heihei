@@ -9,9 +9,6 @@ import { useSessionStore } from '../../stores/sessionStore'
 import { useProviderStore } from '../../stores/providerStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useChatStore } from '../../stores/chatStore'
-import { useHeiheiOAuthStore } from '../../stores/heiheiOAuthStore'
-import { useHeiheiOpenAIOAuthStore } from '../../stores/heiheiOpenAIOAuthStore'
-import { useHeiheiGrokOAuthStore } from '../../stores/heiheiGrokOAuthStore'
 
 vi.mock('../../api/servants', () => ({
   servantsApi: {
@@ -45,9 +42,6 @@ function seedStores() {
     activeId: 'prov-1',
     fetchProviders: vi.fn(),
   })
-  useHeiheiOAuthStore.setState({ fetchStatus: vi.fn() })
-  useHeiheiOpenAIOAuthStore.setState({ fetchStatus: vi.fn() })
-  useHeiheiGrokOAuthStore.setState({ fetchStatus: vi.fn() })
   useSessionStore.setState({
     createSession: vi.fn().mockResolvedValue('new-session'),
     sessions: [],

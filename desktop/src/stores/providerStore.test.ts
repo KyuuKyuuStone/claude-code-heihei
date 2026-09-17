@@ -23,8 +23,6 @@ const {
     activateOfficial: vi.fn(),
     test: vi.fn(),
     testConfig: vi.fn(),
-    scanCcSwitch: vi.fn(),
-    importCcSwitch: vi.fn(),
     fetchModels: vi.fn(),
   },
   chatStoreState: {
@@ -308,67 +306,6 @@ describe('providerStore reorderProviders', () => {
 
     expect(providersApiMock.reorder).not.toHaveBeenCalled()
     expect(providersApiMock.list).toHaveBeenCalled()
-  })
-})
-
-describe('providerStore cc-switch import', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    chatStoreState.sessions = {}
-    runtimeStoreState.selections = {}
-    providersApiMock.list.mockResolvedValue({ providers: [], activeId: null })
-  })
-
-  it('returns the scan result untouched', async () => {
-    const scan = {
-      available: true,
-      source: 'json' as const,
-      configDir: '/Users/tester/.cc-switch',
-      candidates: [],
-    }
-    providersApiMock.scanCcSwitch.mockResolvedValue(scan)
-
-    const { useProviderStore } = await import('./providerStore')
-
-    await expect(useProviderStore.getState().scanCcSwitch()).resolves.toEqual(scan)
-  })
-
-  it('refreshes the provider list through the shared path after importing', async () => {
-    const imported = makeProvider({ id: 'imported-1', name: 'Imported' })
-    providersApiMock.importCcSwitch.mockResolvedValue({ imported: [imported], skipped: [] })
-    providersApiMock.list.mockResolvedValue({ providers: [imported], activeId: null })
-
-    const { useProviderStore } = await import('./providerStore')
-    const result = await useProviderStore.getState().importCcSwitch(['source-1'])
-
-    expect(providersApiMock.importCcSwitch).toHaveBeenCalledWith(['source-1'])
-    expect(providersApiMock.list).toHaveBeenCalled()
-    expect(result.imported).toEqual([imported])
-    expect(useProviderStore.getState().providers).toEqual([imported])
-  })
-
-  // Refetching after a wholly skipped import would only churn the list and drop
-  // any in-flight optimistic order for nothing.
-  it('skips the refresh when the server imported nothing', async () => {
-    providersApiMock.importCcSwitch.mockResolvedValue({
-      imported: [],
-      skipped: [{ sourceId: 'source-1', reason: 'no-api-key' }],
-    })
-
-    const { useProviderStore } = await import('./providerStore')
-    const result = await useProviderStore.getState().importCcSwitch(['source-1'])
-
-    expect(providersApiMock.list).not.toHaveBeenCalled()
-    expect(result.skipped).toHaveLength(1)
-  })
-
-  it('propagates an import failure to the caller instead of swallowing it', async () => {
-    providersApiMock.importCcSwitch.mockRejectedValue(new Error('config locked'))
-
-    const { useProviderStore } = await import('./providerStore')
-
-    await expect(useProviderStore.getState().importCcSwitch(['source-1'])).rejects.toThrow('config locked')
-    expect(providersApiMock.list).not.toHaveBeenCalled()
   })
 })
 

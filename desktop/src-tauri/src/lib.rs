@@ -1444,26 +1444,6 @@ fn desktop_terminal_settings_path() -> Option<PathBuf> {
     claude_config_dir().map(|path| path.join("settings.json"))
 }
 
-/// 解析 cc-heihei/settings.json 里的 h5Access.fixedPort。范围必须与
-/// 服务端 h5AccessService 的 MIN/MAX_FIXED_PORT 一致（1024..=65535）。
-fn parse_h5_fixed_port(contents: &str) -> Option<u16> {
-    let value: serde_json::Value = serde_json::from_str(contents).ok()?;
-    let port = value.get("h5Access")?.get("fixedPort")?.as_u64()?;
-    if (1024..=65535).contains(&port) {
-        u16::try_from(port)
-            .ok()
-            .filter(|port| is_browser_safe_port(*port))
-    } else {
-        None
-    }
-}
-
-fn read_h5_fixed_port() -> Option<u16> {
-    let path = claude_config_dir()?.join("cc-heihei").join("settings.json");
-    let contents = fs::read_to_string(path).ok()?;
-    parse_h5_fixed_port(&contents)
-}
-
 fn read_desktop_terminal_config() -> Option<DesktopTerminalConfig> {
     let path = desktop_terminal_settings_path()?;
     let contents = fs::read_to_string(path).ok()?;
@@ -1650,7 +1630,7 @@ fn reserve_local_port(bind_host: &str) -> Result<u16, String> {
     })
 }
 
-/// 按优先级尝试给定端口（h5Access.fixedPort > 上次使用的端口），
+/// 按优先级尝试给定端口（上次使用的端口优先），
 /// 全部被占用时回退到 OS 随机分配。保证 app 总能启动。
 fn reserve_local_port_with_preference(bind_host: &str, preferred: &[u16]) -> Result<u16, String> {
     for &port in preferred {
@@ -1738,38 +1718,10 @@ fn resolve_app_root(_app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn select_h5_dist_dir(resource_dir: Option<&Path>, app_root: &Path) -> PathBuf {
-    let mut candidates = Vec::new();
-    if let Some(resource_dir) = resource_dir {
-        candidates.push(resource_dir.join("_up_").join("dist"));
-        candidates.push(resource_dir.join("dist"));
-    }
-    candidates.push(app_root.join("../Resources/_up_/dist"));
-    candidates.push(app_root.join("../Resources/dist"));
-
-    candidates
-        .iter()
-        .find(|candidate| candidate.join("index.html").is_file())
-        .cloned()
-        .unwrap_or_else(|| {
-            resource_dir
-                .map(|dir| dir.join("_up_").join("dist"))
-                .unwrap_or_else(|| app_root.join("../Resources/_up_/dist"))
-        })
-}
-
-fn resolve_h5_dist_dir(app: &AppHandle, app_root: &Path) -> PathBuf {
-    let resource_dir = app.path().resource_dir().ok();
-    select_h5_dist_dir(resource_dir.as_deref(), app_root)
-}
-
 fn start_server_sidecar(app: &AppHandle) -> Result<ServerRuntime, String> {
     let bind_host = SERVER_BIND_HOST;
     let control_host = SERVER_CONTROL_HOST;
     let mut preferred_ports: Vec<u16> = Vec::new();
-    if let Some(port) = read_h5_fixed_port() {
-        preferred_ports.push(port);
-    }
     if let Some(state) = read_stored_server_state() {
         if !preferred_ports.contains(&state.last_port) {
             preferred_ports.push(state.last_port);
@@ -1779,9 +1731,6 @@ fn start_server_sidecar(app: &AppHandle) -> Result<ServerRuntime, String> {
     let url = format!("http://{control_host}:{port}");
     let app_root = resolve_app_root(app)?;
     let app_root_arg = app_root.to_string_lossy().to_string();
-    let h5_dist_dir = resolve_h5_dist_dir(app, &app_root)
-        .to_string_lossy()
-        .to_string();
 
     // 单一合并 sidecar：第一个参数选 server / cli / adapters 模式。
     let mut sidecar = app
@@ -1805,13 +1754,7 @@ fn start_server_sidecar(app: &AppHandle) -> Result<ServerRuntime, String> {
         }
         sidecar = sidecar
             .env("CLAUDE_CONFIG_DIR", &config_dir)
-            .env("XDG_CACHE_HOME", cache_dir.to_string_lossy().to_string())
-            .env("CLAUDE_H5_AUTO_PUBLIC_URL", "1")
-            .env("CLAUDE_H5_DIST_DIR", h5_dist_dir);
-    } else {
-        sidecar = sidecar
-            .env("CLAUDE_H5_AUTO_PUBLIC_URL", "1")
-            .env("CLAUDE_H5_DIST_DIR", h5_dist_dir);
+            .env("XDG_CACHE_HOME", cache_dir.to_string_lossy().to_string());
     }
     let sidecar = sidecar.args([
         "server",
@@ -2126,10 +2069,10 @@ mod tests {
     use super::{
         decode_terminal_output, default_utf8_locale, dir_has_portable_data, ensure_utf8_locale,
         has_meaningful_intersection, is_browser_safe_port, is_persistable_window_state,
-        normalize_terminal_bash_path, parse_env_block, parse_h5_fixed_port,
+        normalize_terminal_bash_path, parse_env_block,
         reserve_browser_safe_port, reserve_local_port_with_preference,
         resolve_agent_powershell_path_override, resolve_desktop_terminal_shell,
-        resolve_terminal_cwd, run_notification_bridge, select_h5_dist_dir, DesktopTerminalConfig,
+        resolve_terminal_cwd, run_notification_bridge, DesktopTerminalConfig,
         StoredServerState, StoredWindowState, TerminalHostPlatform, SERVER_BIND_HOST,
         SERVER_CONTROL_HOST,
     };
@@ -2441,35 +2384,6 @@ mod tests {
     }
 
     #[test]
-    fn h5_fixed_port_parses_only_valid_in_range_values() {
-        assert_eq!(
-            parse_h5_fixed_port(r#"{"h5Access":{"fixedPort":28670}}"#),
-            Some(28670)
-        );
-        assert_eq!(
-            parse_h5_fixed_port(r#"{"h5Access":{"fixedPort":5061}}"#),
-            None
-        );
-        // Out of range, wrong type, missing, or null all fall back to None.
-        assert_eq!(parse_h5_fixed_port(r#"{"h5Access":{"fixedPort":80}}"#), None);
-        assert_eq!(
-            parse_h5_fixed_port(r#"{"h5Access":{"fixedPort":70000}}"#),
-            None
-        );
-        assert_eq!(
-            parse_h5_fixed_port(r#"{"h5Access":{"fixedPort":"3456"}}"#),
-            None
-        );
-        assert_eq!(
-            parse_h5_fixed_port(r#"{"h5Access":{"fixedPort":null}}"#),
-            None
-        );
-        assert_eq!(parse_h5_fixed_port(r#"{"h5Access":{}}"#), None);
-        assert_eq!(parse_h5_fixed_port("{}"), None);
-        assert_eq!(parse_h5_fixed_port("not json"), None);
-    }
-
-    #[test]
     fn preferred_port_is_used_when_free_and_skipped_when_taken() {
         // Find a port that is currently free, then verify preference picks it.
         let probe = TcpListener::bind("127.0.0.1:0").expect("probe bind");
@@ -2555,25 +2469,6 @@ mod tests {
             serde_json::from_str::<StoredServerState>(&json).expect("parse"),
             state
         );
-    }
-
-    #[test]
-    fn h5_dist_dir_prefers_tauri_parent_resource_mapping() {
-        let root = std::env::temp_dir().join(format!("cchh-h5-dist-test-{}", std::process::id()));
-        let resource_dir = root.join("Contents").join("Resources");
-        let app_root = root.join("Contents").join("MacOS");
-        let mapped_dist = resource_dir.join("_up_").join("dist");
-
-        fs::create_dir_all(&mapped_dist).expect("create mapped dist dir");
-        fs::create_dir_all(&app_root).expect("create app root dir");
-        fs::write(mapped_dist.join("index.html"), "").expect("write h5 shell");
-
-        assert_eq!(
-            select_h5_dist_dir(Some(&resource_dir), &app_root),
-            mapped_dist
-        );
-
-        fs::remove_dir_all(root).expect("remove temp app tree");
     }
 
     #[test]

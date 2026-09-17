@@ -1,78 +1,17 @@
 /**
- * Heihei OpenAI OAuth REST API
+ * Heihei OpenAI OAuth 回调处理器。
  *
- * POST   /api/heihei-openai-oauth/start    — 生成 PKCE+state,返回 authorize URL
- * GET    /auth/callback                  — 用户浏览器 redirect 到此,完成 token 交换
- * GET    /callback/openai                — 兼容旧路径
- * GET    /api/heihei-openai-oauth          — 查询当前登录状态(不回传 token 本体)
- * DELETE /api/heihei-openai-oauth          — 登出,删除 token 文件
+ * 登录入口（POST /api/heihei-openai-oauth/start 等 REST 端点）已随桌面端三官方登录
+ * 特性一起删除；这里**只保留浏览器 redirect 回调**——它是 index.ts 的 `/callback/openai`
+ * 与 OPENAI_CODEX_REDIRECT_PATH 路由目标，仍是活跃运行时路径。
  */
-
-import { z } from 'zod'
 import { heiheiOpenAIOAuthService } from '../services/heiheiOpenAIOAuthService.js'
-import { ApiError, errorResponse } from '../middleware/errorHandler.js'
-
-const StartRequestSchema = z.object({
-  serverPort: z.number().int().positive(),
-})
 
 function html(body: string): Response {
   return new Response(body, {
     status: 200,
     headers: { 'Content-Type': 'text/html; charset=utf-8' },
   })
-}
-
-export async function handleHeiheiOpenAIOAuthApi(
-  req: Request,
-  url: URL,
-  segments: string[],
-): Promise<Response> {
-  try {
-    const action = segments[2] // segments: ['api', 'heihei-openai-oauth', <action?>]
-
-    if (action === 'start' && req.method === 'POST') {
-      let body: unknown
-      try {
-        body = await req.json()
-      } catch {
-        throw ApiError.badRequest('Invalid JSON body')
-      }
-      const parsed = StartRequestSchema.safeParse(body)
-      if (!parsed.success) {
-        throw ApiError.badRequest('serverPort (positive integer) required')
-      }
-      const session = await heiheiOpenAIOAuthService.startSession({
-        serverPort: parsed.data.serverPort,
-      })
-      return Response.json({
-        authorizeUrl: session.authorizeUrl,
-        state: session.state,
-      })
-    }
-
-    if (action === undefined && req.method === 'GET') {
-      const tokens = await heiheiOpenAIOAuthService.ensureFreshTokens()
-      if (!tokens) {
-        return Response.json({ loggedIn: false })
-      }
-      return Response.json({
-        loggedIn: true,
-        expiresAt: tokens.expiresAt,
-        email: tokens.email,
-        accountId: tokens.accountId,
-      })
-    }
-
-    if (action === undefined && req.method === 'DELETE') {
-      await heiheiOpenAIOAuthService.deleteTokens()
-      return Response.json({ ok: true })
-    }
-
-    return Response.json({ error: 'Not Found' }, { status: 404 })
-  } catch (error) {
-    return errorResponse(error)
-  }
 }
 
 export async function handleHeiheiOpenAIOAuthCallback(url: URL): Promise<Response> {

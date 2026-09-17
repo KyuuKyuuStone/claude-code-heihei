@@ -17,13 +17,9 @@ import { handlePluginsApi } from './api/plugins.js'
 import { handleSkillsApi } from './api/skills.js'
 import { handleMarketApi } from './api/market.js'
 import { handleComputerUseApi } from './api/computer-use.js'
-import { handleHeiheiOAuthApi } from './api/heihei-oauth.js'
-import { handleHeiheiOpenAIOAuthApi } from './api/heihei-openai-oauth.js'
-import { handleHeiheiGrokOAuthApi } from './api/heihei-grok-oauth.js'
 import { handleMcpApi } from './api/mcp.js'
 import { handleDiagnosticsApi } from './api/diagnostics.js'
 import { handleDoctorApi } from './api/doctor.js'
-import { handleH5AccessApi } from './api/h5-access.js'
 import { handleActivityStatsApi } from './api/activityStats.js'
 import { handleOpenTargetsApi } from './api/open-targets.js'
 import { handleMemoryApi } from './api/memory.js'
@@ -91,15 +87,6 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     case 'providers':
       return handleProvidersApi(req, url, segments)
 
-    case 'heihei-oauth':
-      return handleHeiheiOAuthApi(req, url, segments)
-
-    case 'heihei-openai-oauth':
-      return handleHeiheiOpenAIOAuthApi(req, url, segments)
-
-    case 'heihei-grok-oauth':
-      return handleHeiheiGrokOAuthApi(req, url, segments)
-
     case 'adapters':
       // Adapter protocols pull in platform SDKs that are unnecessary for the
       // core server path. Load them only when this API is actually used.
@@ -125,9 +112,6 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
 
     case 'doctor':
       return handleDoctorApi(req, url, segments)
-
-    case 'h5-access':
-      return handleH5AccessApi(req, url, segments)
 
     case 'activity-stats':
       return handleActivityStatsApi(req, url, segments)

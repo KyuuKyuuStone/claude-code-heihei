@@ -1,5 +1,14 @@
-export type H5RequestKind = 'local-trusted' | 'internal-sdk' | 'h5-browser'
-export type H5RequestContext = {
+/**
+ * 本机请求策略 —— 判定请求是「本机受信」（桌面外壳/本机进程/loopback 页面）还是
+ * 「远程」客户端，并据此决定受保护能力路径是否放行。
+ *
+ * 前身是「H5 访问特性」专用策略。该特性已整体删除（用户拍板），但其中
+ * 「本机受信 vs 远程」判定与「远程一律拒绝」的拦截**必须保留**——那是服务端唯一的
+ * 非本机访问边界（服务默认监听 0.0.0.0）。故本模块收窄保留该部分。
+ */
+
+export type RequestKind = 'local-trusted' | 'internal-sdk' | 'remote'
+export type RequestContext = {
   clientAddress: string | null
   localAccessTokenConfigured?: boolean
   localAccessAuthorized?: boolean
@@ -185,7 +194,7 @@ function isCrossSiteSubresource(headers: Headers): boolean {
 function isLocalDesktopOrNavigationOrigin(
   request: Request,
   origin: string | null,
-  context: H5RequestContext,
+  context: RequestContext,
 ): boolean {
   if (!origin) return !isCrossSiteSubresource(request.headers)
   if (isLocalDesktopOrigin(origin)) return true
@@ -206,7 +215,7 @@ function hasProxyTraceHeaders(headers: Headers): boolean {
 function isLocalTrustedRequest(
   request: Request,
   url: URL,
-  context: H5RequestContext,
+  context: RequestContext,
   origin: string | null,
 ): boolean {
   // The process token the desktop shell injects is the strongest credential we
@@ -230,7 +239,7 @@ function isLocalTrustedRequest(
   // traffic can never carry that token — the OAuth success page the system
   // browser opens, `/preview-fs` links, a `curl` against the local API. Gating
   // loopback behind the token turned all of those into 401/403 (issue: "Missing
-  // H5 access token" on /api/heihei-grok-oauth/success). Loopback stays trusted
+  // access token" on the local OAuth success page). Loopback stays trusted
   // on its own; the Host, proxy-trace and Origin checks below are what keep a
   // remote client from claiming it.
   const clientAddress = context.clientAddress
@@ -247,15 +256,15 @@ function isFilesystemCapabilityPath(pathname: string): boolean {
     pathname.startsWith('/preview-fs/')
 }
 
-export function classifyH5Request(
+export function classifyRequest(
   request: Request,
   url: URL,
-  context: H5RequestContext,
-): H5RequestKind {
+  context: RequestContext,
+): RequestKind {
   const origin = request.headers.get('Origin')
   const localTrusted = isLocalTrustedRequest(request, url, context, origin)
   if (isFilesystemCapabilityPath(url.pathname)) {
-    return localTrusted ? 'local-trusted' : 'h5-browser'
+    return localTrusted ? 'local-trusted' : 'remote'
   }
 
   if (url.pathname.startsWith('/sdk/') && (localTrusted || context.internalSdkAuthorized)) {
@@ -266,89 +275,42 @@ export function classifyH5Request(
     return 'local-trusted'
   }
 
-  return 'h5-browser'
+  return 'remote'
 }
 
-export function shouldRequireH5Token({
+/**
+ * 远程（非本机受信）客户端访问受保护能力路径 → 拒绝。
+ *
+ * 这是服务端唯一的非本机访问边界：服务默认监听 0.0.0.0，桌面外壳 / 本机进程 /
+ * loopback 页面之外的一律拒绝。`explicitAuthRequired`（部署侧 SERVER_AUTH_REQUIRED
+ * 或 authRequired）打开时不拦——那时改走通用令牌鉴权（原行为，保留）。
+ */
+export function shouldBlockRemoteAccess({
   request,
   url,
-  h5Enabled,
-  context,
-}: {
-  request: Request
-  url: URL
-  h5Enabled: boolean
-  context: H5RequestContext
-}): boolean {
-  if (!h5Enabled) {
-    return false
-  }
-
-  if (!isH5BrowserCapabilityPath(url.pathname)) {
-    return false
-  }
-
-  return classifyH5Request(request, url, context) === 'h5-browser'
-}
-
-export function shouldBlockDisabledH5Access({
-  request,
-  url,
-  h5Enabled,
   explicitAuthRequired,
   context,
 }: {
   request: Request
   url: URL
-  h5Enabled: boolean
   explicitAuthRequired: boolean
-  context: H5RequestContext
+  context: RequestContext
 }): boolean {
-  if (h5Enabled || explicitAuthRequired) {
+  if (explicitAuthRequired) {
     return false
   }
 
-  if (!isH5ProtectedCapabilityPath(url.pathname)) {
+  if (!isProtectedCapabilityPath(url.pathname)) {
     return false
   }
 
-  return classifyH5Request(request, url, context) === 'h5-browser'
+  return classifyRequest(request, url, context) === 'remote'
 }
 
-function isH5ProtectedCapabilityPath(pathname: string): boolean {
+function isProtectedCapabilityPath(pathname: string): boolean {
   return pathname.startsWith('/api/') ||
     isFilesystemCapabilityPath(pathname) ||
     pathname.startsWith('/proxy/') ||
     pathname.startsWith('/ws/') ||
     pathname.startsWith('/sdk/')
-}
-
-export function isH5AccessControlPath(pathname: string): boolean {
-  return pathname.startsWith('/api/h5-access') &&
-    pathname !== '/api/h5-access/verify'
-}
-
-/**
- * The control plane — enabling remote access, minting and revoking H5 tokens —
- * is the one surface where loopback alone is deliberately not enough. Once the
- * desktop shell has injected its process token, only components holding that
- * token may change who can reach this machine; another browser or script on the
- * same box must not be able to publish the user's sessions to the network.
- * This is the boundary `harden desktop request isolation` set out to protect,
- * and it is kept here instead of being applied to every local request.
- */
-export function requiresLocalAccessCredential(
-  pathname: string,
-  context: H5RequestContext,
-): boolean {
-  if (!context.localAccessTokenConfigured) return false
-  if (!isH5AccessControlPath(pathname)) return false
-  return context.localAccessAuthorized !== true
-}
-
-function isH5BrowserCapabilityPath(pathname: string): boolean {
-  return pathname.startsWith('/api/') ||
-    isFilesystemCapabilityPath(pathname) ||
-    pathname.startsWith('/proxy/') ||
-    pathname.startsWith('/ws/')
 }

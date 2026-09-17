@@ -12,9 +12,6 @@ import { useMobileViewport } from '../../hooks/useMobileViewport'
 import { isDesktopRuntime } from '../../lib/desktopRuntime'
 import { resolveDefaultRuntimeSelection } from '../../lib/runtimeSelection'
 import { buildProviderChoices } from '../../lib/modelChoices'
-import { useHeiheiOAuthStore } from '../../stores/heiheiOAuthStore'
-import { useHeiheiOpenAIOAuthStore } from '../../stores/heiheiOpenAIOAuthStore'
-import { useHeiheiGrokOAuthStore } from '../../stores/heiheiGrokOAuthStore'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
 import { ReasoningEffortPopover } from './ReasoningEffortPopover'
 
@@ -72,12 +69,6 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     isLoading: providersLoading,
     fetchProviders,
   } = useProviderStore()
-  const claudeOAuthStatus = useHeiheiOAuthStore((s) => s.status)
-  const fetchClaudeOAuthStatus = useHeiheiOAuthStore((s) => s.fetchStatus)
-  const openAIOAuthStatus = useHeiheiOpenAIOAuthStore((s) => s.status)
-  const fetchOpenAIOAuthStatus = useHeiheiOpenAIOAuthStore((s) => s.fetchStatus)
-  const grokOAuthStatus = useHeiheiGrokOAuthStore((s) => s.status)
-  const fetchGrokOAuthStatus = useHeiheiGrokOAuthStore((s) => s.fetchStatus)
   const runtimeSelection = useSessionRuntimeStore((state) =>
     runtimeKey ? state.selections[runtimeKey] : undefined,
   )
@@ -88,7 +79,6 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
   const effortButtonRef = useRef<HTMLButtonElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const requestedProvidersRef = useRef(false)
-  const requestedOAuthStatusRef = useRef(false)
 
   const EFFORT_OPTIONS: { value: ReasoningEffortLevel; label: string }[] = [
     { value: 'low', label: t('settings.general.effort.low') },
@@ -116,14 +106,6 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     requestedProvidersRef.current = true
     void fetchProviders()
   }, [fetchProviders, isRuntimeScoped, providersLoading])
-
-  useEffect(() => {
-    if (!isRuntimeScoped || !open || requestedOAuthStatusRef.current) return
-    requestedOAuthStatusRef.current = true
-    void fetchClaudeOAuthStatus()
-    void fetchOpenAIOAuthStatus()
-    void fetchGrokOAuthStatus()
-  }, [fetchClaudeOAuthStatus, fetchGrokOAuthStatus, fetchOpenAIOAuthStatus, isRuntimeScoped, open])
 
   const openSelector = useCallback(() => {
     if (!disabled) {
@@ -210,16 +192,9 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     () => buildProviderChoices(
       providers,
       activeId,
-      availableModels,
-      t('settings.providers.officialName'),
-      t('settings.providers.openaiOfficialName'),
-      t('settings.providers.grokOfficialName'),
       roleLabels,
-      claudeOAuthStatus?.loggedIn === true,
-      openAIOAuthStatus?.loggedIn === true,
-      grokOAuthStatus?.loggedIn === true,
     ),
-    [activeId, availableModels, providers, roleLabels, t, claudeOAuthStatus, grokOAuthStatus, openAIOAuthStatus],
+    [activeId, providers, roleLabels],
   )
 
   const selectedModel = isControlled

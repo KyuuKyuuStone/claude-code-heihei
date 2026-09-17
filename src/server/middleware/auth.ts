@@ -5,7 +5,6 @@
  * 验证请求头中的 Authorization: Bearer <key> 与 .env 中的 ANTHROPIC_API_KEY 是否匹配。
  */
 
-import { H5AccessService } from '../services/h5AccessService.js'
 import { isLocalAccessAuthorized } from '../localAccessAuth.js'
 
 type AuthResult = { valid: boolean; error?: string }
@@ -58,16 +57,6 @@ export async function validateRequestAuth(
     return anthropicAuth
   }
 
-  const parsedAuth = parseBearerToken(req.headers.get('Authorization'))
-  const h5Token = tokenOverride ?? parsedAuth.token
-  if (h5Token) {
-    const h5AccessService = new H5AccessService()
-    if (await h5AccessService.validateToken(h5Token)) {
-      return { valid: true }
-    }
-    return { valid: false, error: 'Invalid H5 access token' }
-  }
-
   return anthropicAuth
 }
 
@@ -76,26 +65,5 @@ export async function requireAuth(req: Request, tokenOverride?: string | null): 
   if (!valid) {
     return Response.json({ error: 'Unauthorized', message: error }, { status: 401 })
   }
-  return null
-}
-
-export async function requireH5Token(req: Request, tokenOverride?: string | null): Promise<Response | null> {
-  const parsedAuth = parseBearerToken(req.headers.get('Authorization'))
-  const h5Token = tokenOverride ?? parsedAuth.token
-  if (!h5Token) {
-    return Response.json(
-      { error: 'Unauthorized', message: 'Missing H5 access token' },
-      { status: 401 },
-    )
-  }
-
-  const h5AccessService = new H5AccessService()
-  if (!await h5AccessService.validateToken(h5Token)) {
-    return Response.json(
-      { error: 'Unauthorized', message: 'Invalid H5 access token' },
-      { status: 401 },
-    )
-  }
-
   return null
 }

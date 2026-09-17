@@ -27,10 +27,8 @@ import {
   HOST_DIAGNOSTICS_BYTE_LIMIT,
   HOST_DIAGNOSTICS_LINE_LIMIT,
   killSidecar,
-  parseH5FixedPort,
   preferredServerPorts,
   pushStartupLog,
-  readH5FixedPort,
   readLastServerPort,
   reserveLocalPort,
   reserveServerPort,
@@ -117,26 +115,21 @@ describe('Electron sidecar manager', () => {
       '--port',
       '49321',
     ])
-    expect(plan.env.CLAUDE_H5_AUTO_PUBLIC_URL).toBe('1')
-    expect(plan.env.CLAUDE_H5_DIST_DIR).toBe(path.join('/app/desktop', 'dist'))
   })
 
-  it('can keep sidecar binaries and H5 assets unpacked while pointing app-root at app.asar', () => {
+  it('can keep sidecar binaries unpacked while pointing app-root at app.asar', () => {
     const resourcesRoot = path.resolve(path.sep, 'Applications', 'App.app', 'Contents', 'Resources')
     const desktopRoot = path.join(resourcesRoot, 'app.asar.unpacked')
     const appRoot = path.join(resourcesRoot, 'app.asar')
-    const h5DistDir = path.join(desktopRoot, 'dist')
     const plan = createServerPlan({
       desktopRoot,
       appRoot,
-      h5DistDir,
       port: 49321,
       env: {},
     })
 
     expect(plan.command).toContain(path.join(desktopRoot, 'src-tauri', 'binaries', 'claude-sidecar-'))
     expect(plan.args).toContain(appRoot)
-    expect(plan.env.CLAUDE_H5_DIST_DIR).toBe(h5DistDir)
   })
 
   it('passes the packaged ripgrep path to the server and its CLI children', () => {
@@ -581,7 +574,7 @@ describe('Electron sidecar manager', () => {
     const plan = {
       command: '/app/desktop/src-tauri/binaries/claude-sidecar-x86_64-pc-windows-msvc.exe',
       args: ['server', '--port', '49321'],
-      env: { CLAUDE_H5_AUTO_PUBLIC_URL: '1' },
+      env: { CUSTOM_PASSTHROUGH_ENV: '1' },
     }
 
     expect(spawnSidecar(plan, { existsSyncFn, spawnFn: spawnFn as never })).toBe(spawned)
@@ -606,24 +599,6 @@ describe('Electron sidecar manager', () => {
     expect(windowsPowerShellOverride('powershell.exe', 'linux')).toBeNull()
   })
 
-  it('parses only browser-safe in-range integer h5Access.fixedPort values', () => {
-    expect(parseH5FixedPort('{"h5Access":{"fixedPort":28670}}')).toBe(28670)
-    for (const port of [
-      1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000,
-      6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080,
-    ]) {
-      expect(parseH5FixedPort(`{"h5Access":{"fixedPort":${port}}}`)).toBeNull()
-    }
-    expect(parseH5FixedPort('{"h5Access":{"fixedPort":5062}}')).toBe(5062)
-    expect(parseH5FixedPort('{"h5Access":{"fixedPort":80}}')).toBeNull()
-    expect(parseH5FixedPort('{"h5Access":{"fixedPort":70000}}')).toBeNull()
-    expect(parseH5FixedPort('{"h5Access":{"fixedPort":"3456"}}')).toBeNull()
-    expect(parseH5FixedPort('{"h5Access":{"fixedPort":null}}')).toBeNull()
-    expect(parseH5FixedPort('{"h5Access":{}}')).toBeNull()
-    expect(parseH5FixedPort('{}')).toBeNull()
-    expect(parseH5FixedPort('not json')).toBeNull()
-  })
-
   it('persists and prioritizes preferred server ports from the config dir', () => {
     const configDir = mkdtempSync(path.join(tmpdir(), 'cchh-server-state-'))
     const env = { CLAUDE_CONFIG_DIR: configDir } as NodeJS.ProcessEnv
@@ -644,20 +619,6 @@ describe('Electron sidecar manager', () => {
       writeLastServerPort(50123, env)
       expect(readLastServerPort(env)).toBe(50123)
       expect(preferredServerPorts(env)).toEqual([50123])
-
-      // An explicit fixed port wins over the sticky port.
-      mkdirSync(path.join(configDir, 'cc-heihei'), { recursive: true })
-      writeFileSync(
-        path.join(configDir, 'cc-heihei', 'settings.json'),
-        JSON.stringify({ h5Access: { fixedPort: 28670 } }),
-        'utf-8',
-      )
-      expect(readH5FixedPort(env)).toBe(28670)
-      expect(preferredServerPorts(env)).toEqual([28670, 50123])
-
-      // Identical fixed and sticky ports are not duplicated.
-      writeLastServerPort(28670, env)
-      expect(preferredServerPorts(env)).toEqual([28670])
     } finally {
       rmSync(configDir, { recursive: true, force: true })
     }

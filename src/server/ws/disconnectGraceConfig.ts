@@ -1,28 +1,17 @@
 /**
- * Cached disconnect grace period (issue #764).
+ * Disconnect grace period (issue #764) —— 最后一个客户端断开后、会话被回收前的空闲宽限。
  *
- * The WebSocket `close` handler runs synchronously, but the configured grace
- * period lives in managed settings (async disk read). We cache the resolved
- * value here so the hot path stays synchronous, and refresh the cache at
- * server startup and whenever the H5 access settings are updated.
+ * 取值原本存在 H5 访问设置里（可配置的断连宽限秒数），随 H5 特性整体删除
+ * 后不再有可配来源，回归内置默认值。WebSocket 的 `close` 处理是同步热路径，故这里以
+ * 常量（+ 测试覆写钩子）暴露，避免让热路径去碰磁盘。
  */
-import { H5AccessService, DEFAULT_DISCONNECT_GRACE_MS } from '../services/h5AccessService.js'
+
+export const DEFAULT_DISCONNECT_GRACE_MS = 30_000
 
 let cachedGraceMs = DEFAULT_DISCONNECT_GRACE_MS
-const h5AccessService = new H5AccessService()
 
 /** Synchronous accessor for the disconnect cleanup grace period, in ms. */
 export function getDisconnectGraceMs(): number {
-  return cachedGraceMs
-}
-
-/** Reload the cached grace period from managed settings. Best-effort. */
-export async function refreshDisconnectGraceMs(): Promise<number> {
-  try {
-    cachedGraceMs = await h5AccessService.getDisconnectGraceMs()
-  } catch {
-    // Keep the previous (or default) value on read failure.
-  }
   return cachedGraceMs
 }
 

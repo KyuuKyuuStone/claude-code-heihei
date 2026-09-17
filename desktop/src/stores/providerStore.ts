@@ -22,8 +22,6 @@ import type {
   UpdateProviderInput,
   TestProviderConfigInput,
   ProviderTestResult,
-  CcSwitchScanResult,
-  CcSwitchImportResult,
   ProviderModelsInput,
   ProviderModelsResult,
 } from '../types/provider'
@@ -48,8 +46,6 @@ type ProviderStore = {
   activateOfficial: () => Promise<void>
   testProvider: (id: string, overrides?: { modelId?: string }) => Promise<ProviderTestResult>
   testConfig: (input: TestProviderConfigInput) => Promise<ProviderTestResult>
-  scanCcSwitch: () => Promise<CcSwitchScanResult>
-  importCcSwitch: (sourceIds: string[]) => Promise<CcSwitchImportResult>
   fetchModels: (input: ProviderModelsInput) => Promise<ProviderModelsResult>
 }
 
@@ -295,20 +291,6 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
 
   testConfig: async (input) => {
     const { result } = await providersApi.testConfig(input)
-    return result
-  },
-
-  scanCcSwitch: async () => {
-    return providersApi.scanCcSwitch()
-  },
-
-  importCcSwitch: async (sourceIds) => {
-    const result = await providersApi.importCcSwitch(sourceIds)
-    // Imported providers only reach the list through the shared refresh path,
-    // so the order and the active id stay whatever the server decided.
-    if (result.imported.length > 0) {
-      await get().fetchProviders()
-    }
     return result
   },
 

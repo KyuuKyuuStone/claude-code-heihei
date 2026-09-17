@@ -121,6 +121,21 @@ describe('E2E: Full Flow', () => {
     expect(data.version).toBeDefined()
   })
 
+  // 回归（2026-09-16）：`/api`（无斜杠）曾在**外层分流**落空——index.ts 只认
+  // `/api/` 前缀，裸 /api 掉到 SPA fallback 返回 HTML。修复点在 index.ts 的分流判断，
+  // 不在 router 层（router 的 `path === '/api'` 分支修复前就存在、只是外层不可达）。
+  // 这里用真实服务锁外层修复；router 层两路行为另由 api-router.test.ts 锁。
+  it('should serve the endpoint catalog JSON for a bare /api (no trailing slash)', async () => {
+    const res = await fetch(`${baseUrl}/api`)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('application/json')
+    const data = (await res.json()) as { endpoints?: unknown[] }
+    expect(Array.isArray(data.endpoints)).toBe(true)
+    expect(data.endpoints!.length).toBeGreaterThan(0)
+    // 名录里不应再有已删除的官方登录 OAuth 端点
+    expect(JSON.stringify(data.endpoints)).not.toContain('heihei-oauth')
+  })
+
   it('should return diagnostics', async () => {
     const { data } = await api('GET', '/api/status/diagnostics')
     expect(data.platform).toBe(process.platform)
@@ -393,8 +408,8 @@ describe('E2E: Full Flow', () => {
   // =============================================
 
   // Loopback browser origins (local dev servers) are trusted without a token
-  // since 9238481e; only remote origins stay blocked while H5 is disabled.
-  it('should allow loopback browser CORS preflight while H5 access is disabled', async () => {
+  // since 9238481e; remote origins are rejected by the local-request policy.
+  it('should allow loopback browser CORS preflight', async () => {
     const res = await fetch(`${baseUrl}/api/status`, {
       method: 'OPTIONS',
       headers: { 'Origin': 'http://localhost:3000' },
@@ -402,7 +417,7 @@ describe('E2E: Full Flow', () => {
     expect(res.status).toBe(204)
   })
 
-  it('should block remote browser CORS preflight while H5 access is disabled', async () => {
+  it('should block remote browser CORS preflight', async () => {
     const res = await fetch(`${baseUrl}/api/status`, {
       method: 'OPTIONS',
       headers: { 'Origin': 'https://phone.example' },

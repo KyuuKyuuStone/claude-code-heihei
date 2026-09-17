@@ -26,16 +26,6 @@ vi.mock('../api/models', () => ({
   },
 }))
 
-vi.mock('../api/h5Access', () => ({
-  h5AccessApi: {
-    get: vi.fn(),
-    enable: vi.fn(),
-    disable: vi.fn(),
-    regenerate: vi.fn(),
-    update: vi.fn(),
-  },
-}))
-
 vi.mock('../lib/desktopNotifications', () => ({
   getDesktopNotificationPermission: vi.fn().mockResolvedValue('unsupported'),
   notifyDesktop: vi.fn(),

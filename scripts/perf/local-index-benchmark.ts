@@ -749,50 +749,21 @@ export async function runSqliteProductBenchmark(
     const readyDurationMs =
       (Bun.nanoseconds() - serverStartedAt) / 1_000_000
 
-    // Loopback stays trusted on its own — the process token is additive, and is
-    // demanded only on the `/api/h5-access` control plane, so that is where the
-    // proof has to be taken.
+    // Loopback stays trusted on its own — the process token is additive. The
+    // old `/api/h5-access` control plane (the one loopback path that demanded
+    // it) was deleted with the H5 access feature, so the remaining probe is
+    // the loopback-trust baseline.
     const sessionsProbeUrl =
       `${baseUrl}/api/sessions?limit=${Math.min(1, options.sidebarLimit)}&offset=0`
-    const controlPlaneUrl = `${baseUrl}/api/h5-access`
-    const [
-      loopbackWithoutToken,
-      controlPlaneMissingToken,
-      controlPlaneWrongToken,
-      controlPlaneCorrectToken,
-    ] = await Promise.all([
-      fetch(sessionsProbeUrl, { signal }),
-      fetch(controlPlaneUrl, { signal }),
-      fetch(controlPlaneUrl, {
-        signal,
-        headers: { Authorization: 'Bearer wrong-local-access-token' },
-      }),
-      fetch(controlPlaneUrl, {
-        signal,
-        headers: { Authorization: `Bearer ${context.localAccessToken}` },
-      }),
-    ])
+    const loopbackWithoutToken = await fetch(sessionsProbeUrl, { signal })
     const loopbackAuth = {
       measured: true,
       loopbackWithoutTokenStatus: loopbackWithoutToken.status,
-      controlPlaneMissingTokenStatus: controlPlaneMissingToken.status,
-      controlPlaneWrongTokenStatus: controlPlaneWrongToken.status,
-      controlPlaneCorrectTokenStatus: controlPlaneCorrectToken.status,
     }
-    // Only the statuses matter here, but a body left unread keeps its connection
+    // Only the status matters here, but a body left unread keeps its connection
     // alive and would show up in the event-loop and RSS samples taken below.
-    await Promise.all([
-      loopbackWithoutToken,
-      controlPlaneMissingToken,
-      controlPlaneWrongToken,
-      controlPlaneCorrectToken,
-    ].map(response => response.body?.cancel().catch(() => {})))
-    if (
-      loopbackAuth.loopbackWithoutTokenStatus !== 200 ||
-      loopbackAuth.controlPlaneMissingTokenStatus !== 403 ||
-      loopbackAuth.controlPlaneWrongTokenStatus !== 403 ||
-      loopbackAuth.controlPlaneCorrectTokenStatus !== 200
-    ) {
+    await loopbackWithoutToken.body?.cancel().catch(() => {})
+    if (loopbackAuth.loopbackWithoutTokenStatus !== 200) {
       throw new Error(`loopback local-access auth proof failed: ${JSON.stringify(loopbackAuth)}`)
     }
 

@@ -336,8 +336,8 @@ export type WebSocketData = {
   serverHost: string
 }
 
-// Active WebSocket clients, grouped by session. Desktop, H5, and IM adapters can
-// legitimately watch the same running session at the same time.
+// Active WebSocket clients, grouped by session. Desktop windows and IM adapters
+// can legitimately watch the same running session at the same time.
 const activeSessions = new Map<string, Set<ServerWebSocket<WebSocketData>>>()
 
 const clientOutputCallbacks = new Map<

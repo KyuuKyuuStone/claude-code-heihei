@@ -519,7 +519,7 @@ describe('WebSocket handler session isolation', () => {
     spyOn(conversationService, 'removeOutputCallback').mockImplementation(() => {})
 
     handleWebSocket.open(ws)
-    // Mirrors the real H5 race: user_message has synchronously claimed the
+    // Mirrors the real browser race: user_message has synchronously claimed the
     // turn, but CLI startup has not completed and messageSent is still false.
     __registerPendingUserTurnForTests(sessionId)
     setTimeoutSpy.mockClear()
@@ -528,7 +528,7 @@ describe('WebSocket handler session isolation', () => {
     expect(setTimeoutSpy).not.toHaveBeenCalled()
     expect(turnOutputCallback).toBeNull()
 
-    // CLI startup finishes while the H5 tab remains closed. handleUserMessage
+    // CLI startup finishes while the browser tab remains closed. handleUserMessage
     // refreshes the watcher immediately before sending the queued turn.
     cliSessionReady = true
     __refreshDisconnectedTurnCleanupWatcherForTests(sessionId)

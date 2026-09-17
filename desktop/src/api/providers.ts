@@ -7,8 +7,6 @@ import type {
   UpdateProviderInput,
   TestProviderConfigInput,
   ProviderTestResult,
-  CcSwitchScanResult,
-  CcSwitchImportResult,
   ProviderModelsInput,
   ProviderModelsResult,
 } from '../types/provider'
@@ -71,14 +69,6 @@ export const providersApi = {
 
   testConfig(input: TestProviderConfigInput) {
     return api.post<TestResultResponse>('/api/providers/test', input)
-  },
-
-  scanCcSwitch() {
-    return api.get<CcSwitchScanResult>('/api/providers/cc-switch/scan')
-  },
-
-  importCcSwitch(sourceIds: string[]) {
-    return api.post<CcSwitchImportResult>('/api/providers/cc-switch/import', { sourceIds })
   },
 
   /**
