@@ -376,6 +376,10 @@ export function buildSupervisorOrientation(env: SupervisorOrientationEnv): strin
     'curl -s "$CC_HEIHEI_DESKTOP_SERVER_URL/api/servant-sessions?forSession=$CC_HEIHEI_SESSION_ID"',
     '',
     '看完后用一两句话向用户报告你有哪些员工可用，然后等待用户命令。',
+    '',
+    '注意：员工会话可能还在创建中（主管往往最先被拉起，员工晚 1~3 分钟）。' +
+      '若花名册为空或明显不全，等待约 60 秒后重跑上面的查询（最多重试 5 次）；' +
+      '仍为空才向用户报告「暂无员工」，不要凭一次空结果下结论，也不要自己代劳员工的活。',
   ]
 
   if (env.skillAvailable) {

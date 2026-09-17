@@ -17,6 +17,8 @@ export const COLLAB_MAILBOX_DIR = '.heihei/dispatch'
 
 export const DISPATCH_PROTOCOL_MD = `## 第一步：看花名册（只看本项目的员工）
 
+花名册为空或明显不全时，先等 60 秒重查（最多 5 次）再下结论——员工会话可能正在创建中（主管往往最先被拉起）。
+
 \`\`\`bash
 curl -s "$CC_HEIHEI_DESKTOP_SERVER_URL/api/servant-sessions?forSession=$CC_HEIHEI_SESSION_ID"
 \`\`\`

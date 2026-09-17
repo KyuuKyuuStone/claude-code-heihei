@@ -140,9 +140,9 @@ describe('ServantService', () => {
     await service.setServant(sessionId, { role: '后端', enabled: true })
     await service.setServant(other.sessionId, { role: '前端', enabled: true })
 
+    // 同项目过滤 + 自排除（请求者不出现在自己的花名册里）
     const roster = await service.listServants({ forSessionId: sessionId })
-    expect(roster).toHaveLength(1)
-    expect(roster[0].sessionId).toBe(sessionId)
+    expect(roster).toHaveLength(0)
 
     const all = await service.listServants()
     expect(all).toHaveLength(2)
@@ -341,6 +341,55 @@ describe('ServantService', () => {
       .readFile(path.join(tmpDir, 'cc-heihei', 'diagnostics', 'diagnostics.jsonl'), 'utf-8')
       .catch(() => '')
     expect(logged).not.toContain('servant_duplicate_role')
+  })
+
+  // ─── Onboarding 修复包 ────────────────────────────────────────────────────
+
+  it('should exclude the requester from its own roster view (self-exclusion)', async () => {
+    const boss = await sessionService.createSession(tmpDir)
+    const worker = await sessionService.createSession(tmpDir)
+    await service.setServant(boss.sessionId, { enabled: true, supervisor: true })
+    await service.setServant(worker.sessionId, { role: '前端', enabled: true })
+
+    const roster = await service.listServants({ forSessionId: boss.sessionId })
+    const ids = roster.map((s) => s.sessionId)
+    expect(ids).toContain(worker.sessionId)
+    // 主管不把自己当员工自派
+    expect(ids).not.toContain(boss.sessionId)
+  })
+
+  it('should generate the new servant session title from its role', async () => {
+    const worker = await sessionService.createSession(tmpDir)
+    await service.setServant(worker.sessionId, { role: '运维脚本', enabled: true })
+
+    const { sessions } = await sessionService.listSessions()
+    const created = sessions.find((s) => s.id === worker.sessionId)
+    expect(created?.title).toBe('运维脚本')
+  })
+
+  it('should not overwrite a user-renamed title on later edits', async () => {
+    const worker = await sessionService.createSession(tmpDir)
+    await service.setServant(worker.sessionId, { role: '运维脚本', enabled: true })
+    // 用户随后手动改名
+    await sessionService.renameSession(worker.sessionId, '我的脚本员工')
+    // 之后改档位（edit 路径）
+    await service.setServant(worker.sessionId, { role: '运维脚本', enabled: true, constraint: 'readonly' })
+
+    const { sessions } = await sessionService.listSessions()
+    const created = sessions.find((s) => s.id === worker.sessionId)
+    expect(created?.title).toBe('我的脚本员工')
+  })
+
+  it('should include the roster-emptiness retry guidance in the supervisor orientation', async () => {
+    const { buildSupervisorOrientation } = await import('../api/servants.js')
+    const text = buildSupervisorOrientation({
+      sessionId,
+      serverUrl: 'http://127.0.0.1:61694',
+      skillAvailable: false,
+      shellOk: true,
+    })
+    expect(text).toContain('60 秒')
+    expect(text).toContain('重试 5 次')
   })
 })
 

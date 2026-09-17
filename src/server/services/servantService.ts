@@ -155,7 +155,10 @@ export class ServantService {
       const forWorkDir = byId.get(options.forSessionId)?.workDir
       if (forWorkDir) {
         result = alive.filter(
-          (s) => byId.get(s.sessionId)?.workDir === forWorkDir,
+          (s) =>
+            // 自排除：请求者不出现在自己的花名册里（防主管把自己当员工自派）
+            s.sessionId !== options.forSessionId &&
+            byId.get(s.sessionId)?.workDir === forWorkDir,
         )
       }
     }
@@ -286,6 +289,16 @@ export class ServantService {
       data.servants[index] = entry
     }
     await this.writeFile(data)
+
+    // 新登记的协作会话：title 按角色生成（custom-title 优先级最高，且之后
+    // 用户的 AI title/手动改名仍可覆盖）。只修新会话（index===-1），历史不回填；
+    // 若用户先改名再改档位（edit 路径 index!==-1）不会覆盖用户命名。
+    // 失败不阻断登记本身（title 是体验项）。
+    if (index === -1 && entry.role) {
+      await sessionService
+        .renameSession(sessionId, entry.role)
+        .catch(() => {})
+    }
 
     // 新增时「同项目同 role 且 enabled」重复提醒（日志级不阻断——role 是
     // 自由文本，同名不同分工合法；留痕让"派活给了另一个同名角色"可排查）
