@@ -14,6 +14,7 @@ import * as path from 'path'
 import * as os from 'os'
 import * as crypto from 'crypto'
 import { ApiError } from '../middleware/errorHandler.js'
+import { diagnosticsService } from './diagnosticsService.js'
 import { sessionService } from './sessionService.js'
 import { conversationService } from './conversationService.js'
 
@@ -85,6 +86,36 @@ function normalizeWriteDirs(dirs: readonly string[]): string[] {
   return out
 }
 
+/**
+ * 员工移除的记录（对称 servant_registered；v1.2.3 基调：生命周期事件只进
+ * 诊断日志，不注入主管对话流）。身份快照让「删掉的是什么档位/是否主管」
+ * 在复盘时可查；reason 区分显式移除与会话死亡自动清理两个静默路径。
+ */
+function recordServantRemoved(
+  entry: ServantEntry,
+  reason: 'explicit-delete' | 'session-deleted-auto-cleanup',
+  workDir?: string,
+): void {
+  const roleText = entry.role ? `${entry.role}（${entry.description || '未填写特性'}）` : '未命名角色'
+  void diagnosticsService
+    .recordEvent({
+      type: 'servant_removed',
+      severity: 'info',
+      summary: `员工已移除：${roleText}`,
+      sessionId: entry.sessionId,
+      details: {
+        sessionId: entry.sessionId,
+        role: entry.role,
+        description: entry.description,
+        ...(workDir ? { workDir } : {}),
+        ...(entry.constraint ? { constraint: entry.constraint } : {}),
+        ...(entry.supervisor !== undefined ? { supervisor: entry.supervisor } : {}),
+        reason,
+      },
+    })
+    .catch(() => {})
+}
+
 export class ServantService {
   private getFilePath(): string {
     const configDir =
@@ -107,12 +138,16 @@ export class ServantService {
     const { sessions } = await sessionService.listSessions({ limit: 500 })
     const byId = new Map(sessions.map((s) => [s.id, s]))
 
-    // 会话已被删除的条目自动清理
+    // 会话已被删除的条目自动清理（第二个移除路径，同样要留 servant_removed 痕迹）
     const alive = candidates.filter((s) => byId.has(s.sessionId))
     if (alive.length !== candidates.length) {
       const aliveIds = new Set(alive.map((s) => s.sessionId))
+      const removed = data.servants.filter((s) => !aliveIds.has(s.sessionId) && !byId.has(s.sessionId))
       data.servants = data.servants.filter((s) => aliveIds.has(s.sessionId) || byId.has(s.sessionId))
       await this.writeFile(data)
+      for (const entry of removed) {
+        recordServantRemoved(entry, 'session-deleted-auto-cleanup')
+      }
     }
 
     let result = alive
@@ -252,6 +287,35 @@ export class ServantService {
     }
     await this.writeFile(data)
 
+    // 新增时「同项目同 role 且 enabled」重复提醒（日志级不阻断——role 是
+    // 自由文本，同名不同分工合法；留痕让"派活给了另一个同名角色"可排查）
+    if (index === -1 && entry.role) {
+      const workDirById = new Map(sessions.map((s) => [s.id, s.workDir]))
+      const duplicate = data.servants.find(
+        (s) =>
+          s.enabled &&
+          s.sessionId !== sessionId &&
+          s.role === entry.role &&
+          workDirById.get(s.sessionId) === thisSession.workDir,
+      )
+      if (duplicate) {
+        void diagnosticsService
+          .recordEvent({
+            type: 'servant_duplicate_role',
+            severity: 'warn',
+            summary: `同项目已有同角色员工「${entry.role}」在册：${sessionId} 与 ${duplicate.sessionId}`,
+            sessionId,
+            details: {
+              newSessionId: sessionId,
+              existingSessionId: duplicate.sessionId,
+              role: entry.role,
+              workDir: thisSession.workDir,
+            },
+          })
+          .catch(() => {})
+      }
+    }
+
     // 员工会话要被主管无人值守地驱动：权限模式必须放行，否则员工会停在
     // 权限确认上无人批准，随后被"等待权限会话"的有界清理策略杀掉。
     // 协作弹窗指定的模型/思考强度（runtime* 字段）也在这里写入会话元数据——
@@ -292,15 +356,16 @@ export class ServantService {
     return entry
   }
 
-  /** 移除会话的协作身份 */
-  async removeServant(sessionId: string): Promise<void> {
+  /** 移除会话的协作身份；返回被删条目（供调用方发 servant_removed 事件） */
+  async removeServant(sessionId: string): Promise<ServantEntry> {
     const data = await this.readFile()
     const index = data.servants.findIndex((s) => s.sessionId === sessionId)
     if (index === -1) {
       throw ApiError.notFound(`Servant not registered: ${sessionId}`)
     }
-    data.servants.splice(index, 1)
+    const [removed] = data.servants.splice(index, 1)
     await this.writeFile(data)
+    return removed
   }
 
   // ---------------------------------------------------------------------------

@@ -41,6 +41,19 @@ function restoreConfigDir(): void {
   }
 }
 
+/** 轮询诊断日志直到出现 needle（recordEvent 是异步 fire-and-forget） */
+async function readDiagnosticsEventually(needle: string, timeoutMs = 2_000): Promise<string> {
+  const diagnosticsPath = path.join(tmpDir, 'cc-heihei', 'diagnostics', 'diagnostics.jsonl')
+  const deadline = Date.now() + timeoutMs
+  let logged = ''
+  while (Date.now() < deadline) {
+    logged = await fs.readFile(diagnosticsPath, 'utf-8').catch(() => '')
+    if (logged.includes(needle)) return logged
+    await new Promise((r) => setTimeout(r, 25))
+  }
+  return logged
+}
+
 // ─── ServantService tests ───────────────────────────────────────────────────
 
 describe('ServantService', () => {
@@ -282,6 +295,53 @@ describe('ServantService', () => {
     expect(entry?.constraint).toBe('readonly')
     expect(entry?.writeDirs).toBeUndefined()
   })
+
+  // ─── 员工生命周期（增删重入）──────────────────────────────────────────────
+
+  it('should log servant_removed with identity snapshot on session-deleted auto cleanup', async () => {
+    await service.setServant(sessionId, {
+      role: '策划',
+      description: '玩法策划',
+      enabled: true,
+      constraint: 'readonly',
+    })
+    // 删除会话 → listServants 的自动清理路径（第二个静默移除点）
+    await sessionService.deleteSession(sessionId)
+    expect(await service.listServants()).toEqual([])
+
+    const logged = await readDiagnosticsEventually('servant_removed')
+    expect(logged).toContain('session-deleted-auto-cleanup')
+    expect(logged).toContain('策划')
+    expect(logged).toContain(sessionId)
+    // 身份快照：排查「删掉的是什么档位」时有据可查
+    expect(logged).toContain('"constraint":"readonly"')
+  })
+
+  it('should warn with servant_duplicate_role when registering a same-role worker', async () => {
+    await service.setServant(sessionId, { role: '策划', enabled: true })
+    const second = await sessionService.createSession(tmpDir)
+    await service.setServant(second.sessionId, { role: '策划', enabled: true })
+
+    const logged = await readDiagnosticsEventually('servant_duplicate_role')
+    expect(logged).toContain('策划')
+    expect(logged).toContain(sessionId)
+    expect(logged).toContain(second.sessionId)
+    // 不阻断：两条目都在册
+    expect(await service.listServants()).toHaveLength(2)
+  })
+
+  it('should not warn for a different role registration', async () => {
+    await service.setServant(sessionId, { role: '策划', enabled: true })
+    const second = await sessionService.createSession(tmpDir)
+    await service.setServant(second.sessionId, { role: '前端', enabled: true })
+
+    // 给异步 recordEvent 一个沉降窗口后断言未产生重复角色事件
+    await new Promise((r) => setTimeout(r, 150))
+    const logged = await fs
+      .readFile(path.join(tmpDir, 'cc-heihei', 'diagnostics', 'diagnostics.jsonl'), 'utf-8')
+      .catch(() => '')
+    expect(logged).not.toContain('servant_duplicate_role')
+  })
 })
 
 // ─── Servants API tests ─────────────────────────────────────────────────────
@@ -487,6 +547,42 @@ describe('Servants API', () => {
     expect(logged).toContain(sessionId)
     expect(logged).toContain('写作')
   })
+
+  it('should log servant_removed on explicit delete and invalidate the identity cache', async () => {
+    // 登记为 whitelist 档员工（身份快照应进移除事件）
+    await handleServantsApi(
+      jsonReq(`http://localhost/api/servant-sessions/${sessionId}`, 'PUT', {
+        role: '策划',
+        enabled: true,
+        constraint: 'whitelist',
+        writeDirs: [tmpDir],
+      }),
+      new URL(`http://localhost/api/servant-sessions/${sessionId}`),
+      ['api', 'servant-sessions', sessionId],
+    )
+
+    // 预置身份缓存（模拟会话曾拉起读过花名册）
+    const { conversationService } = await import('../services/conversationService.js')
+    const cache = conversationService as unknown as {
+      supervisorSessionCache: Map<string, unknown>
+    }
+    cache.supervisorSessionCache.set(sessionId, { supervisor: false, constraint: 'whitelist' })
+
+    const del = await handleServantsApi(
+      jsonReq(`http://localhost/api/servant-sessions/${sessionId}`, 'DELETE'),
+      new URL(`http://localhost/api/servant-sessions/${sessionId}`),
+      ['api', 'servant-sessions', sessionId],
+    )
+    expect(del.status).toBe(200)
+
+    // 缺口 A 修复：删除必须清身份缓存，否则会话重启仍按旧档位注入收权 env
+    expect(cache.supervisorSessionCache.has(sessionId)).toBe(false)
+
+    const logged = await readDiagnosticsEventually('servant_removed')
+    expect(logged).toContain('explicit-delete')
+    expect(logged).toContain('策划')
+    expect(logged).toContain('"constraint":"whitelist"')
+  })
 })
 
 // ─── Session Messages API tests ─────────────────────────────────────────────
@@ -518,12 +614,27 @@ describe('Session Messages API', () => {
     await cleanupTmpDir(tmpDir)
   })
 
+  /** 登记一个真实会话为在册员工，返回 sessionId（404 语义下投递目标必须在册） */
+  async function registerRosterWorker(
+    input: { role?: string; enabled?: boolean; supervisor?: boolean } = {},
+  ): Promise<string> {
+    const worker = await sessionService.createSession(tmpDir)
+    const { ServantService } = await import('../services/servantService.js')
+    await new ServantService().setServant(worker.sessionId, {
+      role: input.role ?? '测试员工',
+      enabled: input.enabled ?? true,
+      ...(input.supervisor !== undefined ? { supervisor: input.supervisor } : {}),
+    })
+    return worker.sessionId
+  }
+
   it('should deliver a message to the target session', async () => {
+    const target = await registerRosterWorker()
     const req = new Request('http://localhost/api/session-messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        targetSessionId: 'sess-1',
+        targetSessionId: target,
         content: '任务：实现登录接口',
         fromSessionId: 'boss-1',
       }),
@@ -534,15 +645,16 @@ describe('Session Messages API', () => {
     ])
     expect(resp.status).toBe(201)
     expect(deliverMock).toHaveBeenCalledTimes(1)
-    expect(deliverMock.mock.calls[0][0]).toBe('sess-1')
+    expect(deliverMock.mock.calls[0][0]).toBe(target)
     expect(deliverMock.mock.calls[0][1]).toBe('任务：实现登录接口')
   })
 
   it('recovers GBK-encoded Chinese from legacy inline curl bodies', async () => {
     // Windows 控制台的 curl -d 内联中文按 GBK 编码发出（实战复盘 BUG-1）：
     // 服务端严格 UTF-8 解码失败时回退 GBK 解码。"测试" 的 GBK 字节 = B2 E2 CA D4
+    const target = await registerRosterWorker()
     const body = Buffer.concat([
-      Buffer.from('{"targetSessionId":"sess-1","content":"', 'utf8'),
+      Buffer.from(`{"targetSessionId":"${target}","content":"`, 'utf8'),
       Buffer.from([0xB2, 0xE2, 0xCA, 0xD4]),
       Buffer.from('","fromSessionId":"emp-1"}', 'utf8'),
     ])
@@ -569,9 +681,9 @@ describe('Session Messages API', () => {
       new URL('http://localhost/api/session-messages'),
       ['api', 'session-messages'],
     )
-    // targetSessionId 缺失时 deliver 抛 badRequest（此处 mock 不过校验，直接返回 true，
-    // 所以另验证空 content 的真实服务校验在 SessionMessenger 层，见下方单元测试）
-    expect([201, 400]).toContain(missingTarget.status)
+    // targetSessionId 缺失 → 前置校验 400（原先落到 deliver 层，mock 下会假成功 201；
+    // 生命周期改造后由 API 层先行拒绝；空 content 的校验仍在 SessionMessenger 层）
+    expect(missingTarget.status).toBe(400)
   })
 
   it('should broadcast to enabled servants in the project, skipping disabled and sender', async () => {
@@ -686,6 +798,56 @@ describe('Session Messages API', () => {
       'api',
       'session-messages',
     ])
+    expect(resp.status).toBe(201)
+    expect(deliverMock).toHaveBeenCalledTimes(1)
+  })
+
+  // ─── 生命周期：不在册目标的可行动 404 与主管放行 ─────────────────────────
+
+  async function postMessage(targetSessionId: string, fromSessionId = 'boss-1'): Promise<Response> {
+    const req = new Request('http://localhost/api/session-messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetSessionId, content: '任务', fromSessionId }),
+    })
+    return handleSessionMessagesApi(req, new URL(req.url), [
+      'api',
+      'session-messages',
+    ])
+  }
+
+  it('should 404 with actionable text when the target is not on the roster', async () => {
+    const resp = await postMessage('never-registered')
+    expect(resp.status).toBe(404)
+    const body = (await resp.json()) as { error?: { message?: string } | string }
+    const text = JSON.stringify(body)
+    expect(text).toContain('not on the roster')
+    expect(text).toContain('reassign')
+    // 不投递（避免"看起来成功了"的误导）
+    expect(deliverMock).not.toHaveBeenCalled()
+  })
+
+  it('should 404 after the target has been removed from the roster', async () => {
+    const worker = await registerRosterWorker()
+    const { ServantService } = await import('../services/servantService.js')
+    await new ServantService().removeServant(worker)
+
+    const resp = await postMessage(worker)
+    expect(resp.status).toBe(404)
+    expect(deliverMock).not.toHaveBeenCalled()
+  })
+
+  it('should still deliver worker-to-supervisor reports (supervisor is on the roster)', async () => {
+    const supervisor = await registerRosterWorker({ supervisor: true })
+    const resp = await postMessage(supervisor, 'some-worker')
+    expect(resp.status).toBe(201)
+    expect(deliverMock).toHaveBeenCalledTimes(1)
+    expect(deliverMock.mock.calls[0][0]).toBe(supervisor)
+  })
+
+  it('should still deliver to a disabled (but still registered) worker', async () => {
+    const worker = await registerRosterWorker({ enabled: false })
+    const resp = await postMessage(worker)
     expect(resp.status).toBe(201)
     expect(deliverMock).toHaveBeenCalledTimes(1)
   })

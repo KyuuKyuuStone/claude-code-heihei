@@ -101,6 +101,7 @@ curl -s "$CC_HEIHEI_DESKTOP_SERVER_URL/api/servant-sessions?forSession=$CC_HEIHE
 - 员工的 \`lastActivityAt\` 在派活之后有更新 = 已开工，继续等汇报；
 - 一直没更新 = 员工可能卡住（工具缺失/权限等待），**发一条带排障线索的催促**，不要只施压。催促模板要点：① 核心工具（Bash/Read/Write/Glob/Grep）本就内联可用，直接调用即可，不要用 ToolSearch 反复加载（关键词搜索只覆盖 deferred 工具，搜不到核心工具属正常）；② 汇报改用文件信箱（写 JSON 到 \`.heihei/dispatch/report-<序号>.json\`）；③ 汇报命令不要内联中文。
 - 员工长期（10 分钟以上）无活动且催促无回应：告知用户该员工会话可能异常，建议用户在 UI 点开该会话查看现场。
+- 派活返回 **404「目标不在册」** = 该员工已被移除（或从未登记）——重新 \`GET /api/servant-sessions\` 核对花名册，改派他人或提示用户重建该角色；**不要对同一目标重试**。
 
 ## 故障自检（派活/汇报失败时按序执行）
 

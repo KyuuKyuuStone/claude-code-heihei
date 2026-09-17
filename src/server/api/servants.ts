@@ -110,7 +110,34 @@ export async function handleServantsApi(
 
     // ── DELETE /api/servant-sessions/:sessionId ─────────────────────────
     if (method === 'DELETE' && sessionId) {
-      await servantService.removeServant(decodeURIComponent(sessionId))
+      const targetId = decodeURIComponent(sessionId)
+      const removed = await servantService.removeServant(targetId)
+      // 与 PUT 对齐：清协作身份缓存，否则被删员工（含 readonly/whitelist/主管
+      // 身份）的会话重启后仍按旧身份注入收权 env——删除未真正生效到运行时
+      conversationService.invalidateSupervisorCache(targetId)
+      // 移除留痕（对称 servant_registered；workDir 会话通常仍在，可查则附上）
+      const workDir = await sessionService
+        .getSessionWorkDir(targetId)
+        .catch(() => null)
+      void diagnosticsService
+        .recordEvent({
+          type: 'servant_removed',
+          severity: 'info',
+          summary: `员工已移除：${
+            removed.role ? `${removed.role}（${removed.description || '未填写特性'}）` : '未命名角色'
+          }`,
+          sessionId: targetId,
+          details: {
+            sessionId: targetId,
+            role: removed.role,
+            description: removed.description,
+            ...(workDir ? { workDir } : {}),
+            ...(removed.constraint ? { constraint: removed.constraint } : {}),
+            ...(removed.supervisor !== undefined ? { supervisor: removed.supervisor } : {}),
+            reason: 'explicit-delete',
+          },
+        })
+        .catch(() => {})
       void dispatchMailboxService.sync()
       return Response.json({ ok: true })
     }
@@ -158,6 +185,19 @@ export async function handleSessionMessagesApi(
 
       const targetSessionId = body.targetSessionId as string
       const fromSessionId = body.fromSessionId as string | undefined
+
+      // 目标不在花名册 → 可行动 404（原先 deliver 失败报 500，主管无法区分
+      // 「会话没跑」与「目标已移除」）。主管也在花名册（getServant 非 null），
+      // 员工→主管汇报天然放行；被禁用员工仍在册，同样放行（与既有语义一致）。
+      if (typeof targetSessionId !== 'string' || !targetSessionId.trim()) {
+        throw ApiError.badRequest('Field "targetSessionId" is required')
+      }
+      const rosterTarget = await servantService.getServant(targetSessionId)
+      if (!rosterTarget) {
+        throw ApiError.notFound(
+          `Target session is not on the roster: ${targetSessionId}. It was removed or never registered — fetch /api/servant-sessions to see current workers, then reassign; do not retry the same target.`,
+        )
+      }
 
       // 项目隔离（模式 A）：向员工会话派活时，发送方必须与员工同项目。
       // 员工向主管汇报不受此限（主管不是 enabled 员工）。
