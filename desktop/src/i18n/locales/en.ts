@@ -2596,6 +2596,7 @@ export const en = {
   'servant.modal.sectionRuntime': 'Runtime',
   'servant.modal.sectionIdentity': 'Identity',
   'servant.modal.identityHint': 'Serve: lets the supervisor discover this session and dispatch tasks to it; Supervisor: can dispatch to servants of this project, one per project',
+  'servant.modal.serveToggleHint': 'Turning off "Serve other sessions" only pauses new assignments — the identity is kept and can resume anytime. Removing it from the roster ends the collaboration identity; rejoining requires registering again.',
   'servant.modal.constraint': 'Constraint level',
   'servant.modal.constraintFull': 'Full execution (can modify files)',
   'servant.modal.constraintReadonly': 'Read-only observation (no file changes)',

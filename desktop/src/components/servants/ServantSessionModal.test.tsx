@@ -99,6 +99,13 @@ describe('ServantSessionModal', () => {
     )
   })
 
+  it('explains that disabling serve only pauses work while roster removal ends the identity', () => {
+    render(<ServantSessionModal open mode="create" workDir="D:/proj" onClose={vi.fn()} />)
+
+    expect(screen.getByText(/只是暂停接活/)).toBeInTheDocument()
+    expect(screen.getByText(/从花名册移除则协作身份终止/)).toBeInTheDocument()
+  })
+
   it('submits the selected runtime (provider/model/effort) when creating', async () => {
     render(<ServantSessionModal open mode="create" workDir="D:/proj" onClose={vi.fn()} />)
 

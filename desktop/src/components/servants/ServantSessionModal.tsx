@@ -402,6 +402,9 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
           <p className="text-[12px] leading-relaxed text-[var(--color-text-tertiary)] -mt-1">
             {t('servant.modal.identityHint')}
           </p>
+          <p className="text-[12px] leading-relaxed text-[var(--color-text-tertiary)] -mt-1">
+            {t('servant.modal.serveToggleHint')}
+          </p>
         </section>
 
         <section className="flex flex-col gap-3">

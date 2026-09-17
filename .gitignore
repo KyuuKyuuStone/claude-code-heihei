@@ -77,3 +77,9 @@ CLAUDE.md
 .mavis/
 .opencode/
 graphify-out/
+
+# Collaboration runtime (worker sessions)
+# .heihei/ = 协作信箱与运行时状态（dispatch/ 派活投递、roster.json 花名册等）
+# .dispatch-payload.json = 主管派活协议的临时载荷（写入后用完即删）
+.heihei/
+.dispatch-payload.json

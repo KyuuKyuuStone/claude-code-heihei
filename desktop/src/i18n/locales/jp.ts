@@ -2598,6 +2598,7 @@ export const jp: Record<TranslationKey, string> = {
   'servant.modal.sectionRuntime': '実行設定',
   'servant.modal.sectionIdentity': '身份',
   'servant.modal.identityHint': '「他セッションに仕える」：スーパーバイザーがこのセッションを発見してタスクを割り当て可能に、「スーパーバイザーに任命」：同一プロジェクトのワーカーに割り当て可能（各プロジェクト1名）',
+  'servant.modal.serveToggleHint': '「他のセッションにサービス」をオフにしても新しい割り当てが一時停止されるだけで、ロール情報は保持され、いつでも再開できます。名簿から削除すると協働ロールは終了し、再参加には再登録が必要です。',
   'servant.modal.constraint': '制約レベル',
   'servant.modal.constraintFull': '完全実行（ファイル変更可）',
   'servant.modal.constraintReadonly': '読み取り専用観察（ファイル変更禁止）',

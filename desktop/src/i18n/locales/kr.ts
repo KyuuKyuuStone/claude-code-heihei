@@ -2598,6 +2598,7 @@ export const kr: Record<TranslationKey, string> = {
   'servant.modal.sectionRuntime': '실행 설정',
   'servant.modal.sectionIdentity': '신원',
   'servant.modal.identityHint': '서비스: 슈퍼바이저가 이 세션을 발견하고 작업을 할당; 슈퍼바이저: 이 프로젝트의 워커에게 할당(프로젝트당 1명)',
+  'servant.modal.serveToggleHint': '「다른 세션 지원」을 꺼도 새 작업 배정이 일시 중지될 뿐이며, 역할 정보는 유지되어 언제든 재개할 수 있습니다. 명단에서 제거하면 협업 역할이 종료되고, 다시 참여하려면 재등록이 필요합니다.',
   'servant.modal.constraint': '제약 수준',
   'servant.modal.constraintFull': '전체 실행(파일 수정 가능)',
   'servant.modal.constraintReadonly': '읽기 전용 관찰(파일 수정 금지)',

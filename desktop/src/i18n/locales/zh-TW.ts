@@ -2598,6 +2598,7 @@ export const zh: Record<TranslationKey, string> = {
   'servant.modal.sectionRuntime': '執行設定',
   'servant.modal.sectionIdentity': '身份',
   'servant.modal.identityHint': '「服務其他會話」：允許主管發現此會話並派活；「任命為主管」：可向本專案員工派活，每個專案僅一名',
+  'servant.modal.serveToggleHint': '關閉「服務其他會話」只是暫停接活：身份資訊保留，可隨時恢復。從名冊移除則協作身份終止，重新加入需重新登記。',
   'servant.modal.constraint': '約束檔位',
   'servant.modal.constraintFull': '完全執行（可修改檔案）',
   'servant.modal.constraintReadonly': '唯讀觀察（禁改檔案）',
