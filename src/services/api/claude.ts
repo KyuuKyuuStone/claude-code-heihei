@@ -226,6 +226,12 @@ import {
 } from "./streamWatchdog.js";
 import { jsonStringify } from "../../utils/slowOperations.js";
 import {
+  pruneMessagesForContextBudget,
+  recordRequestBodySize,
+  truncateOversizedMessages,
+} from "./contextGovernance.js";
+import { getContextWindowForModel } from "../../utils/context.js";
+import {
   isBetaTracingEnabled,
   type LLMRequestNewContext,
   startLLMRequestSpan,
@@ -1442,6 +1448,19 @@ async function* queryModel(
   // Compute fingerprint from first user message for attribution.
   // Must run BEFORE injecting synthetic messages (e.g. deferred tool names)
   // so the fingerprint reflects the actual user input.
+  // NOTE: runs AFTER context governance below — prune keeps the first turn
+  // (task goal) intact, so the fingerprint stays stable under pruning.
+  // ── 上下文体积治理（v1.2.6 扩批，见 contextGovernance.ts）────────────────
+  // M1：超长单条 user 消息截断（原文落盘可回查；tool_result 主线在工具侧
+  // toolResultStorage，这里兜非 tool_result 消息与漏网）。
+  // L1+L2：按 provider 实际窗口（动态解析=model 自适应）硬封顶 messages——
+  // compaction 的请求前最后保险丝；正常会话不触发，零行为变化。
+  messagesForAPI = truncateOversizedMessages(messagesForAPI).messages;
+  const contextWindowTokens = getContextWindowForModel(options.model, betas);
+  messagesForAPI = pruneMessagesForContextBudget(messagesForAPI, {
+    contextWindowTokens,
+  }).messages;
+
   const fingerprint = computeFingerprintFromMessages(messagesForAPI);
 
   // When the delta attachment is enabled, deferred tools are announced
@@ -1463,6 +1482,13 @@ async function* queryModel(
       ];
     }
   }
+
+  // M2：请求体体积观测（每请求诊断 + 滚动分位汇总 + 接近窗口可行动告警），
+  // 在消息定形（含 deferred prepend）后记录
+  void recordRequestBodySize(
+    Buffer.byteLength(jsonStringify(messagesForAPI), "utf-8"),
+    contextWindowTokens,
+  );
 
   // Chrome tool-search instructions: when the delta attachment is enabled,
   // these are carried as a client-side block in mcp_instructions_delta
