@@ -36,6 +36,26 @@ jobs:
           src/server/__tests__/diagnostics-service.test.ts
           src/server/__tests__/doctor-service.test.ts
 
+  server-tests-linux-exp:
+    # ⚠️ 一次性实验 job（用完即撤）：为「Linux 收编」采集**真实**的逐条失败清单。
+    # 背景：门禁固定 windows runner，而套件里存在 skipIf(win32) 方向的用例（只在 Linux 跑），
+    # 这批用例从未被任何门禁执行过（门禁盲区）；且交接文档记载 ubuntu 有约 26 个存量
+    # 环境性失败，但只有类别没有清单——只有真实跑一遍才能取得。
+    # 与 windows 门禁**并列不替换**：continue-on-error 保证它绝不阻断发布与门禁；
+    # 失败清单由维护者用 gh 从该 job 提取并分类（可修 / 环境性 / 真 bug）后，本 job 即删除。
+    name: Server tests (Linux experiment)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Run full server test suite (experiment, non-blocking)
+        run: bun test src/server/__tests__/
+
   adapters:
     name: Adapters tests
     runs-on: ubuntu-latest
@@ -80,8 +100,12 @@ jobs:
     # 必须 windows runner：本套件只在 Windows 开发机上验证过，ubuntu 有存量
     # 环境性失败（交接文档记载 ~26 个）；且产品只发布 Windows。
     #
-    # 子集构成：协作相关桌面组件 + B1 分诊修复中验证稳定的文件（同时守护 B1 的修复）。
-    # 扩缩此清单时，请同步 cc-heihei-交接/批次2_B2 报告，并保持 job 内注释与清单一一致。
+    # 子集构成（37 文件）：①首批 18 = 协作相关桌面组件 + B1 分诊修复中验证稳定的文件
+    # （同时守护 B1 的修复）；②B2 扩容 19（2026-09-16，达「连续 ≥3 次」标准后纳入）
+    # = 设置面/诊断面板/存储层/布局壳等近期改动密集面，全部先经候选池单跑全绿筛选，
+    # 再以 37 文件整体连续 3 次全绿收编。
+    # 扩缩此清单时，请同步 cc-heihei-交接/批次2_B2_CI门禁扩容 与 批次6_B2扩容 报告，
+    # 并保持 job 内注释与清单一致（CI flake 处理见上方第 3 条）。
     name: Desktop tests gate
     runs-on: windows-latest
     steps:
@@ -115,3 +139,22 @@ jobs:
           src/components/workspace/WorkspacePanel.test.tsx
           src/pages/ActivitySettings.test.tsx
           src/__tests__/generalSettings.test.tsx
+          src/__tests__/agentsSettings.test.tsx
+          src/__tests__/diagnosticsSettings.test.tsx
+          src/__tests__/mcpSettings.test.tsx
+          src/__tests__/memorySettings.test.tsx
+          src/__tests__/pluginsSettings.test.tsx
+          src/lib/desktopRuntime.test.ts
+          src/lib/sessionWorkspace.test.ts
+          src/components/layout/AppShell.test.tsx
+          src/components/layout/TabBar.test.tsx
+          src/components/controls/ModelSelector.test.tsx
+          src/components/settings/AgentManager.test.tsx
+          src/components/settings/SettingsSection.test.tsx
+          src/components/chat/ChatInput.test.tsx
+          src/components/search/FindInPageModal.test.tsx
+          src/pages/EmptySession.test.tsx
+          src/stores/settingsStore.test.ts
+          src/stores/providerStore.test.ts
+          src/stores/chatStore.test.ts
+          src/stores/sessionStore.test.ts
