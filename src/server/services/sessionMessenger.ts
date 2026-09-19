@@ -72,7 +72,21 @@ export class SessionMessenger {
       rebindClientOutputForSession(targetSessionId)
     }
 
-    return conversationService.sendMessage(targetSessionId, content)
+    // 注入式回合也要建 turn（冻结根因报告 §2.3 环节 C）：interrupt/stall
+    // watcher/deferred-restart 都以 activeUserTurns 判定「回合进行中」，
+    // 信箱与 HTTP 派活/汇报此前从不建 turn → interrupt 误报 already idle。
+    // sendMessage 失败（false/抛错）时对称清理，否则 turn 泄漏 → interrupt 永久 busy。
+    const { beginInjectedUserTurn } = await import('../ws/handler.js')
+    const turnHandle = beginInjectedUserTurn(targetSessionId)
+    let sent: boolean
+    try {
+      sent = await conversationService.sendMessage(targetSessionId, content)
+    } catch (error) {
+      turnHandle?.abort()
+      throw error
+    }
+    if (!sent) turnHandle?.abort()
+    return sent
   }
 }
 

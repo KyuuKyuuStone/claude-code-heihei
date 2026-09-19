@@ -38,6 +38,7 @@ import {
 import type { BashToolInput } from '../../tools/BashTool/BashTool.js'
 import { startSpeculativeClassifierCheck } from '../../tools/BashTool/bashPermissions.js'
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
+import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 import { FILE_EDIT_TOOL_NAME } from '../../tools/FileEditTool/constants.js'
 import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
 import { FILE_WRITE_TOOL_NAME } from '../../tools/FileWriteTool/prompt.js'
@@ -452,17 +453,24 @@ export async function* runToolUse(
       return
     }
 
-    for await (const update of streamedCheckPermissionsAndCallTool(
-      tool,
-      toolUse.id,
-      toolInput,
-      toolUseContext,
-      canUseTool,
-      assistantMessage,
-      messageId,
-      requestId,
-      mcpServerType,
-      mcpServerBaseUrl,
+    for await (const update of withToolExecutionDiagnostics(
+      streamedCheckPermissionsAndCallTool(
+        tool,
+        toolUse.id,
+        toolInput,
+        toolUseContext,
+        canUseTool,
+        assistantMessage,
+        messageId,
+        requestId,
+        mcpServerType,
+        mcpServerBaseUrl,
+      ),
+      {
+        toolName: tool.name,
+        toolUseId: toolUse.id,
+        sourceToolAssistantUUID: assistantMessage.uuid,
+      },
     )) {
       yield update
     }
@@ -486,6 +494,135 @@ export async function* runToolUse(
         sourceToolAssistantUUID: assistantMessage.uuid,
       }),
     }
+  }
+}
+
+/**
+ * 工具执行硬超时：超过此时长仍无产出则强制注入一条 tool_result 并终止该
+ * generator，消灭「孤儿 tool_use → 会话永久悬挂」（会话冻结根因报告 §2.2
+ * 环节 B 缓解）。工具本身可能在后台继续执行，其结果被丢弃——与「宁可丢结果
+ * 不可丢 tool_result」的语义一致。10 分钟 ≈ Bash 工具自身 timeout 上限。
+ */
+export const TOOL_EXEC_HARD_TIMEOUT_MS = 600_000
+
+const TOOL_EXEC_TIMEOUT_MARKER = Symbol('tool-exec-timeout')
+
+/** 工具结果是否已作为内容块出现在消息里（含 is_error 形态） */
+function extractEmittedToolResult(
+  update: MessageUpdateLazy,
+): ToolResultBlockParam | undefined {
+  // Message 联合类型中仅 assistant/user 带 .message.content；宽松取值
+  const content = (update.message as { message?: { content?: unknown } } | undefined)
+    ?.message?.content
+  if (!Array.isArray(content)) return undefined
+  return content.find(
+    (block): block is ToolResultBlockParam =>
+      typeof block === 'object' &&
+      block !== null &&
+      (block as { type?: string }).type === 'tool_result',
+  )
+}
+
+/**
+ * 工具生命周期埋点 + 硬超时兜底（会话冻结根因报告 P1）：
+ * - tool_exec_started：进入执行前
+ * - tool_result_emitted：首条 tool_result 被 yield 回传时（「结果生成→回传」段此前完全无埋点）
+ * - tool_exec_finished：结束时（duration_ms / result_emitted / timed_out）
+ * 事件走 cli-diagnostics.jsonl（logForDiagnosticsNoPII，无 PII：仅工具名/UUID/耗时）。
+ */
+export async function* withToolExecutionDiagnostics(
+  inner: AsyncGenerator<MessageUpdateLazy, void>,
+  meta: { toolName: string; toolUseId: string; sourceToolAssistantUUID: string },
+  options: { timeoutMs?: number } = {},
+): AsyncGenerator<MessageUpdateLazy, void> {
+  const startedAt = Date.now()
+  logForDiagnosticsNoPII('info', 'tool_exec_started', {
+    toolName: meta.toolName,
+    toolUseId: meta.toolUseId,
+  })
+  let emitted = false
+  let timedOut = false
+  const timeoutMs = options.timeoutMs ?? TOOL_EXEC_HARD_TIMEOUT_MS
+  const iterator = inner[Symbol.asyncIterator]()
+  try {
+    while (true) {
+      const remainingMs = timeoutMs - (Date.now() - startedAt)
+      if (remainingMs <= 0) {
+        timedOut = true
+        break
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const timeoutPromise = new Promise<typeof TOOL_EXEC_TIMEOUT_MARKER>(
+        (resolve) => {
+          timer = setTimeout(() => resolve(TOOL_EXEC_TIMEOUT_MARKER), remainingMs)
+        },
+      )
+      let nextResult: IteratorResult<MessageUpdateLazy, void>
+      try {
+        nextResult = await Promise.race([iterator.next(), timeoutPromise])
+      } finally {
+        clearTimeout(timer)
+      }
+      if (nextResult === TOOL_EXEC_TIMEOUT_MARKER) {
+        timedOut = true
+        break
+      }
+      if (nextResult.done) break
+      const toolResult = extractEmittedToolResult(nextResult.value)
+      if (toolResult && toolResult.tool_use_id === meta.toolUseId && !emitted) {
+        emitted = true
+        logForDiagnosticsNoPII('info', 'tool_result_emitted', {
+          toolName: meta.toolName,
+          toolUseId: meta.toolUseId,
+          duration_ms: Date.now() - startedAt,
+          is_error: toolResult.is_error === true,
+        })
+      }
+      yield nextResult.value
+    }
+
+    if (timedOut) {
+      // 文案按实际生效的超时折算（默认 600s → 10 minutes；注入短超时 → seconds，
+      // 亚秒级至少显示 1 秒——"0 seconds" 无意义）
+      const timeoutDesc =
+        timeoutMs >= 60_000
+          ? `${Math.round(timeoutMs / 60_000)} minutes`
+          : `${Math.max(1, Math.round(timeoutMs / 1000))} seconds`
+      const timeoutMessage =
+        `Tool execution timed out after ${timeoutDesc} ` +
+        '(the tool may still be running in the background; its result, if any, is discarded). ' +
+        'Proceed without waiting for it.'
+      logForDiagnosticsNoPII('warn', 'tool_exec_timeout_fallback', {
+        toolName: meta.toolName,
+        toolUseId: meta.toolUseId,
+        duration_ms: Date.now() - startedAt,
+      })
+      yield {
+        message: createUserMessage({
+          content: [
+            {
+              type: 'tool_result',
+              content: `<tool_use_error>${timeoutMessage}</tool_use_error>`,
+              is_error: true,
+              tool_use_id: meta.toolUseId,
+            },
+          ],
+          toolUseResult: timeoutMessage,
+          sourceToolAssistantUUID: meta.sourceToolAssistantUUID,
+        }),
+      }
+    }
+  } finally {
+    logForDiagnosticsNoPII(emitted ? 'info' : 'warn', 'tool_exec_finished', {
+      toolName: meta.toolName,
+      toolUseId: meta.toolUseId,
+      duration_ms: Date.now() - startedAt,
+      result_emitted: emitted,
+      timed_out: timedOut,
+    })
+    // 不 await：inner generator 可能挂在自身 await 上（正是超时的成因），
+    // return() 要等控制权回到它才会完成——await 会把清理也挂死
+    void iterator.return?.().catch(() => {})
   }
 }
 

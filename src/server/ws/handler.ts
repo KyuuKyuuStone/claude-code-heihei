@@ -700,6 +700,68 @@ function clearActiveUserTurn(sessionId: string, activeTurn: ActiveUserTurnState)
   }
 }
 
+/** 注入回合句柄：sendMessage 失败时对称清理（否则 turn 泄漏 → interrupt 永久 busy） */
+export type InjectedTurnHandle = { abort: () => void }
+
+const injectedTurnCleanups = new Map<string, () => void>()
+
+/**
+ * 注入式回合（文件信箱 / HTTP 派活与汇报）的 turn 建立：这些路径不经 WS
+ * 用户消息处理，此前从不 set activeUserTurns → interrupt 报 "already idle"、
+ * stall watcher 与 runtime-restart defer 全部误判（会话冻结根因报告 §2.3 环节 C）。
+ *
+ * 建轻量 turn（messageSent=true：注入消息即刻送达 CLI）并挂 result 监听清理；
+ * WS 路径的 deferred 权限/重启收尾不适用（无 WS 客户端），跳过。
+ * 幂等：该会话已有活跃 turn 时返回 null、不覆盖、不重复挂监听。
+ */
+export function beginInjectedUserTurn(sessionId: string): InjectedTurnHandle | null {
+  if (activeUserTurns.has(sessionId)) return null
+  const activeTurn: ActiveUserTurnState = { messageSent: true }
+  activeUserTurns.set(sessionId, activeTurn)
+  void diagnosticsService
+    .recordEvent({
+      type: 'turn_started',
+      severity: 'info',
+      summary: 'Injected user turn started',
+      sessionId,
+      details: { sessionId, source: 'injected' },
+    })
+    .catch(() => {})
+  const cleanup = () => {
+    conversationService.removeOutputCallback(sessionId, callback)
+    injectedTurnCleanups.delete(sessionId)
+    if (activeUserTurns.get(sessionId) === activeTurn) {
+      clearActiveUserTurn(sessionId, activeTurn)
+    }
+  }
+  const callback: SessionOutputCallback = (cliMsg: any) => {
+    if (cliMsg?.type !== 'result') return
+    cleanup()
+    void diagnosticsService
+      .recordEvent({
+        type: 'turn_finished',
+        severity: 'info',
+        summary: 'Injected user turn finished',
+        sessionId,
+        details: {
+          sessionId,
+          source: 'injected',
+          is_error: cliMsg.is_error === true,
+        },
+      })
+      .catch(() => {})
+  }
+  conversationService.onOutput(sessionId, callback)
+  injectedTurnCleanups.set(sessionId, cleanup)
+  return { abort: cleanup }
+}
+
+/** 测试收尾：清理全部注入回合（测试环境无 WS turn，不会误伤） */
+export function resetInjectedTurnsForTests(): void {
+  for (const cleanup of [...injectedTurnCleanups.values()]) cleanup()
+  injectedTurnCleanups.clear()
+}
+
 function bindActiveUserTurnCompletion(
   ws: ServerWebSocket<WebSocketData>,
   sessionId: string,

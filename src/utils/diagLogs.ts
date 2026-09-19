@@ -27,6 +27,19 @@ const MAX_SEGMENT_BYTES = 1024 * 1024
 const MAX_COMPLETED_SEGMENTS = 4
 let segmentSequence = 0
 
+type DiagnosticsLogWriter = (
+  level: DiagnosticLogLevel,
+  event: string,
+  data: Record<string, unknown>,
+) => void
+
+let diagnosticsLogWriterOverride: DiagnosticsLogWriter | null = null
+
+/** 测试注入收集器（替代真实落盘）；传 null 恢复默认写盘行为 */
+export function setDiagnosticsLogWriterForTests(writer: DiagnosticsLogWriter | null): void {
+  diagnosticsLogWriterOverride = writer
+}
+
 /**
  * Logs diagnostic information to a logfile. This information is sent
  * via the environment manager to session-ingress to monitor issues from
@@ -45,6 +58,13 @@ export function logForDiagnosticsNoPII(
   event: string,
   data?: Record<string, unknown>,
 ): void {
+  // 依赖注入缝（参照 setServantIncidentDeps 模式）：测试注入收集器替代真实
+  // 落盘——bun 测试环境下本写入器的 fs 实现会静默失败（实测文件不落盘且无
+  // 报错），且 mock.module 顶层注册 + mock.restore 的时序在冷启动下不确定。
+  if (diagnosticsLogWriterOverride) {
+    diagnosticsLogWriterOverride(level, event, data ?? {})
+    return
+  }
   const baseLogFile = getDiagnosticLogFile()
   if (!baseLogFile) {
     return
