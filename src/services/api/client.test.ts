@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -11,6 +11,42 @@ mock.module('src/utils/http.js', () => ({
   getWebFetchUserAgent: mock(() => 'client-test-agent'),
   withOAuth401Retry: mock(async <T>(fn: () => Promise<T>) => fn()),
 }))
+
+// 被测函数的缺省参数直接读 process.env（如 providerManagedByHost =
+// process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST），测试里传 undefined 就是为
+// 了命中这条缺省路径——运行者 shell 若恰好带着这些变量（桌面/协作宿主会注入），
+// 断言就会被环境污染。参照 conversation-service.test.ts：beforeEach 保存并清空、
+// afterEach 还原，断言内容不变。
+const ENV_ISOLATION_KEYS = [
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_BASE_URL',
+  'CC_HEIHEI_GROK_OAUTH_PROVIDER',
+  'CC_HEIHEI_LOCAL_ACCESS_TOKEN',
+  'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST',
+  'CLAUDE_CODE_SIMPLE',
+  'CLAUDE_CONFIG_DIR',
+  'GROK_OAUTH_FILE',
+] as const
+
+const savedEnv = new Map<string, string | undefined>()
+
+beforeEach(() => {
+  savedEnv.clear()
+  for (const key of ENV_ISOLATION_KEYS) {
+    savedEnv.set(key, process.env[key])
+    delete process.env[key]
+  }
+})
+
+afterEach(() => {
+  for (const key of ENV_ISOLATION_KEYS) {
+    const value = savedEnv.get(key)
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+  savedEnv.clear()
+})
 
 describe('resolveAnthropicClientApiKey', () => {
   test('does not inherit a local api key when a provider auth token is explicit', async () => {

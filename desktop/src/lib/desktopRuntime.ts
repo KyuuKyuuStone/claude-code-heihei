@@ -7,6 +7,8 @@ import {
 } from '../api/client'
 import { getDesktopHost } from './desktopHost'
 
+// 键值兼容保留、勿改：老版本 H5 流程写过的 localStorage 条目仍按此键读取，
+// 改名会让既有浏览器会话丢失记忆的服务地址（值本身不含 token 语义）。
 export const H5_SERVER_URL_STORAGE_KEY = 'cc-heihei-h5-server-url'
 
 function getDetectedDesktopHost() {

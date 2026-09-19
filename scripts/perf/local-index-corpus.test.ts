@@ -277,6 +277,9 @@ async function runBenchmarkProcess(args: string[]): Promise<{
   return { exitCode, stdout, stderr }
 }
 
+// 起真实 benchmark 子进程 / 真实 server 的用例带 30s 显式超时：默认 5s 在
+// 负载较高或杀软扫描的机器上是环境性假红（HEAD 基线即如此），与
+// local-index-acceptance.test.ts 的 120s 先例同理。
 describe('local index file benchmark', () => {
   it('enforces real warmup and measured sample deadlines with cleanup', async () => {
     const benchmark = await import('./local-index-benchmark.js') as {
@@ -325,17 +328,21 @@ describe('local index file benchmark', () => {
         '--mode',
         'file',
       ])
-      const startedAt = performance.now()
+      // 计时从首个样本被调起开始：语料生成 + 进程内 server 启动的耗时与环境
+      // 相关（负载高的机器上可超过 500ms），而本用例要证明的是 5ms 样本 deadline
+      // 在样本挂起后及时触发，与前置 setup 快慢无关。外层 race 只是挂死守卫。
+      let sampleStartedAt: number | null = null
       let caught: unknown
       try {
         await Promise.race([
           benchmark.runBenchmark!(options, {
             executeSessionList: async (_execute, context) => {
               contexts.push(context)
+              sampleStartedAt = performance.now()
               return new Promise<never>(() => {})
             },
           }),
-          Bun.sleep(500).then(() => {
+          Bun.sleep(15_000).then(() => {
             throw new Error('benchmark invocation did not exit after sample deadline')
           }),
         ])
@@ -355,7 +362,8 @@ describe('local index file benchmark', () => {
         timeoutMs: 5,
         timeoutCount: 1,
       })
-      expect(performance.now() - startedAt).toBeLessThan(500)
+      expect(sampleStartedAt).not.toBeNull()
+      expect(performance.now() - sampleStartedAt!).toBeLessThan(500)
       expect(contexts).toHaveLength(1)
       expect(contexts[0]).toMatchObject({ phase: expectedPhase, index: 0 })
       expect(await stat(contexts[0]!.rootDir).then(() => true, () => false)).toBe(false)
@@ -363,7 +371,7 @@ describe('local index file benchmark', () => {
       expect(process.env.CLAUDE_CONFIG_DIR).toBe(originalEnvironment.CLAUDE_CONFIG_DIR)
       expect(process.env.CC_HEIHEI_LOCAL_INDEX).toBe(originalEnvironment.CC_HEIHEI_LOCAL_INDEX)
     }
-  })
+  }, 30_000)
 
   it('clears completed deadline timers and consumes a rejection after timeout', async () => {
     const benchmark = await import('./local-index-benchmark.js') as {
@@ -530,7 +538,7 @@ describe('local index file benchmark', () => {
     expect(process.env.CC_HEIHEI_LOCAL_ACCESS_TOKEN).toBe(
       'benchmark-parent-local-access-token',
     )
-  })
+  }, 30_000)
 
   it('reports an isolated JSON baseline and removes its temporary corpus', async () => {
     const sentinelRoot = process.env.CLAUDE_CONFIG_DIR!
@@ -617,7 +625,7 @@ describe('local index file benchmark', () => {
     expect(report.measurement.durationMs.max).toBeGreaterThanOrEqual(0)
     expect(report.measurement.cpuMs.total).toBeGreaterThanOrEqual(0)
     expect(await stat(report.fixture.rootDir).then(() => true, () => false)).toBe(false)
-  })
+  }, 30_000)
 
   it('keeps an inspectable corpus only when --keep is explicit', async () => {
     const result = await runBenchmarkProcess([
@@ -656,7 +664,7 @@ describe('local index file benchmark', () => {
       await rm(keptRoot, { recursive: true, force: true })
     }
     expect(await stat(keptRoot).then(() => true, () => false)).toBe(false)
-  })
+  }, 30_000)
 
   it('reports bounded incremental IO for the append scenario', async () => {
     const result = await runBenchmarkProcess([
@@ -734,7 +742,7 @@ describe('local index file benchmark', () => {
     )
     expect(report.measurement.io.statCalls).toBeGreaterThan(0)
     expect(report.measurement.io.maxBytesReadPerRun).toBeLessThanOrEqual(1024 * 1024)
-  })
+  }, 30_000)
 
   it('runs a real shadow backfill and reports zero normalized mismatches', async () => {
     const sentinelRoot = process.env.CLAUDE_CONFIG_DIR!
@@ -829,7 +837,7 @@ describe('local index file benchmark', () => {
     expect(report.measurement.durationMs.median).toBeGreaterThanOrEqual(0)
     expect(await stat(report.fixture.rootDir).then(() => true, () => false)).toBe(false)
     expect(JSON.stringify(report)).not.toContain(sentinelRoot)
-  })
+  }, 30_000)
 
   it('keeps the shadow corpus and closed SQLite index inspectable with --keep', async () => {
     const result = await runBenchmarkProcess([
@@ -890,7 +898,7 @@ describe('local index file benchmark', () => {
       await rm(rootDir, { recursive: true, force: true })
     }
     expect(await stat(rootDir).then(() => true, () => false)).toBe(false)
-  })
+  }, 30_000)
 
   it('runs a real sqlite backfill and reports sidebar-shaped measurements', async () => {
     const result = await runBenchmarkProcess([
@@ -1022,5 +1030,5 @@ describe('local index file benchmark', () => {
     expect(report.measurement.eventLoopDelay.maxMs).toBeGreaterThanOrEqual(0)
     expect(report.measurement.peakRss.sampleCount).toBeGreaterThan(0)
     expect(report.measurement.peakRss.peakBytes).toBeGreaterThan(0)
-  })
+  }, 30_000)
 })

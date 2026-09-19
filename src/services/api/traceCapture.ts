@@ -26,7 +26,16 @@ import {
   type SourceFingerprint,
 } from '../../server/services/localIndex/sourceFingerprint.js'
 
-const TRACE_PREVIEW_CHARS = 240_000
+/**
+ * 落盘 preview 的字符上限（**日志侧**上限，只影响写入 traces 的体积，
+ * 不影响发给模型的请求体、不影响任何功能）。
+ *
+ * 2026-09-17 由 240_000 降至 32_000：A5a 实测 trace 体积 99.6% 来自 preview，
+ * 压到 32K 可省 ≈ 87% 日志体积（见 cc-heihei-交接/上下文体积抑制_设计方案_20260917.md
+ * 的 S1）。preview 是**头尾双段采样**（见 createTraceBodySnapshot），
+ * 排查仍可凭 sha256 + bytes + 首尾片段定位；历史 traces 不会缩小（只影响新写入）。
+ */
+const TRACE_PREVIEW_CHARS = 32_000
 export const TRACE_STREAM_CAPTURE_BYTES = 1024 * 1024
 export const TRACE_LIST_PREVIEW_CHARS = 2048
 const TRACE_SETTINGS_KEY = 'traceCapture'
@@ -332,6 +341,30 @@ export async function updateTraceCaptureSettings(input: Partial<Pick<TraceCaptur
   return normalizeTraceCaptureSettings(nextSettings, scope)
 }
 
+/** 头尾双段采样时插在中间的标记（不会被误当成数据：SSE 解析只认 `data:` 行） */
+const TRACE_PREVIEW_GAP_MARKER = '\n…[middle truncated]…\n'
+
+/**
+ * 超长 body 的 preview 采样：**头部 + 尾部各取一段**（而不是只留头部）。
+ *
+ * 动机（设计文档 S3b）：只留头部时，长请求的 preview 全被 messages 占满，
+ * 看不到 system/tools 段，也无法定位报错尾部（SSE 的 usage 恰在流末尾）；
+ * 头尾双段让"超长请求的内部构成"与"结尾报错"都可见。
+ *
+ * 契约：返回长度**不超过** maxChars（标记计入预算），未截断时调用方根本不走这里。
+ */
+function sampleHeadAndTail(serialized: string, maxChars: number): string {
+  if (maxChars <= TRACE_PREVIEW_GAP_MARKER.length + 2) {
+    return serialized.slice(0, maxChars)
+  }
+  const budget = maxChars - TRACE_PREVIEW_GAP_MARKER.length
+  const headChars = Math.ceil(budget / 2)
+  const tailChars = budget - headChars
+  return serialized.slice(0, headChars) +
+    TRACE_PREVIEW_GAP_MARKER +
+    serialized.slice(serialized.length - tailChars)
+}
+
 export function createTraceBodySnapshot(
   body: unknown,
   options?: { maxPreviewChars?: number; alreadyTruncated?: boolean },
@@ -340,7 +373,7 @@ export function createTraceBodySnapshot(
   const { serialized, contentType } = serializeTraceBody(body)
   const bytes = Buffer.byteLength(serialized)
   const preview = serialized.length > maxPreviewChars
-    ? serialized.slice(0, maxPreviewChars)
+    ? sampleHeadAndTail(serialized, maxPreviewChars)
     : serialized
 
   return {
@@ -349,6 +382,39 @@ export function createTraceBodySnapshot(
     sha256: createHash('sha256').update(serialized).digest('hex'),
     preview,
     truncated: Boolean(options?.alreadyTruncated) || serialized.length > maxPreviewChars,
+  }
+}
+
+/**
+ * `pending`（api_call_started）阶段用的请求体快照。
+ *
+ * 两个要点（设计文档 2026-09-17 的 S3a）：
+ * 1. `bytes` 是**真实 body 体积**，不是 preview（截断后）长度——旧实现把 1.2 MB 的请求
+ *    记成 4.3 KB（批次 0 A5a 已证），导致"悬挂请求有多大"这一关键问题永远无法回答；
+ * 2. preview 仍然很省（只留前 4096 字符或一个占位说明），因为完整 body 会在
+ *    call 完成时再记一次。
+ */
+export function createPendingRequestSnapshot(body: unknown): TraceBodySnapshot {
+  const snapshot = typeof body === 'string'
+    ? createTraceBodySnapshot(body.slice(0, 4096), {
+      alreadyTruncated: body.length > 4096,
+    })
+    : createTraceBodySnapshot({
+      pending: true,
+      note: 'request body captured on call completion',
+    })
+
+  return { ...snapshot, bytes: measureBodyBytes(body) ?? snapshot.bytes }
+}
+
+/** 真实 body 字节数；无法序列化时返回 null（调用方回退到快照自身的 bytes） */
+export function measureBodyBytes(body: unknown): number | null {
+  if (typeof body === 'string') return Buffer.byteLength(body)
+  if (body === null || body === undefined) return null
+  try {
+    return Buffer.byteLength(JSON.stringify(body))
+  } catch {
+    return null
   }
 }
 

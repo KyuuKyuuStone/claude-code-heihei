@@ -8,6 +8,7 @@ import { jsonParse, jsonStringify } from '../../utils/slowOperations.js'
 import {
   captureResponseTraceSnapshot,
   createTraceCallId,
+  createPendingRequestSnapshot,
   createTraceBodySnapshot,
   shouldCaptureApiTrace,
   traceCaptureService,
@@ -182,17 +183,6 @@ function dumpRequest(
   }
 }
 
-function createRequestPendingSnapshot(body: unknown): TraceBodySnapshot {
-  if (typeof body === 'string') {
-    return createTraceBodySnapshot(body.slice(0, 4096), {
-      alreadyTruncated: body.length > 4096,
-    })
-  }
-  return createTraceBodySnapshot({
-    pending: true,
-    note: 'request body captured on call completion',
-  })
-}
 
 function isAbortLikeError(error: unknown): boolean {
   return error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')
@@ -295,7 +285,7 @@ export function createDumpPromptsFetch(
           method: traceRequestMethod,
           url: traceRequestUrl,
           headers: traceRequestHeaders,
-          bodySnapshot: createRequestPendingSnapshot(traceRequestBody),
+          bodySnapshot: createPendingRequestSnapshot(traceRequestBody),
         },
         metadata: {
           phase: 'api_call_started',
@@ -340,7 +330,7 @@ export function createDumpPromptsFetch(
             method: traceRequestMethod,
             url: traceRequestUrl,
             headers: traceRequestHeaders,
-            bodySnapshot: createRequestPendingSnapshot(traceRequestBody),
+            bodySnapshot: createPendingRequestSnapshot(traceRequestBody),
           },
           error: err,
           metadata: {
