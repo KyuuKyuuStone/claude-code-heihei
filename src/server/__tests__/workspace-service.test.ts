@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import * as os from 'node:os'
@@ -81,6 +81,14 @@ afterEach(async () => {
 })
 
 describe('WorkspaceService outside-workspace preview', () => {
+  // registeredRoots is module-level state shared across every test file in the
+  // bun process. Prior files leave roots behind (notably sessions.test.ts's
+  // "default to home dir" case, which registers the user home via
+  // sessionService.createSession and covers all of os.tmpdir()). Clear before
+  // EACH test — afterEach alone leaves the first test of this file polluted.
+  beforeEach(() => {
+    clearFilesystemAccessRootsForTests()
+  })
   afterEach(() => {
     clearFilesystemAccessRootsForTests()
   })

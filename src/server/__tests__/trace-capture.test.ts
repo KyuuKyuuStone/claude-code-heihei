@@ -10,6 +10,7 @@ import {
   captureResponseTraceSnapshot,
   clearTraceCaptureStateForTests,
   createTraceCallId,
+  createPendingRequestSnapshot,
   createTraceBodySnapshot,
   getTraceCaptureDiagnosticsForTests,
   readResponseTraceSnapshot,
@@ -26,6 +27,7 @@ import { getTraceIndexDatabasePath } from '../services/localIndex/traceDatabase.
 let tmpDir: string
 let originalConfigDir: string | undefined
 let originalLocalIndexMode: string | undefined
+let originalTraceApiCalls: string | undefined
 
 async function waitForTrace(
   sessionId: string,
@@ -43,8 +45,12 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'trace-capture-'))
   originalConfigDir = process.env.CLAUDE_CONFIG_DIR
   originalLocalIndexMode = process.env.CC_HEIHEI_LOCAL_INDEX
+  originalTraceApiCalls = process.env.CC_HEIHEI_TRACE_API_CALLS
   process.env.CLAUDE_CONFIG_DIR = tmpDir
   process.env.CC_HEIHEI_LOCAL_INDEX = 'on'
+  // isTraceCaptureEnabled 先看 env 再看 settings——运行者 shell（桌面/协作宿主）
+  // 若带着 CC_HEIHEI_TRACE_API_CALLS，「enabled: false 不再写入」的断言会被绕过。
+  delete process.env.CC_HEIHEI_TRACE_API_CALLS
   clearTraceCaptureStateForTests()
 })
 
@@ -59,6 +65,11 @@ afterEach(async () => {
     delete process.env.CC_HEIHEI_LOCAL_INDEX
   } else {
     process.env.CC_HEIHEI_LOCAL_INDEX = originalLocalIndexMode
+  }
+  if (originalTraceApiCalls === undefined) {
+    delete process.env.CC_HEIHEI_TRACE_API_CALLS
+  } else {
+    process.env.CC_HEIHEI_TRACE_API_CALLS = originalTraceApiCalls
   }
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
@@ -346,7 +357,9 @@ describe('trace capture service', () => {
     expect(trace.calls[0].request.headers.Authorization).toBe('[redacted]')
     expect(trace.calls[0].request.body.preview).toContain('explain the failed provider response')
     expect(trace.calls[0].request.body.preview).not.toContain('sk-body-secret')
-    expect(trace.calls[0].request.body.preview.length).toBe(240_000)
+    expect(trace.calls[0].request.body.preview.length).toBe(32_000)
+    // 头尾双段采样：头部保留请求开头，尾部保留请求结尾（S3b）
+    expect(trace.calls[0].request.body.preview).toContain('…[middle truncated]…')
     expect(trace.calls[0].request.body.bytes).toBeGreaterThan(240_000)
     expect(trace.calls[0].request.body.truncated).toBe(true)
     expect(trace.calls[0].response.body.preview).toContain('chatcmpl-742')
@@ -416,7 +429,7 @@ describe('trace capture service', () => {
     const midSized = await readResponseTraceSnapshot(makeResponse(6))
     expect(midSized.bytes).toBe(6 * 64 * 1024)
     expect(midSized.sha256).toBe(createHash('sha256').update(chunk.repeat(6)).digest('hex'))
-    expect(midSized.preview.length).toBe(240_000)
+    expect(midSized.preview.length).toBe(32_000)
     expect(midSized.truncated).toBe(true)
 
     const oversized = await readResponseTraceSnapshot(makeResponse(17))
@@ -2557,5 +2570,63 @@ describe('trace read cache', () => {
     expect(detail?.status).toBe('ok')
     expect(detail?.request.body.preview).toContain('new')
     expect(getTraceCaptureDiagnosticsForTests().fullJsonlBytesRead).toBeGreaterThan(0)
+  })
+})
+
+describe('S1/S3 体积抑制：preview 上限、头尾双段采样、pending 真实 bytes', () => {
+  test('keeps a short body intact (no marker, not truncated)', () => {
+    const snapshot = createTraceBodySnapshot('short body')
+    expect(snapshot.preview).toBe('short body')
+    expect(snapshot.truncated).toBe(false)
+    expect(snapshot.preview).not.toContain('middle truncated')
+  })
+
+  test('samples head AND tail when the body exceeds the preview budget', () => {
+    const body = 'HEAD-MARKER' + 'x'.repeat(50_000) + 'TAIL-MARKER'
+    const snapshot = createTraceBodySnapshot(body, { maxPreviewChars: 1000 })
+
+    expect(snapshot.truncated).toBe(true)
+    expect(snapshot.preview.length).toBe(1000)
+    expect(snapshot.preview).toContain('HEAD-MARKER')
+    expect(snapshot.preview).toContain('TAIL-MARKER')
+    expect(snapshot.preview).toContain('…[middle truncated]…')
+    // bytes/sha256 仍按完整 body 计
+    expect(snapshot.bytes).toBe(Buffer.byteLength(body))
+  })
+
+  test('keeps the trailing SSE usage visible in a truncated preview', () => {
+    const sse = Array.from({ length: 400 }, (_, index) =>
+      `event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"text":"chunk-${index}"}}\n\n`,
+    ).join('') + 'data: {"type":"message_delta","usage":{"input_tokens":42,"output_tokens":7}}\n\n'
+
+    const snapshot = createTraceBodySnapshot(sse, { maxPreviewChars: 2000 })
+    expect(snapshot.preview).toContain('message_delta')
+    expect(snapshot.preview).toContain('"input_tokens":42')
+  })
+
+  test('degrades to a plain head slice when the budget cannot fit the marker', () => {
+    const snapshot = createTraceBodySnapshot('y'.repeat(100), { maxPreviewChars: 10 })
+    expect(snapshot.preview.length).toBe(10)
+    expect(snapshot.preview).not.toContain('middle truncated')
+  })
+
+  test('records the REAL body size on the pending snapshot, not the preview length', () => {
+    // 1.2 MB 的请求：旧实现会把 bytes 记成 4096（preview 长度），A5a 实测为 4.3 KB
+    const bigString = 'p'.repeat(1_200_000)
+    const fromString = createPendingRequestSnapshot(bigString)
+    expect(fromString.bytes).toBe(1_200_000)
+    expect(fromString.preview.length).toBeLessThanOrEqual(4096)
+    expect(fromString.truncated).toBe(true)
+
+    const bigObject = { messages: [{ role: 'user', content: 'q'.repeat(500_000) }] }
+    const fromObject = createPendingRequestSnapshot(bigObject)
+    expect(fromObject.bytes).toBe(Buffer.byteLength(JSON.stringify(bigObject)))
+    expect(fromObject.preview).toContain('pending')
+
+    // 短 body 与不可序列化输入都不应炸，且回退到快照自身 bytes
+    expect(createPendingRequestSnapshot('tiny').bytes).toBe(4)
+    const circular: Record<string, unknown> = {}
+    circular.self = circular
+    expect(createPendingRequestSnapshot(circular).bytes).toBeGreaterThan(0)
   })
 })

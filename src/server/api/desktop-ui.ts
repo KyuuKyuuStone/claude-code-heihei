@@ -4,8 +4,6 @@
  * GET  /api/desktop-ui/preferences          — read cc-heihei UI preferences
  * PUT  /api/desktop-ui/preferences/sidebar  — persist sidebar project preferences
  * PUT  /api/desktop-ui/preferences/profile  — persist local profile preferences
- * GET  /api/desktop-ui/preferences/pet      — read only desktop pet preferences
- * PUT  /api/desktop-ui/preferences/pet      — patch desktop pet preferences
  * GET  /api/desktop-ui/preferences/profile/avatar — read local profile avatar
  * PUT  /api/desktop-ui/preferences/profile/avatar — persist local profile avatar
  * DELETE /api/desktop-ui/preferences/profile/avatar — reset local profile avatar
@@ -42,23 +40,6 @@ export async function handleDesktopUiApi(
       return Response.json({
         ok: true,
         preferences: await desktopUiPreferencesService.updateSidebarPreferences(body),
-      })
-    }
-
-    if (detail === 'pet') {
-      if (req.method === 'GET') {
-        const result = await desktopUiPreferencesService.readPreferences()
-        return Response.json({
-          exists: result.exists,
-          pet: result.preferences.pet,
-        })
-      }
-      if (req.method !== 'PUT') throw methodNotAllowed(req.method)
-      const body = await parseJsonBody(req)
-      const preferences = await desktopUiPreferencesService.updatePetPreferences(body)
-      return Response.json({
-        ok: true,
-        preferences,
       })
     }
 

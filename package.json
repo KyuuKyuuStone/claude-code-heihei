@@ -16,6 +16,7 @@
     "check:electron": "cd desktop && bun run check:electron",
     "check:adapters": "cd adapters && bun test",
     "check:docs": "npm --prefix site ci --loglevel=error && npm --prefix site run --loglevel=error build && npm --prefix site run --loglevel=error check",
+    "check:persistence-upgrade": "bun test src/server/__tests__/persistence-upgrade.test.ts",
     "hooks:install": "bun run scripts/git-hooks/install.ts",
     "docs:dev": "npm --prefix site run dev",
     "docs:build": "npm --prefix site run build",
