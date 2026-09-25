@@ -17,6 +17,7 @@ import { ApiError } from '../middleware/errorHandler.js'
 import { diagnosticsService } from './diagnosticsService.js'
 import { sessionService } from './sessionService.js'
 import { conversationService } from './conversationService.js'
+import { isSessionTurnInProgress } from './dispatchReceiptService.js'
 
 export type ServantEntry = {
   sessionId: string
@@ -40,6 +41,12 @@ export type ServantInfo = ServantEntry & {
   workDir?: string
   /** CLI 是否正在运行 */
   running: boolean
+  /**
+   * 当前是否有进行中回合（真实信号，与假死 watcher/消费回执同源于
+   * dispatchReceiptService 的 SDK 消息流观察，非 lastActivityAt 滑动窗口猜测）。
+   * 前端状态灯据此判 busy——回合一结束 result 边界即转 false，灯立刻转灰。
+   */
+  turnInProgress: boolean
   /** 会话最后一次活动时间（transcript 文件修改时间）——主管用它区分"执行中"与"假活" */
   lastActivityAt?: string
 }
@@ -171,6 +178,7 @@ export class ServantService {
           title: session.title,
           workDir: session.workDir,
           running: conversationService.hasSession(entry.sessionId),
+          turnInProgress: isSessionTurnInProgress(entry.sessionId),
           ...(session.modifiedAt ? { lastActivityAt: session.modifiedAt } : {}),
         }
       })

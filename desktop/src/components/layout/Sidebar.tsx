@@ -22,15 +22,15 @@ import type { ServantInfo } from '../../api/servants'
 
 /**
  * 员工会话状态灯：
- * - busy（绿点）：CLI 运行中且最近 3 分钟有 transcript 活动 = 正在干活
- * - waiting（灰点）：CLI 运行中但无近期活动 = 待命（回合结束等下一个任务，非卡死——
- *   卡死由服务端假死 watcher 10 分钟阈值自动重推处理）
+ * - busy（绿点）：CLI 运行中且有进行中回合（服务端真实信号 turnInProgress，
+ *   与假死 watcher 同源于 SDK 消息流观察，回合一结束立刻转灯）
+ * - waiting（灰点）：CLI 运行中但无进行中回合 = 待命（回合结束等下一个任务，
+ *   非卡死——卡死由服务端假死 watcher 10 分钟阈值自动重推处理）
  * - idle：CLI 未运行（应用重启后员工未被拉起）
  */
-function servantStatus(info: ServantInfo): 'busy' | 'waiting' | 'idle' {
+export function servantStatus(info: ServantInfo): 'busy' | 'waiting' | 'idle' {
   if (!info.running) return 'idle'
-  const staleMs = info.lastActivityAt ? Date.now() - Date.parse(info.lastActivityAt) : Infinity
-  return staleMs < 3 * 60_000 ? 'busy' : 'waiting'
+  return info.turnInProgress ? 'busy' : 'waiting'
 }
 import { ServantSessionModal } from '../servants/ServantSessionModal'
 import { useChatStore } from '../../stores/chatStore'
@@ -106,6 +106,7 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
   const disconnectSession = useChatStore((s) => s.disconnectSession)
   const servantsById = useServantStore((s) => s.bySessionId)
   const fetchServants = useServantStore((s) => s.fetchServants)
+  const subscribeTurnEvents = useServantStore((s) => s.subscribeTurnEvents)
   const [contextMenu, setContextMenu] = useState<{ id: string; x: number; y: number } | null>(null)
   const [projectContextMenu, setProjectContextMenu] = useState<{ key: string; x: number; y: number } | null>(null)
   const [projectHeaderMenu, setProjectHeaderMenu] = useState<{ type: SidebarHeaderMenuType; x: number; y: number } | null>(null)
@@ -143,13 +144,17 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
 
   useEffect(() => {
     void fetchServants()
-    // 花名册含 running/lastActivityAt（员工状态灯数据源），必须轮询刷新，
-    // 否则员工开始干活后状态点永远停留在旧快照（2026-09-13 实测：一直灰）
+    // 事件驱动即时更新（转圈残留根治·方案B）：回合翻转经 _events 通道推送，
+    // 花名册状态灯不等轮询。20s 轮询保留作兜底（running/lastActivityAt 仍靠它）。
+    const unsubscribeTurnEvents = subscribeTurnEvents()
     const rosterTimer = setInterval(() => {
       void fetchServants().catch(() => {})
     }, 20_000)
-    return () => clearInterval(rosterTimer)
-  }, [fetchServants])
+    return () => {
+      unsubscribeTurnEvents()
+      clearInterval(rosterTimer)
+    }
+  }, [fetchServants, subscribeTurnEvents])
 
   useEffect(() => useSessionStore.subscribe((nextState, previousState) => {
     if (nextState.sessions === previousState.sessions) return

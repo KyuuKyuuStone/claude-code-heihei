@@ -14,6 +14,39 @@ vi.mock('../api/servants', () => ({
   },
 }))
 
+const wsManagerMock = vi.hoisted(() => {
+  const messageHandlers = new Set<(msg: unknown) => void>()
+  const stateHandlers = new Set<(state: string) => void>()
+  return {
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+    // 普通函数而非 vi.fn：beforeEach 的 resetAllMocks 会清空 vi.fn 实现
+    onMessage(_id: string, handler: (msg: unknown) => void) {
+      messageHandlers.add(handler)
+      return () => { messageHandlers.delete(handler) }
+    },
+    onConnectionState(_id: string, handler: (state: string) => void) {
+      stateHandlers.add(handler)
+      return () => { stateHandlers.delete(handler) }
+    },
+    emitMessage(msg: unknown) {
+      for (const handler of messageHandlers) handler(msg)
+    },
+    emitState(state: string) {
+      for (const handler of stateHandlers) handler(state)
+    },
+    reset() {
+      messageHandlers.clear()
+      stateHandlers.clear()
+    },
+  }
+})
+
+vi.mock('../api/websocket', () => ({
+  wsManager: wsManagerMock,
+  buildSessionWebSocketUrl: vi.fn(),
+}))
+
 import type { ServantInfo } from '../api/servants'
 import { useServantStore } from './servantStore'
 
@@ -25,6 +58,7 @@ function makeServant(overrides: Partial<ServantInfo> = {}): ServantInfo {
     updatedAt: 1000,
     title: 'API 服务',
     running: false,
+    turnInProgress: false,
     ...overrides,
   }
 }
@@ -32,6 +66,7 @@ function makeServant(overrides: Partial<ServantInfo> = {}): ServantInfo {
 describe('servantStore', () => {
   beforeEach(() => {
     vi.resetAllMocks()
+    wsManagerMock.reset()
     useServantStore.setState({ bySessionId: {}, isLoading: false })
   })
 
@@ -105,5 +140,84 @@ describe('servantStore', () => {
 
     expect(apiRemoveMock).toHaveBeenCalledWith('sess-1')
     expect(useServantStore.getState().bySessionId).toEqual({})
+  })
+
+  describe('subscribeTurnEvents (方案B: 事件驱动即时更新)', () => {
+    it('patches turnInProgress immediately on servant_turn_changed', () => {
+      useServantStore.setState({ bySessionId: { 'sess-1': makeServant() } })
+      const unsubscribe = useServantStore.getState().subscribeTurnEvents()
+
+      expect(wsManagerMock.connect).toHaveBeenCalledWith('_events')
+
+      wsManagerMock.emitMessage({
+        type: 'system_notification',
+        subtype: 'servant_turn_changed',
+        data: { sessionId: 'sess-1', turnInProgress: true },
+      })
+
+      expect(useServantStore.getState().bySessionId['sess-1']?.turnInProgress).toBe(true)
+
+      wsManagerMock.emitMessage({
+        type: 'system_notification',
+        subtype: 'servant_turn_changed',
+        data: { sessionId: 'sess-1', turnInProgress: false },
+      })
+
+      expect(useServantStore.getState().bySessionId['sess-1']?.turnInProgress).toBe(false)
+      unsubscribe()
+    })
+
+    it('ignores events for sessions not in the roster and malformed payloads', () => {
+      useServantStore.setState({ bySessionId: { 'sess-1': makeServant() } })
+      const unsubscribe = useServantStore.getState().subscribeTurnEvents()
+
+      wsManagerMock.emitMessage({
+        type: 'system_notification',
+        subtype: 'servant_turn_changed',
+        data: { sessionId: 'sess-unknown', turnInProgress: true },
+      })
+      expect(useServantStore.getState().bySessionId['sess-unknown']).toBeUndefined()
+
+      wsManagerMock.emitMessage({
+        type: 'system_notification',
+        subtype: 'servant_turn_changed',
+        data: { sessionId: 123 },
+      })
+      wsManagerMock.emitMessage({ type: 'system_notification', subtype: 'other', data: {} })
+      expect(useServantStore.getState().bySessionId['sess-1']?.turnInProgress).toBe(false)
+      unsubscribe()
+    })
+
+    it('refetches the roster after a reconnect to fill the gap', async () => {
+      apiListMock.mockResolvedValue({ servants: [makeServant()] })
+      const unsubscribe = useServantStore.getState().subscribeTurnEvents()
+
+      // 首次连接不补拉（连接前无断线窗口）
+      wsManagerMock.emitState('connected')
+      expect(apiListMock).not.toHaveBeenCalled()
+
+      // 断线重连成功 → 补一次全量刷新
+      wsManagerMock.emitState('reconnecting')
+      wsManagerMock.emitState('connected')
+      await vi.waitFor(() => {
+        expect(apiListMock).toHaveBeenCalledTimes(1)
+      })
+      unsubscribe()
+    })
+
+    it('unsubscribe disconnects the channel and stops updates', () => {
+      useServantStore.setState({ bySessionId: { 'sess-1': makeServant() } })
+      const unsubscribe = useServantStore.getState().subscribeTurnEvents()
+
+      unsubscribe()
+      expect(wsManagerMock.disconnect).toHaveBeenCalledWith('_events')
+
+      wsManagerMock.emitMessage({
+        type: 'system_notification',
+        subtype: 'servant_turn_changed',
+        data: { sessionId: 'sess-1', turnInProgress: true },
+      })
+      expect(useServantStore.getState().bySessionId['sess-1']?.turnInProgress).toBe(false)
+    })
   })
 })

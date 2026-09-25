@@ -196,6 +196,7 @@ describe('ServantSessionModal', () => {
           updatedAt: 1,
           title: '受限员工',
           running: false,
+          turnInProgress: false,
         },
       },
     })
@@ -242,6 +243,7 @@ describe('ServantSessionModal', () => {
           updatedAt: 2,
           title: '员工',
           running: false,
+          turnInProgress: false,
         },
       },
     })

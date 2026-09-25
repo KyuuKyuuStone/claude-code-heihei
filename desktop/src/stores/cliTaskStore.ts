@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { isSessionGone } from '../api/client'
 import { cliTasksApi } from '../api/cliTasks'
 import type { CLITask, TaskStatus } from '../types/cliTask'
 
@@ -43,6 +44,7 @@ let taskRequestSequence = 0
 let taskRequestGeneration = 0
 const latestAppliedTaskRequestBySession = new Map<string, number>()
 const activeTaskPollBySession = new Map<string, Promise<void>>()
+
 
 type TaskRequest = {
   requestId: number
@@ -119,6 +121,11 @@ export const useCLITaskStore = create<CLITaskStore>((set, get) => ({
   dismissedCompletionKey: null,
 
   fetchSessionTasks: async (sessionId) => {
+    // 会话已被服务端判定不存在（404 Session not found）：停止对该 id 的轮询，
+    // 防止 1s 轮询失败经 unhandledrejection 刷屏 diagnostics（2026-09-21 诊断）。
+    // 登记由 api client 的 session-gone 登记表统一接管。
+    if (isSessionGone(sessionId)) return
+
     if (get().sessionId !== sessionId) {
       invalidateTaskRequests()
       set({
@@ -151,6 +158,8 @@ export const useCLITaskStore = create<CLITaskStore>((set, get) => ({
         }
       } catch {
         // Preserve the last known task state across transient polling failures.
+        // （session-not-found 已由 api client 的 session-gone 登记表接管，
+        //   下一次轮询在入口即被跳过，不再发请求）
       }
     })()
 
@@ -182,7 +191,7 @@ export const useCLITaskStore = create<CLITaskStore>((set, get) => ({
         }))
       }
     } catch {
-      // ignore
+      // ignore（session-not-found 由 api client 的 session-gone 登记表接管）
     }
   },
 

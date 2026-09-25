@@ -1337,20 +1337,37 @@ export class ConversationService {
           console.log(`[CLI:${sessionId}:stdout] ${logLine}`)
         }
       }
-    } catch {
-      // Process output read failures should not kill the session.
+    } catch (error) {
+      // Process output read failures should not kill the session — but they
+      // must NOT be silent either: a dead reader pipe looks exactly like
+      // "child produced no output" and forges the empty-capture signature
+      // (cli_runtime_exit with no stderr/stdout). Leave a marker line so
+      // exit-time diagnostics can tell the two apart.
+      const marker = `[stream-read-error] failed reading CLI ${streamName}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+      const session = this.sessions.get(sessionId)
+      if (session) {
+        const lines = streamName === 'stderr' ? session.stderrLines : session.stdoutLines
+        lines.push(marker)
+        if (lines.length > MAX_CAPTURED_PROCESS_LINES) {
+          lines.splice(0, lines.length - MAX_CAPTURED_PROCESS_LINES)
+        }
+      }
+      console.error(`[ConversationService] ${marker}`)
     }
   }
 
   private async waitForProcessOutputDrain(
     session: SessionProcess,
     timeoutMs = 250,
-  ): Promise<void> {
+  ): Promise<{ drained: boolean }> {
     const outputDrain = session.outputDrain ?? Promise.resolve()
-    await Promise.race([
-      outputDrain.catch(() => undefined),
-      new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
+    const outcome = await Promise.race([
+      outputDrain.then(() => 'drained' as const).catch(() => 'drained' as const),
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), timeoutMs)),
     ])
+    return { drained: outcome === 'drained' }
   }
 
   private sendSdkMessage(
@@ -1384,7 +1401,7 @@ export class ConversationService {
         activeSession.startupExitCode = code
         return
       }
-      await this.waitForProcessOutputDrain(activeSession)
+      const { drained } = await this.waitForProcessOutputDrain(activeSession)
       const exitError = this.buildRuntimeExitMessage(sessionId, code)
       void diagnosticsService.recordEvent({
         type: 'cli_runtime_exit',
@@ -1395,6 +1412,11 @@ export class ConversationService {
           exitCode: code,
           workDir: activeSession.workDir,
           permissionMode: activeSession.permissionMode,
+          // 空 capturedOutput 时用于区分「管道没接住/读流故障」与「子进程
+          // 静默退出（零输出即死，运行时级崩溃特征）」
+          output_drained: drained,
+          stderr_line_count: (activeSession.stderrLines ?? []).length,
+          stdout_line_count: (activeSession.stdoutLines ?? []).length,
           capturedOutput: this.buildCapturedProcessOutputDetail(activeSession),
           sdkMessages: this.summarizeSdkMessages(activeSession.sdkMessages),
         },
@@ -2099,7 +2121,7 @@ export class ConversationService {
 
     return detail
       ? `CLI process exited unexpectedly (code ${exitCode}): ${detail}`
-      : `CLI process exited unexpectedly with code ${exitCode}; no CLI stderr/stdout or SDK error payload was captured before exit.`
+      : `CLI process exited unexpectedly with code ${exitCode}; output pipes drained but nothing was captured — the CLI likely crashed before writing anything (runtime-level failure, e.g. Bun abort), no CLI stderr/stdout or SDK error payload was captured before exit.`
   }
 
   private buildCapturedProcessOutputDetail(

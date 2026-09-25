@@ -15,6 +15,8 @@ export type ServantInfo = {
   title: string
   workDir?: string
   running: boolean
+  /** 当前是否有进行中回合（服务端真实信号，与假死 watcher 同源）——状态灯 busy 判定依据 */
+  turnInProgress: boolean
   /** 会话最后一次活动时间（transcript 修改时间）——主管区分"执行中"与"假活" */
   lastActivityAt?: string
 }

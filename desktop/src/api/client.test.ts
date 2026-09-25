@@ -3,7 +3,9 @@ import {
   api,
   getApiUrl,
   getDefaultBaseUrl,
+  isSessionGone,
   rawRecordDiagnosticEvent,
+  resetSessionGoneRegistryForTests,
   setAuthToken,
   setBaseUrl,
 } from './client'
@@ -269,5 +271,36 @@ describe('api diagnostics reporting', () => {
 
     expect(signal?.aborted).toBe(true)
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('session-gone registry (Session not found 404 interception)', () => {
+  afterEach(() => {
+    resetSessionGoneRegistryForTests()
+  })
+
+  function mockNotFound(body: unknown) {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify(body), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+  }
+
+  it('registers the session id carried by a "Session not found" 404', async () => {
+    expect(isSessionGone('gone-session')).toBe(false)
+    mockNotFound({ error: 'Not Found', message: 'Session not found: gone-session' })
+
+    await expect(api.get('/api/sessions/gone-session/tasks')).rejects.toThrow('Session not found')
+
+    expect(isSessionGone('gone-session')).toBe(true)
+  })
+
+  it('does not register other 404 bodies', async () => {
+    mockNotFound({ error: 'Not Found', message: 'Task task-1 not found' })
+
+    await expect(api.get('/api/scheduled-tasks/task-1/runs')).rejects.toThrow()
+
+    expect(isSessionGone('task-1')).toBe(false)
+    expect(isSessionGone('gone-session')).toBe(false)
   })
 })

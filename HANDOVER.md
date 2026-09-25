@@ -38,12 +38,12 @@
 ## GitHub 信息
 
 - **仓库**：`https://github.com/KyuuKyuuStone/claude-code-heihei`
-- **当前版本**：`v1.2.6`（2026-09-18 发布，Latest；v1.2.5 的安装包缺冻结收尾三项修复与 trace 体积抑制，建议升级）
-- **主分支**：`main`（上一发布 v1.2.5 = `26b7d46`；v1.2.6 为本次发布提交）
+- **当前版本**：`v1.2.7`（2026-09-25 发布，Latest；v1.2.6-beta.1 测试候选的三处修复转正）
+- **主分支**：`main`（上一发布 v1.2.6 = `ce35e3e`；v1.2.7 为本次发布提交）
 
 ## 当前状态
 
-### 版本快照（v1.0.3 → v1.2.6，2026-09-07 ~ 09-18）
+### 版本快照（v1.0.3 → v1.2.7，2026-09-07 ~ 09-25）
 
 - **v1.0.3**：会话协作实战韧性第一轮——`.heihei/dispatch` 文件信箱（Bash 不可用时的派活/汇报降级通道）、主管履新承诺前实测 CLI 技能、Doctor 新增 shell/协作技能体检、prewarm 回收日志正名
 - **v1.0.4**：本地模型上下文规划重做（32K 是下限非目标，预算内逐级上探至 128K q8_0，`desktop/src/lib/localModelPlan.ts`）；跑分运行方式判定修复（全 GPU 不再误标混合）
@@ -62,6 +62,7 @@
 - **v1.2.4**：**员工生命周期（增删 / 重入）**——**移除留痕**（两条移除路径均写 `servant_removed` 诊断、含身份快照：显式删除 `explicit-delete` + 会话死亡自动清理 `session-deleted-auto-cleanup`——后者是此前更隐蔽的静默移除点）；**「删除」真正生效修复**（DELETE 分支补 `invalidateSupervisorCache`，被删员工重启后不再按旧身份注入收权 env）；派活到已移除会话从不可行动的 500 改为**可行动 404**（提示查花名册改派、勿重试；**主管汇报路径与禁用员工天然放行**）；同 workDir 同 role 重复登记写 `servant_duplicate_role` warn（**不阻断**——role 是自由文本，同名不同分工合法）；**重新加入 = 全新登记**（新 sessionId、新条目，不复用旧身份），历史靠诊断链 `registered → removed（含快照）→ registered（同 role）` 复盘；协作设置新增「**删除 vs 禁用**」差异说明（五语言）。设计真源见 `cc-heihei-交接/员工生命周期_增删重入设计_20260916.md`；顺带 **`.gitignore` 补瞬态文件**（`.heihei/` 等协作运行时文件）
 - **v1.2.5**：**Onboarding 修复 + 未接线三特性移除**。① **Onboarding 修复**——主管上岗消息新增「花名册为空 / 明显不全时**等 60 秒重查（最多 5 次）**」兜底（主管往往最先被拉起，员工会话创建在其后 78~193 秒）；`forSession` 花名册**自排除请求者**（防主管把自己当员工自派）；员工会话 **title 按角色生成**（走 custom-title；仅新会话，用户改名 / 编辑路径不覆盖用户命名，失败不阻断登记）；`GET /api`（**无斜杠**）修复为与 `/api/` 同返回 JSON 名录（外层分流补条件 + 新增路由测试锁两路）。② **未接线三特性移除**（用户拍板「都不要，干净删掉」）——H5 设置区（含服务端 h5 栈 `api/h5-access` / `h5AccessPolicy` / `h5AccessService` / `staticH5` 与 4 个测试文件）、官方 provider 登录卡片（3 组件 + 3 OAuth store + api）、cc-switch 导入：**25 文件删除 + 119 键 × 5 语言清理，净删 10568 行**（发布前 `git diff --shortstat` 实测：80 files changed, +244 insertions, -10568 deletions；补刀前初审时点为 9015）；通用「本机受信 vs 远程」判定收窄为 `src/server/localRequestPolicy.ts` 保留（**非本机仍被拒**）；桌面 25 条 skip 用例随之移除（基线 skip 27 → 2）。③ 两个行为变化：**断连宽限不再可配（恒 30 秒）**——原值存在 H5 设置中；**非本机 CORS 拒绝点前移到 CORS 层**（远程仍 403）。④ 移除范围含**浏览器运行时残留与 OAuth 端点**——`desktopRuntime` 的 H5 令牌门 / `H5ConnectionView` / AppShell 渲染分支一并移除（浏览器客户端改为**直连**，非 loopback 由服务端**通用鉴权拒绝**）；服务端 `heihei-oauth` **3 个端点**移除（**回调处理器与 OAuth 服务层保留**——官方 provider 的运行时鉴权仍在用）；侧车构建探针、`src-tauri/src/lib.rs` 与 `CLAUDE_H5_*` 环境变量的 h5 残留清理（纯删除，**未 `cargo check`**——该 Rust 宿主不参与构建管线）
 - **v1.2.6**：**冻结根因收尾 + 体积抑制 + 门禁扩容**。① **CLI 工具生命周期埋点**（`tool_exec_started` / `tool_result_emitted` / `tool_exec_finished`，覆盖「结果生成 → 回传」这段**此前完全无埋点**的路径；走 `logForDiagnosticsNoPII`，自带 sessionId 归因）；② **工具超时兜底**（`TOOL_EXEC_HARD_TIMEOUT_MS = 600s`，超时**强制注入 `is_error` tool_result**——消灭孤儿 tool_use / 永久悬挂；`for-await` 改 `Promise.race` 手动迭代，`iterator.return` fire-and-forget 避免清理挂死）；③ **turn 状态与 CLI 同步**（注入式回合补齐 turn：`beginInjectedUserTurn`（幂等），**interrupt 对注入回合生效**）。④ **体积抑制 S1+S3**：trace preview 上限 **240K → 32K**（日志侧约 **−87%**；只影响新写入、不动请求体）、pending 记录改记**真实体积**（修 A5a「1.2MB 记成 4.3KB」的观测盲区）、preview 改**头尾双段采样**（尾部 SSE usage 可见）。⑤ **CI `desktop-tests` 18 → 37 文件**（达「连续 ≥3 次全绿」标准；1104 tests 逐字一致）。⑥ **P3 清理**：local-index-corpus 超时与计时语义修正（套件 7 假红 → **14/14**）、`client.test.ts` 环境确定性化（9 变量保 / 清 / 还）、H5 键名兼容注释。全量桌面套件 **3565 通过 / 0 失败**。⑦ **上下文治理（批次 7 核心批）**——**M1** 单条 >48KB 截断 + **逐单元原文落盘可回查**（多块独立落盘、失败逐条如实标注，标记与落盘一致性有测试锁）；**M2** 每请求字节 debug 诊断 + 滚动 p50/p90/p99 + **60%/80% 双阀告警**（含 episode 去重）；**L1** 原子轮次历史裁剪（**恒保留首轮 + 末 2 组**、防裁散 tool 配对、可观测）；**L2** 按 model 动态窗口预算（运行时探测另立批次）；**正常会话零行为变化**（整条 ≤48KB 原样返回、L1 预算内原样返回、M2 纯观测不阻断）。⑧ **遗留清理**——两条既有测试失败**根因修复**：trace-capture ＝**宿主 env 污染**（`CC_HEIHEI_TRACE_API_CALLS=1` 由协作宿主注入；**更正批次 6 的「顺序依赖」判断**）、workspace-service ＝ `registeredRoots` **模块级跨文件残留**——**B2 报告的两个既有失败至此全部闭合**（trace-capture 单跑 66/66、desktop-ui-preferences + workspace-service 34/34）；pet 偏好端点清理 + **schema 4 → 5 迁移**（旧键剥离不回潮 + 旧夹具回归 + 404 锁定）；`check:persistence-upgrade` 脚本补注册（指向既有迁移回归测试，6/6）。⑨ **CI** 新增 `server-tests-linux-exp` **实验 job**（ubuntu、`continue-on-error`、一次性采集 Linux 失败清单、用完即撤；**与 windows 门禁并列不替换**）。全量服务端 **1628 通过 / 0 失败**
+- **v1.2.7**：**三处实测反馈修复**（候选包以 `1.2.6-beta.1` 送实测通过——过程注记：`1.2.6.1` 被 electron-builder 拒，semver 仅支持三段版本号）。① **员工列表转圈图标残留**——根因 `turnInProgress` 字段在回合结束时未复位：`servantService.ts` 补回合态复位 + `Sidebar.tsx` 状态灯按真实回合态渲染（服务端 **61/61** + 桌面 **83/83** 通过）。② **「Session not found」轮询刷屏**——根因会话移除 / 进程退出后客户端无记忆、反复轮询报错：`client.ts` 增 `isSessionGone` 登记表（404 即登记）、`cliTaskStore.ts` / `teamStore.ts` 轮询按登记表短路（测试 **28+158=186** 通过）。③ **CLI 静默退出诊断增强**——根因 CLI 静默退出（如 stream read error）无任何诊断留痕：`conversationService.ts` 标记退出原因写入诊断 + 新增 `cli-exit-diagnostics.test.ts`（**5/5**；回归 **74 通过 / 1 skip / 0 fail**）
 
 ### 能工作的
 - 本地模型全流程（设置页、跑分、启动、下载中心、多模态、自定义引擎）都能用

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { markSessionGone } from '../api/client'
 import { cliTasksApi } from '../api/cliTasks'
 import type { CLITask, TaskStatus } from '../types/cliTask'
 import { useCLITaskStore } from './cliTaskStore'
@@ -332,5 +333,28 @@ describe('cliTaskStore', () => {
     expect(useCLITaskStore.getState().tasks).toMatchObject([
       { taskListId: 'session-1', status: 'completed' },
     ])
+  })
+})
+
+describe('session-gone guard (stop polling after Session not found)', () => {
+  afterEach(() => {
+    useCLITaskStore.setState({ sessionId: null, tasks: [] })
+  })
+
+  it('does not hit the API again for a session already marked gone', async () => {
+    markSessionGone('gone-session')
+
+    await useCLITaskStore.getState().fetchSessionTasks('gone-session')
+
+    expect(cliTasksApi.getTasksForList).not.toHaveBeenCalled()
+  })
+
+  it('still polls sessions that are not marked gone', async () => {
+    vi.mocked(cliTasksApi.getTasksForList).mockResolvedValue({ tasks: [] })
+
+    await useCLITaskStore.getState().fetchSessionTasks('alive-session')
+
+    expect(cliTasksApi.getTasksForList).toHaveBeenCalledTimes(1)
+    expect(cliTasksApi.getTasksForList).toHaveBeenCalledWith('alive-session')
   })
 })

@@ -69,6 +69,32 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * 「会话已不存在」登记表（2026-09-21 诊断）。
+ *
+ * 会话被删除后，渲染层仍有 1-1.5s 级的按会话轮询（任务列表、成员 transcript）。
+ * 服务端每次都以 404 `Session not found: <id>` 拒绝，而渲染层的全局
+ * unhandledrejection 捕获会把每次失败上报 → diagnostics.jsonl 以约 1 条/秒刷屏
+ * （实测 7 秒 9 条）。这里在 API 客户端这个唯一出口拦截该类 404：把会话 id 记入
+ * 登记表，各按会话轮询入口用 `isSessionGone()` 先查，命中即跳过、不再重试。
+ * 生命周期：登记表随应用运行期存在（被删除的会话不会复活）；应用重载归零。
+ */
+const sessionGoneIds = new Set<string>()
+const SESSION_NOT_FOUND_MESSAGE_RE = /^Session not found: ([0-9a-zA-Z_-]+)$/
+
+export function isSessionGone(sessionId: string): boolean {
+  return sessionGoneIds.has(sessionId)
+}
+
+export function markSessionGone(sessionId: string): void {
+  sessionGoneIds.add(sessionId)
+}
+
+/** 测试钩子：清空登记表 */
+export function resetSessionGoneRegistryForTests(): void {
+  sessionGoneIds.clear()
+}
+
 export type ApiRequestOptions = {
   timeout?: number
   signal?: AbortSignal
@@ -97,7 +123,12 @@ async function request<T>(method: string, path: string, body?: unknown, options?
     })
     if (!res.ok) {
       const errorBody = await res.json().catch(() => res.text())
-      throw new ApiError(res.status, errorBody)
+      const error = new ApiError(res.status, errorBody)
+      if (res.status === 404) {
+        const match = SESSION_NOT_FOUND_MESSAGE_RE.exec(error.message)
+        if (match) markSessionGone(match[1]!)
+      }
+      throw error
     }
 
     if (res.status === 204) return undefined as T

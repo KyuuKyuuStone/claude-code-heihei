@@ -8,6 +8,10 @@ import * as path from 'path'
 import * as os from 'os'
 import { ServantService } from '../services/servantService.js'
 import { sessionService } from '../services/sessionService.js'
+import {
+  observeSessionSdkMessage,
+  resetDispatchReceipts,
+} from '../services/dispatchReceiptService.js'
 // 静态引入：在任何 mock.module 之前绑定真实模块
 import { SessionMessenger } from '../services/sessionMessenger.js'
 
@@ -70,6 +74,8 @@ describe('ServantService', () => {
 
   afterEach(async () => {
     restoreConfigDir()
+    // 回合信号是模块级内存状态：清掉避免向其他用例泄漏（顺序依赖）
+    resetDispatchReceipts()
     await cleanupTmpDir(tmpDir)
   })
 
@@ -90,6 +96,22 @@ describe('ServantService', () => {
     expect(servants[0].running).toBe(false)
     // 主管区分"执行中"与"假活"的依据：会话最后一次活动时间
     expect(servants[0].lastActivityAt).toBeDefined()
+    // 未观察到任何 SDK 消息 → 无进行中回合
+    expect(servants[0].turnInProgress).toBe(false)
+  })
+
+  it('reflects real turn state via turnInProgress (same source as stall watcher)', async () => {
+    await service.setServant(sessionId, { role: '后端', enabled: true })
+
+    // 回合开始（assistant 信号）→ true
+    observeSessionSdkMessage(sessionId, 'assistant')
+    let servants = await service.listServants()
+    expect(servants[0].turnInProgress).toBe(true)
+
+    // 回合边界（result）→ 立刻 false，状态灯不等滑动窗口过期
+    observeSessionSdkMessage(sessionId, 'result')
+    servants = await service.listServants()
+    expect(servants[0].turnInProgress).toBe(false)
   })
 
   it('should exclude disabled servants from the roster', async () => {

@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { isSessionGone } from '../api/client'
 import { teamsApi } from '../api/teams'
 import type { TeamSummary, TeamDetail, TeamMember, AgentColor } from '../types/team'
 import { AGENT_COLORS } from '../types/team'
@@ -213,6 +214,11 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
   },
 
   refreshMemberSession: async (sessionId) => {
+    // 成员会话已被服务端判定不存在（404 Session not found）：跳过 1.5s
+    // transcript 轮询，防止失败经 unhandledrejection 刷屏 diagnostics
+    // （登记由 api client 的 session-gone 登记表统一接管，2026-09-21 诊断）
+    if (isSessionGone(sessionId)) return
+
     const team = get().activeTeam
     const member = get().getMemberBySessionId(sessionId)
     if (!team || !member) return

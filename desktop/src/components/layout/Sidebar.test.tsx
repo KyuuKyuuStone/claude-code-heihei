@@ -112,7 +112,7 @@ vi.mock('../../i18n', () => ({
   },
 }))
 
-import { Sidebar } from './Sidebar'
+import { Sidebar, servantStatus } from './Sidebar'
 import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useServantStore } from '../../stores/servantStore'
@@ -979,8 +979,10 @@ describe('Sidebar', () => {
               status: 'running',
               taskType: 'local_agent',
               description: 'Review screenshots',
-              startedAt: 1,
-              updatedAt: 2,
+              // running 任务必须带新鲜 updatedAt：15 分钟无刷新会被陈旧兜底
+              // 视为已终结（backgroundTasks.RUNNING_TASK_STALE_MS）
+              startedAt: Date.now() - 1000,
+              updatedAt: Date.now(),
             },
           },
         }),
@@ -1770,7 +1772,7 @@ describe('Sidebar', () => {
   })
 
   describe('servant status marker', () => {
-    function seedSessionWithServant(lastActivityAt: string | undefined) {
+    function seedSessionWithServant(turnInProgress: boolean) {
       useSessionStore.setState({
         sessions: [makeSession('servant-1', 'Servant session', '/workspace/alpha', '2026-05-15T10:00:00.000Z')],
       })
@@ -1782,14 +1784,14 @@ describe('Sidebar', () => {
             updatedAt: 0,
             title: 'Servant session',
             running: true,
-            lastActivityAt,
+            turnInProgress,
           },
         },
       })
     }
 
     it('wraps a busy servant in a spinning ring around the green dot', () => {
-      seedSessionWithServant(new Date().toISOString())
+      seedSessionWithServant(true)
 
       render(<Sidebar />)
 
@@ -1807,13 +1809,45 @@ describe('Sidebar', () => {
     })
 
     it('keeps a non-busy servant as a static muted dot without the ring', () => {
-      seedSessionWithServant(new Date(Date.now() - 10 * 60_000).toISOString())
+      seedSessionWithServant(false)
 
       render(<Sidebar />)
 
       const marker = screen.getByTitle('Servant waiting')
       expect(marker).toHaveClass('h-2', 'w-2', 'rounded-full', 'bg-[var(--color-text-tertiary)]')
       expect(marker.children).toHaveLength(0)
+    })
+  })
+
+  describe('servantStatus (pure)', () => {
+    const base = {
+      sessionId: 's1',
+      enabled: true,
+      updatedAt: 0,
+      title: 'Servant',
+    }
+
+    it('returns idle when the servant CLI is not running', () => {
+      // 未运行时不看回合信号：turnInProgress 残留 true（CLI 中途退出）也应是 idle
+      expect(servantStatus({ ...base, running: false, turnInProgress: false })).toBe('idle')
+      expect(servantStatus({ ...base, running: false, turnInProgress: true })).toBe('idle')
+    })
+
+    it('returns busy only when a turn is actually in progress', () => {
+      expect(servantStatus({ ...base, running: true, turnInProgress: true })).toBe('busy')
+    })
+
+    it('returns waiting when running but between turns (no 3-minute window guessing)', () => {
+      // 旧逻辑靠 lastActivityAt 滑动窗口猜：回合刚结束但窗口未过期会错误保持 busy。
+      // 新逻辑直接读真实回合信号，lastActivityAt 再"新鲜"也不影响判定。
+      expect(
+        servantStatus({
+          ...base,
+          running: true,
+          turnInProgress: false,
+          lastActivityAt: new Date().toISOString(),
+        }),
+      ).toBe('waiting')
     })
   })
 })
