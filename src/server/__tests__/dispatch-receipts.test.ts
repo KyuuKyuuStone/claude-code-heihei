@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 import { handleSessionMessagesApi } from '../api/servants.js'
 import {
   MAX_TRACKED_RECEIPTS,
+  addTurnChangeListener,
   countUnconsumedReceipts,
   forgetReceipt,
   getReceipt,
@@ -199,5 +200,70 @@ describe('GET /api/session-messages (receipt query)', () => {
     expect(body.ok).toBe(true)
     expect(body.receipts).toHaveLength(2)
     expect(body.receipts.every((receipt) => receipt.targetSessionId === EMP)).toBe(true)
+  })
+})
+
+describe('turn change listeners (方案B: servant_turn_changed 事件源)', () => {
+  test('fires true on the idle→busy flip and false on the result boundary', () => {
+    const events: Array<{ sessionId: string; turnInProgress: boolean }> = []
+    const off = addTurnChangeListener((sessionId, turnInProgress) => {
+      events.push({ sessionId, turnInProgress })
+    })
+
+    observeSessionSdkMessage(EMP, 'assistant', T0)
+    observeSessionSdkMessage(EMP, 'result', T0 + 100)
+
+    expect(events).toEqual([
+      { sessionId: EMP, turnInProgress: true },
+      { sessionId: EMP, turnInProgress: false },
+    ])
+    off()
+  })
+
+  test('does not refire while already mid-turn, and result on idle session does not fire', () => {
+    const events: Array<{ sessionId: string; turnInProgress: boolean }> = []
+    const off = addTurnChangeListener((sessionId, turnInProgress) => {
+      events.push({ sessionId, turnInProgress })
+    })
+
+    // 连续活动信号：只有第一次翻转触发
+    observeSessionSdkMessage(EMP, 'stream_event', T0)
+    observeSessionSdkMessage(EMP, 'assistant', T0 + 100)
+    observeSessionSdkMessage(EMP, 'user', T0 + 200)
+    // 空闲会话收到 result（如启动即报错）：无翻转，不触发
+    observeSessionSdkMessage(OTHER, 'result', T0 + 300)
+
+    expect(events).toEqual([{ sessionId: EMP, turnInProgress: true }])
+    off()
+  })
+
+  test('neutral events never fire, and unsubscribe stops notifications', () => {
+    const events: Array<string> = []
+    const off = addTurnChangeListener((sessionId) => {
+      events.push(sessionId)
+    })
+
+    observeSessionSdkMessage(EMP, 'system', T0)
+    observeSessionSdkMessage(EMP, 'control_request', T0 + 100)
+    expect(events).toEqual([])
+
+    off()
+    observeSessionSdkMessage(EMP, 'assistant', T0 + 200)
+    expect(events).toEqual([])
+  })
+
+  test('a throwing listener does not break state progression or other listeners', () => {
+    const seen: Array<boolean> = []
+    addTurnChangeListener(() => {
+      throw new Error('boom')
+    })
+    addTurnChangeListener((_sessionId, turnInProgress) => {
+      seen.push(turnInProgress)
+    })
+
+    observeSessionSdkMessage(EMP, 'assistant', T0)
+
+    expect(isSessionTurnInProgress(EMP)).toBe(true)
+    expect(seen).toEqual([true])
   })
 })

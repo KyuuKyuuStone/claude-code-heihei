@@ -39,6 +39,7 @@ import { GROK_DEFAULT_MAIN_MODEL } from '../../services/grokAuth/models.js'
 import { getGrokModelCatalog } from '../../services/grokAuth/modelCatalog.js'
 import { heiheiGrokOAuthService } from '../services/heiheiGrokOAuthService.js'
 import { diagnosticsService } from '../services/diagnosticsService.js'
+import { addTurnChangeListener } from '../services/dispatchReceiptService.js'
 import {
   buildConversationTitleInput,
   deriveTitle,
@@ -340,6 +341,15 @@ export type WebSocketData = {
 // can legitimately watch the same running session at the same time.
 const activeSessions = new Map<string, Set<ServerWebSocket<WebSocketData>>>()
 
+/**
+ * 全局事件通道（保留会话 ID `_events`）：不绑定任何真实会话，只向订阅方
+ * 推送跨会话事件（当前仅 servant_turn_changed，来源 dispatchReceiptService
+ * 的回合翻转，与花名册 turnInProgress 字段同源）。用于前端状态灯免轮询即时
+ * 更新（转圈残留根治·方案B）。
+ */
+export const GLOBAL_EVENTS_SESSION_ID = '_events'
+const globalEventClients = new Set<ServerWebSocket<WebSocketData>>()
+
 const clientOutputCallbacks = new Map<
   ServerWebSocket<WebSocketData>,
   {
@@ -366,6 +376,13 @@ export const handleWebSocket = {
     }
 
     console.log(`[WS] Client connected for session: ${sessionId}`)
+
+    // 全局事件通道：不绑定会话，仅登记进独立集合后推送跨会话事件。
+    if (sessionId === GLOBAL_EVENTS_SESSION_ID) {
+      globalEventClients.add(ws)
+      sendMessage(ws, { type: 'connected', sessionId })
+      return
+    }
 
     // Cancel pending cleanup timer if client reconnects
     const pendingTimer = sessionCleanupTimers.get(sessionId)
@@ -401,6 +418,19 @@ export const handleWebSocket = {
     if (ws.data.channel === 'sdk') {
       const payload = typeof rawMessage === 'string' ? rawMessage : rawMessage.toString()
       conversationService.handleSdkPayload(ws.data.sessionId, payload)
+      return
+    }
+
+    // 全局事件通道是纯下行：只应答心跳，忽略其余消息。
+    if (ws.data.sessionId === GLOBAL_EVENTS_SESSION_ID) {
+      try {
+        const message = JSON.parse(
+          typeof rawMessage === 'string' ? rawMessage : rawMessage.toString()
+        ) as ClientMessage
+        if (message.type === 'ping') sendMessage(ws, { type: 'pong' })
+      } catch {
+        // 忽略畸形消息
+      }
       return
     }
 
@@ -497,6 +527,12 @@ export const handleWebSocket = {
     if (channel === 'sdk') {
       console.log(`[WS] SDK disconnected from session: ${sessionId} (${code}: ${reason})`)
       conversationService.detachSdkConnection(sessionId, ws)
+      return
+    }
+
+    if (sessionId === GLOBAL_EVENTS_SESSION_ID) {
+      globalEventClients.delete(ws)
+      console.log(`[WS] Global events client disconnected (${code}: ${reason})`)
       return
     }
 
@@ -3450,6 +3486,24 @@ export function sendToSession(sessionId: string, message: ServerMessage): boolea
   return true
 }
 
+/** 向所有全局事件通道（_events）订阅方广播一条跨会话事件 */
+export function broadcastGlobalEvent(message: ServerMessage): number {
+  for (const ws of globalEventClients) {
+    sendMessage(ws, message)
+  }
+  return globalEventClients.size
+}
+
+// 回合翻转 → 全局事件广播。状态源与花名册 turnInProgress 完全同源
+// （dispatchReceiptService.sessionMidTurn），前端收到即可局部更新，免等轮询。
+addTurnChangeListener((sessionId, turnInProgress) => {
+  broadcastGlobalEvent({
+    type: 'system_notification',
+    subtype: 'servant_turn_changed',
+    data: { sessionId, turnInProgress },
+  })
+})
+
 export function updateSessionSlashCommands(
   sessionId: string,
   commands: unknown[],
@@ -3529,6 +3583,7 @@ export function __resetWebSocketHandlerStateForTests(): void {
   for (const timer of prewarmIdleTimers.values()) clearTimeout(timer)
   for (const remove of sessionDisconnectWatchers.values()) remove()
   activeSessions.clear()
+  globalEventClients.clear()
   clientOutputCallbacks.clear()
   taskNotificationPersistence.clear()
   sessionCleanupTimers.clear()

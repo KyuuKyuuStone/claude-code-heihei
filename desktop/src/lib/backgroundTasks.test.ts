@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import type { BackgroundAgentTask } from '../types/chat'
-import { formatDurationMs, formatDurationSeconds, hasRunningBackgroundTasks } from './backgroundTasks'
+import {
+  RUNNING_TASK_STALE_MS,
+  formatDurationMs,
+  formatDurationSeconds,
+  hasRunningBackgroundTasks,
+} from './backgroundTasks'
 import { translate } from '../i18n'
+
+/** 确定性时间基准：所有用例显式传 now，不依赖真实时钟 */
+const NOW = Date.parse('2026-09-16T10:00:00.000Z')
 
 function task(
   taskId: string,
@@ -10,8 +18,8 @@ function task(
   return {
     taskId,
     status: 'running',
-    startedAt: 1,
-    updatedAt: 1,
+    startedAt: NOW - 60_000,
+    updatedAt: NOW,
     ...overrides,
   }
 }
@@ -20,14 +28,44 @@ describe('hasRunningBackgroundTasks', () => {
   it('does not treat AutoDream as foreground session activity', () => {
     expect(hasRunningBackgroundTasks({
       dream: task('dream', { taskType: 'dream' }),
-    })).toBe(false)
+    }, NOW)).toBe(false)
   })
 
   it('still reports user-started background tasks as running', () => {
     expect(hasRunningBackgroundTasks({
       shell: task('shell', { taskType: 'local_bash' }),
       dream: task('dream', { taskType: 'dream' }),
-    })).toBe(true)
+    }, NOW)).toBe(true)
+  })
+
+  it('treats a running task past the staleness threshold as finished', () => {
+    // 断线漏接 task_completed：running 记录停在原地，updatedAt 不再刷新
+    const stale = NOW - RUNNING_TASK_STALE_MS - 1
+    expect(hasRunningBackgroundTasks({
+      shell: task('shell', { taskType: 'local_bash', updatedAt: stale }),
+    }, NOW)).toBe(false)
+  })
+
+  it('keeps a running task at exactly the threshold boundary as running', () => {
+    const boundary = NOW - RUNNING_TASK_STALE_MS
+    expect(hasRunningBackgroundTasks({
+      shell: task('shell', { taskType: 'local_bash', updatedAt: boundary }),
+    }, NOW)).toBe(true)
+  })
+
+  it('reports running when a fresh task coexists with a stale one', () => {
+    const stale = NOW - RUNNING_TASK_STALE_MS - 1
+    expect(hasRunningBackgroundTasks({
+      staleShell: task('stale', { taskType: 'local_bash', updatedAt: stale }),
+      freshShell: task('fresh', { taskType: 'local_bash', updatedAt: NOW - 1000 }),
+    }, NOW)).toBe(true)
+  })
+
+  it('ignores staleness for non-running statuses', () => {
+    const ancient = NOW - 10 * RUNNING_TASK_STALE_MS
+    expect(hasRunningBackgroundTasks({
+      done: task('done', { status: 'completed', updatedAt: ancient }),
+    }, NOW)).toBe(false)
   })
 })
 

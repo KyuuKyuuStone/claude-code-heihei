@@ -5274,8 +5274,10 @@ describe('MessageList nested tool calls', () => {
                 status: 'running',
                 taskType: 'local_agent',
                 description: 'Review screenshots',
-                startedAt: 1,
-                updatedAt: 2,
+                // running 任务必须带新鲜 updatedAt：15 分钟无刷新会被陈旧兜底
+                // 视为已终结（backgroundTasks.RUNNING_TASK_STALE_MS）
+                startedAt: Date.now() - 1000,
+                updatedAt: Date.now(),
               },
             },
           }),
@@ -5356,8 +5358,10 @@ describe('MessageList nested tool calls', () => {
               status: 'running',
               taskType: 'local_agent',
               description: 'Review screenshots',
-              startedAt: 1,
-              updatedAt: 2,
+              // running 任务必须带新鲜 updatedAt：15 分钟无刷新会被陈旧兜底
+              // 视为已终结（backgroundTasks.RUNNING_TASK_STALE_MS）
+              startedAt: Date.now() - 1000,
+              updatedAt: Date.now(),
             },
           },
         }),

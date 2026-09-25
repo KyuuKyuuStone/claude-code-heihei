@@ -39,10 +39,34 @@ const receipts = new Map<string, DispatchReceipt>()
 /** sessionId → 是否有回合正在进行（由 observeSessionSdkMessage 维护） */
 const sessionMidTurn = new Map<string, boolean>()
 
-/** 测试隔离用：清空全部状态 */
+/**
+ * 回合状态翻转监听器（sessionId, turnInProgress）。
+ * 消费方：ws/handler 把它广播到 _events 全局通道，让前端花名册状态灯
+ * 不必等轮询就能即时反映回合开始/结束（转圈残留根治·方案B）。
+ */
+type TurnChangeListener = (sessionId: string, turnInProgress: boolean) => void
+const turnChangeListeners = new Set<TurnChangeListener>()
+
+export function addTurnChangeListener(listener: TurnChangeListener): () => void {
+  turnChangeListeners.add(listener)
+  return () => { turnChangeListeners.delete(listener) }
+}
+
+function emitTurnChange(sessionId: string, turnInProgress: boolean): void {
+  for (const listener of turnChangeListeners) {
+    try {
+      listener(sessionId, turnInProgress)
+    } catch {
+      // 监听器异常不能影响回执状态推进本身
+    }
+  }
+}
+
+/** 测试隔离用：清空全部状态（含监听器，避免跨用例泄漏） */
 export function resetDispatchReceipts(): void {
   receipts.clear()
   sessionMidTurn.clear()
+  turnChangeListeners.clear()
 }
 
 /**
@@ -132,14 +156,19 @@ export function observeSessionSdkMessage(
 
   if (type === 'result') {
     // 回合边界：CLI 在此时才拉取排队的输入 → 该会话所有未消费回执都算被消费
+    const wasMidTurn = sessionMidTurn.get(sessionId) === true
     sessionMidTurn.set(sessionId, false)
+    if (wasMidTurn) emitTurnChange(sessionId, false)
     consume(sessionId, at, () => true)
     return
   }
 
   if (type === 'assistant' || type === 'stream_event' || type === 'user') {
     const wasBusy = sessionMidTurn.get(sessionId) === true
-    if (!wasBusy) sessionMidTurn.set(sessionId, true)
+    if (!wasBusy) {
+      sessionMidTurn.set(sessionId, true)
+      emitTurnChange(sessionId, true)
+    }
     // 只有"投递时空闲"的回执才会被活动信号消费；忙碌期间的活动属于上一条回合
     consume(sessionId, at, (receipt) => !receipt.targetWasBusy)
     return

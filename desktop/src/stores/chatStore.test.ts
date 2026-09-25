@@ -4399,8 +4399,10 @@ describe('chatStore history mapping', () => {
               status: 'running',
               taskType: 'local_agent',
               description: 'Review screenshots',
-              startedAt: 1,
-              updatedAt: 2,
+              // running 任务必须带新鲜 updatedAt：15 分钟无刷新的 running
+              // 会被陈旧兜底视为已终结（backgroundTasks.RUNNING_TASK_STALE_MS）
+              startedAt: Date.now() - 1000,
+              updatedAt: Date.now(),
             },
           },
         }),
@@ -4518,8 +4520,10 @@ describe('chatStore history mapping', () => {
               status: 'running',
               taskType: 'local_agent',
               description: 'Review screenshots',
-              startedAt: 1,
-              updatedAt: 2,
+              // running 任务必须带新鲜 updatedAt：15 分钟无刷新的 running
+              // 会被陈旧兜底视为已终结（backgroundTasks.RUNNING_TASK_STALE_MS）
+              startedAt: Date.now() - 1000,
+              updatedAt: Date.now(),
             },
           },
         }),
@@ -4560,8 +4564,10 @@ describe('chatStore history mapping', () => {
               status: 'running',
               taskType: 'local_agent',
               description: 'Review screenshots',
-              startedAt: 1,
-              updatedAt: 2,
+              // running 任务必须带新鲜 updatedAt：15 分钟无刷新的 running
+              // 会被陈旧兜底视为已终结（backgroundTasks.RUNNING_TASK_STALE_MS）
+              startedAt: Date.now() - 1000,
+              updatedAt: Date.now(),
             },
           },
         }),
@@ -4729,8 +4735,10 @@ describe('chatStore history mapping', () => {
               status: 'running',
               taskType: 'local_agent',
               description: 'Review screenshots',
-              startedAt: 1,
-              updatedAt: 2,
+              // running 任务必须带新鲜 updatedAt：15 分钟无刷新的 running
+              // 会被陈旧兜底视为已终结（backgroundTasks.RUNNING_TASK_STALE_MS）
+              startedAt: Date.now() - 1000,
+              updatedAt: Date.now(),
             },
           },
         }),

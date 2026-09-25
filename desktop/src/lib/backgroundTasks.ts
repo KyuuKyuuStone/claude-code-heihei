@@ -3,11 +3,25 @@ import type { TranslationKey } from '../i18n'
 
 type Translator = (key: TranslationKey, params?: Record<string, string | number>) => string
 
-export function hasRunningBackgroundTasks(tasks?: Record<string, BackgroundAgentTask>): boolean {
+/**
+ * running 状态陈旧阈值：WS 活着时服务端持续推 task_progress 刷新 updatedAt；
+ * 只有断线漏接终止事件（task_completed/failed/stopped）才会让 running 记录
+ * 变陈旧。超过阈值未刷新的 running 视为已终结，不再计入「有后台任务」
+ * （转圈残留根治·方案B 第二步兜底）。
+ */
+export const RUNNING_TASK_STALE_MS = 15 * 60 * 1000
+
+export function hasRunningBackgroundTasks(
+  tasks?: Record<string, BackgroundAgentTask>,
+  now: number = Date.now(),
+): boolean {
   // AutoDream is detached maintenance work: it remains visible and stoppable
   // in Activity, but must not keep the foreground conversation marked busy.
   return Object.values(tasks ?? {}).some(
-    (task) => task.status === 'running' && task.taskType !== 'dream',
+    (task) =>
+      task.status === 'running' &&
+      task.taskType !== 'dream' &&
+      now - task.updatedAt <= RUNNING_TASK_STALE_MS,
   )
 }
 
