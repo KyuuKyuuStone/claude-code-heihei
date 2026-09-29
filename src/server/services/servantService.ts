@@ -16,7 +16,8 @@ import * as crypto from 'crypto'
 import { ApiError } from '../middleware/errorHandler.js'
 import { diagnosticsService } from './diagnosticsService.js'
 import { sessionService } from './sessionService.js'
-import { conversationService } from './conversationService.js'
+import type { SessionListSummary } from './localIndex/types.js'
+import { getSessionSnapshot } from './sessionRegistry.js'
 import { isSessionTurnInProgress } from './dispatchReceiptService.js'
 
 export type ServantEntry = {
@@ -142,8 +143,22 @@ export class ServantService {
       : data.servants.filter((s) => s.enabled)
     if (candidates.length === 0) return []
 
-    const { sessions } = await sessionService.listSessions({ limit: 500 })
-    const byId = new Map(sessions.map((s) => [s.id, s]))
+    // v1.4.0 加载性能修复：花名册只需要已知的 K 个员工会话，按会话直查列表
+    // 摘要（复用 mtime+size 摘要缓存）。原实现 listSessions({ limit: 500 }) 会
+    // 先对发现的全部会话文件逐一摘要扫描再切片——冷启动全量扫、活跃会话
+    // mtime 一变就整文件重扫；渲染端挂载即拉 + 20s 轮询 × 多客户端把它打成
+    // 分钟级事件循环阻塞（实录 /api/servant-sessions?all=1 请求 120s 超时），
+    // 冷启动开会话「加载中…」被一并拖长。
+    const byId = new Map(
+      (
+        await Promise.all(
+          candidates.map(
+            async (s) =>
+              [s.sessionId, await sessionService.getSessionListSummaryForSession(s.sessionId)] as const,
+          ),
+        )
+      ).filter((pair): pair is readonly [string, SessionListSummary] => pair[1] !== null),
+    )
 
     // 会话已被删除的条目自动清理（第二个移除路径，同样要留 servant_removed 痕迹）
     const alive = candidates.filter((s) => byId.has(s.sessionId))
@@ -159,7 +174,11 @@ export class ServantService {
 
     let result = alive
     if (options?.forSessionId) {
-      const forWorkDir = byId.get(options.forSessionId)?.workDir
+      // 请求方未必是员工（主管不是 enabled 员工），byId 里可能没有——直查其摘要。
+      const forSummary =
+        byId.get(options.forSessionId) ??
+        (await sessionService.getSessionListSummaryForSession(options.forSessionId))
+      const forWorkDir = forSummary?.workDir
       if (forWorkDir) {
         result = alive.filter(
           (s) =>
@@ -177,7 +196,12 @@ export class ServantService {
           ...entry,
           title: session.title,
           workDir: session.workDir,
-          running: conversationService.hasSession(entry.sessionId),
+          // v1.3.0 阶段4 · 7a：改读 registry 快照，删除对 conversationService
+          // 的静态 import——反向依赖环消失。旧 hasSession（map 含即真）≈
+          // starting∪running 都算「在跑」；此处**有意收紧**为仅 running：
+          // starting 段 CLI 未 ready，花名册先按未就绪呈现（重启后未登记 →
+          // false，同语义）。（v1.3.1 · R3 注释如实修订，行为不变。）
+          running: getSessionSnapshot(entry.sessionId)?.phase === 'running',
           turnInProgress: isSessionTurnInProgress(entry.sessionId),
           ...(session.modifiedAt ? { lastActivityAt: session.modifiedAt } : {}),
         }

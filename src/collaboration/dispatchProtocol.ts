@@ -39,24 +39,25 @@ curl -s "$CC_HEIHEI_DESKTOP_SERVER_URL/api/servant-sessions?forSession=$CC_HEIHE
 \`\`\`json
 {
   "targetSessionId": "<员工sessionId>",
-  "content": "【上级派活】你的角色：<员工的role>——<员工的description>（你的会话 ID：<员工sessionId>）\\n\\n任务：<背景与交付物，写清楚>\\n\\n收到后立即开始执行，先回复一句确认（如"收到，开始执行"）再干活，不要等待确认。\\n\\n完工后必须汇报，**不要用 curl 内联中文（Windows 控制台会把中文按 GBK 编码发出，服务端收到乱码）**，统一用写文件方式：用 Write 把 {\\"targetSessionId\\":\\"<主管会话ID>\\",\\"content\\":\\"【汇报】<一句话结果+产出路径>\\",\\"fromSessionId\\":\\"<你的会话ID>\\"} 写到 <工作目录>/report-payload.json，再用 Bash 执行：curl -s -X POST \\"$CC_HEIHEI_DESKTOP_SERVER_URL/api/session-messages\\" -H \\"Content-Type: application/json\\" --data-binary @report-payload.json && rm -f report-payload.json；若你的 Bash 也不可用，直接用 Write 把同样的 JSON 写到 <工作目录>/.heihei/dispatch/report-<序号>.json，服务端会自动投递。\\n汇报后任务即告结束。",
+  "content": "【上级派活】你的角色：<员工的role>——<员工的description>（你的会话 ID：<员工sessionId>）\\n\\n任务：<背景与交付物，写清楚>\\n\\n收到后立即开始执行，先回复一句确认（如"收到，开始执行"）再干活，不要等待确认。\\n\\n完工后必须汇报，**不要用 curl 内联中文（Windows 控制台会把中文按 GBK 编码发出，服务端收到乱码）**，统一用写文件方式：用 Write 把 {\\"targetSessionId\\":\\"<主管会话ID>\\",\\"content\\":\\"【汇报】<一句话结果+产出路径>\\",\\"fromSessionId\\":\\"<你的会话ID>\\"} 写到 <工作目录>/report-payload.json，再用 Bash 执行：curl -s --max-time 15 -X POST \\"<当前服务地址>\\" -H \\"Content-Type: application/json\\" --data-binary @report-payload.json（<当前服务地址> 用本条派活消息里写明的地址；响应体含 \\"messageId\\" 才算送达，此时才删 report-payload.json；否则保留它，改写到 <工作目录>/.heihei/dispatch/report-<序号>.json 走信箱投递；禁止把 rm 与 curl 用 && 连接——curl 包装器失败时退出码也可能是 0）。若你的 Bash 不可用，直接用 Write 把同样的 JSON 写到 <工作目录>/.heihei/dispatch/report-<序号>.json，服务端会自动投递。\\n汇报后任务即告结束。",
   "fromSessionId": "<你的会话ID>"
 }
 \`\`\`
 
 其中 \`<你的会话ID>\` 用 \`echo $CC_HEIHEI_SESSION_ID\` 先查到再填进去。
 
-2. 提交并删除临时文件：
+2. 提交（**命令与删除分开：先看响应，确认送达才删**）：
 
 \`\`\`bash
-curl -s -X POST "$CC_HEIHEI_DESKTOP_SERVER_URL/api/session-messages" \\
+curl -s --max-time 15 -X POST "$CC_HEIHEI_DESKTOP_SERVER_URL/api/session-messages" \\
   -H "Content-Type: application/json" \\
-  --data-binary @.dispatch-payload.json && rm -f .dispatch-payload.json
+  --data-binary @.dispatch-payload.json
 \`\`\`
 
-返回 \`{"ok":true}\` 即派活成功；返回错误就把错误内容告诉用户，不要重试同一个错误。
+**成功判据 = 响应体含 \`"messageId"\`**（如 \`{"ok":true,"messageId":"..."}\`）才算送达，此时才可 \`rm -f .dispatch-payload.json\`；响应不含 messageId（连接错误 / 超时 / 空响应）＝**未送达，保留 payload 不要删**，修正后重试一次，仍失败降级「文件信箱」通道。**禁止把 rm 与 curl 用 \`&&\` 连接**——本机 curl 包装器失败时也可能退出码为 0，\`&& rm\` 会把还没发出的 payload 删掉（已有多位员工踩过）。
 
 要点：
+- **服务地址来源优先级**：① 主管派活消息里**显式写出的地址**（主管已验证可用）→ ② 固定端口文件 \`~/.claude/cc-heihei/desktop-server.json\` 的 \`url\` 字段（服务端每次启动更新，内容严格为 \`{ url, port, pid, startedAt }\`，port 为实际绑定端口）→ ③ 环境变量 \`$CC_HEIHEI_DESKTOP_SERVER_URL\`——它是**会话启动时注入**的，app 重启换端口后会失效。**读端口文件必须先校验 \`pid\` 存活再信 \`port\`**（进程被强杀时文件会残留旧值，正常退出才清理）；读到 null / 非法结构 / 死 pid 一律回退 env 或向主管要当前地址。换用新地址前先验身份：\`curl -s --max-time 5 <地址>/api/whoami\` 返回含 \`"app":"cc-heihei"\` 的 JSON 才是本服务，**空 200 或非 JSON 一律不是**（本机存在对任意路径回 200 空 body 的冒名端口）。
 - 员工会话收到消息会自动开始执行（没在运行也会被拉起）。
 - **回邮地址必须是你真实的会话 ID**，员工的汇报才能找到你。
 - 派活后告诉用户：派给了谁（角色）、员工会话 id，用户可在侧边栏点开围观（执行过程实时可见）。
@@ -74,6 +75,16 @@ curl -s -X POST "$CC_HEIHEI_DESKTOP_SERVER_URL/api/session-messages" \\
 - 出现同名 \`.error.txt\` = 投递失败，Read 它看原因，修正后换一个序号重写。
 
 员工汇报同理：把 \`targetSessionId\` 写成主管的回邮地址、\`fromSessionId\` 写成员工自己的会话 ID 即可，文件名用 \`report-<序号>.json\`。
+
+### 主管通道：Write 收权的放行范围（v1.4.1）
+
+主管会话的 Write 工具被收权（防顺手改项目代码），但以下写路径**放行**：
+
+1. 工作目录根部的 \`.dispatch-payload.json\` / \`report-payload.json\`（派活/汇报 payload）；
+2. \`<工作目录>/.heihei/dispatch/\` 信箱（通道 B）；
+3. **工作目录之外的任意位置**（v1.4.1 新增）——写派活 payload 到临时目录、写汇总文档到用户桌面等需求直接用 Write 完成，不再需要绕道。
+
+**永远优先用 Write 写 payload 文件 + \`curl --data-binary @文件\` 提交，不要用 heredoc 内联 JSON**：bash heredoc 会把 \`\\\\\` 序列折叠（转义还原），JSON 里的路径与转义字符会被破坏（实测 6 连 400 的根因）。
 
 ## 第三步：收汇报、判断、继续
 
@@ -110,7 +121,7 @@ curl -s "$CC_HEIHEI_DESKTOP_SERVER_URL/api/servant-sessions?forSession=$CC_HEIHE
 1. Bash 输出 \`?????\` 或命令毫无效果 = shell 不可用：放弃 curl，全程改用「文件信箱」通道（只需 Write/Read 工具）。
 2. 工具找不到时（ToolSearch 报 "No matching deferred tools found"）：**关键词搜索只覆盖 deferred 工具**——核心工具（Bash/Read/Write/Glob/Grep/Skill）已直接内联可用，直接调用；确需加载 deferred 工具时用精确名，如 \`select:NotebookEdit,WebFetch\`。
 3. 环境变量检查：\`$CC_HEIHEI_DESKTOP_SERVER_URL\` 与 \`$CC_HEIHEI_SESSION_ID\` 应在你的 Bash 里可用（\`echo\` 验证）。HTTP 通道依赖这两个变量；这两个值也写在你的上岗消息里。
-4. 端口疑似过期时，用 Read 查看桌面服务状态文件 \`~/.claude/desktop-server-state.json\` 的 \`lastPort\` 字段取真实端口；文件信箱通道不依赖端口。
+4. 服务地址疑似过期（ECONNREFUSED / 超时）：用 Read 查看固定端口文件 \`~/.claude/cc-heihei/desktop-server.json\`（服务端每次启动更新，字段 \`{ url, port, pid, startedAt }\`），**先校验 \`pid\` 存活再信 \`port\`**——进程被强杀时文件会残留旧值（正常退出才清理）；读到 null / 非法结构 / 死 pid 就回退 env 或向主管要当前地址。确认地址后先验身份：\`curl -s --max-time 5 <url>/api/whoami\` 返回含 \`"app":"cc-heihei"\` 的 JSON 才是本服务（本机存在对任意路径回 200 空 body 的冒名端口，勿轻信 200）。文件信箱通道不依赖端口。
 5. computer-use 系列工具在无人值守的协作会话中不可用（审批需要桌面连接）：**不要尝试**，别在这条路上浪费轮次。
 6. 所有通道都失败时，明确告诉用户"协作环境异常"及失败原因，请用户在应用的「设置 → 诊断」里运行环境体检。
 

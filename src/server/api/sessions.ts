@@ -22,6 +22,7 @@
 import * as path from 'node:path'
 import { sessionService } from '../services/sessionService.js'
 import { conversationService } from '../services/conversationService.js'
+import { getSessionSnapshot } from '../services/sessionRegistry.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { closeSessionConnection, getSlashCommands, interruptSessionRuntime } from '../ws/handler.js'
 import { listSkillSlashCommands, type SkillSlashCommand } from './skills.js'
@@ -665,6 +666,10 @@ async function getSessionInspection(req: Request, sessionId: string, url: URL): 
   }
 
   const active = conversationService.hasSession(sessionId)
+  // v1.3.0 阶段3 · 6c 呈现类：三态呈现（running/crashed/stopped…）——crashed 从本
+  // 阶段起对 API 可见（active=false 的 crashed 会话凭 runtimePhase 与已停止会话区分）。
+  // 未登记会话为 null（历史会话无运行时态，读历史链不受影响）。
+  const runtimePhase = getSessionSnapshot(sessionId)?.phase ?? null
   const workDir =
     conversationService.getSessionWorkDir(sessionId) ||
     (await getTranscriptSnapshot())?.launchInfo.workDir
@@ -695,6 +700,7 @@ async function getSessionInspection(req: Request, sessionId: string, url: URL): 
 
   const response: Record<string, unknown> = {
     active,
+    runtimePhase,
     status: {
       sessionId,
       workDir,

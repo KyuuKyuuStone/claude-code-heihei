@@ -2,7 +2,7 @@
  * Unit tests for ServantService, session-messages API（会话级上下级协作）
  */
 
-import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test'
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import * as os from 'os'
@@ -12,8 +12,16 @@ import {
   observeSessionSdkMessage,
   resetDispatchReceipts,
 } from '../services/dispatchReceiptService.js'
-// 静态引入：在任何 mock.module 之前绑定真实模块
-import { SessionMessenger } from '../services/sessionMessenger.js'
+// v1.3.0 阶段2（5a）：turn 状态单一权威源迁至 sessionRegistry——观察流「只降不升」，
+// 建回合需走注入路径（beginTurn），故用例补 registry 前置
+import {
+  beginTurn,
+  registerSession,
+  resetRegistryForTests,
+} from '../services/sessionRegistry.js'
+// v1.3.0 阶段4：deliver 拦截改走注入缝（mock.module 写全局模块注册表且跨文件
+// 残留——mock.restore 不还原，全量套件互污染，阶段4质检 13 fail 根因之一）
+import { SessionMessenger, setDeliverOverrideForTests } from '../services/sessionMessenger.js'
 
 // ─── Test helpers ───────────────────────────────────────────────────────────
 
@@ -76,6 +84,7 @@ describe('ServantService', () => {
     restoreConfigDir()
     // 回合信号是模块级内存状态：清掉避免向其他用例泄漏（顺序依赖）
     resetDispatchReceipts()
+    resetRegistryForTests()
     await cleanupTmpDir(tmpDir)
   })
 
@@ -103,6 +112,10 @@ describe('ServantService', () => {
   it('reflects real turn state via turnInProgress (same source as stall watcher)', async () => {
     await service.setServant(sessionId, { role: '后端', enabled: true })
 
+    // 前置（阶段2 · 5a）：turn 建立走注入路径（registry 单一权威源）
+    registerSession(sessionId)
+    beginTurn(sessionId, { awaitSend: false })
+
     // 回合开始（assistant 信号）→ true
     observeSessionSdkMessage(sessionId, 'assistant')
     let servants = await service.listServants()
@@ -112,6 +125,48 @@ describe('ServantService', () => {
     observeSessionSdkMessage(sessionId, 'result')
     servants = await service.listServants()
     expect(servants[0].turnInProgress).toBe(false)
+  })
+
+  it('resolves roster entries via direct per-session summary, not a full listSessions scan', async () => {
+    // v1.4.0 加载性能契约：花名册（渲染端挂载即拉 + 20s 轮询）不得触发
+    // listSessions 的全量摘要扫描——冷启动全量扫 + 活跃文件 mtime 失效重扫
+    // 曾把事件循环打到分钟级阻塞（实录花名册请求 120s 超时）。
+    await service.setServant(sessionId, { role: '后端', enabled: true })
+    const listSpy = spyOn(sessionService, 'listSessions')
+    try {
+      const servants = await service.listServants()
+      expect(servants).toHaveLength(1)
+      expect(servants[0].sessionId).toBe(sessionId)
+      expect(servants[0].title).toBeDefined()
+      expect(listSpy).not.toHaveBeenCalled()
+    } finally {
+      listSpy.mockRestore()
+    }
+  })
+
+  it('auto-cleans servants whose session file is gone (direct lookup keeps semantics)', async () => {
+    await service.setServant(sessionId, { role: '后端', enabled: true })
+    expect(await service.listServants()).toHaveLength(1)
+
+    // 删掉会话文件（模拟会话被删除）→ 下次拉取自动清理出花名册
+    const found = await sessionService.findSessionFile(sessionId)
+    expect(found).not.toBeNull()
+    await fs.rm(found!.filePath, { force: true })
+    sessionService.invalidateSessionListCachesForTests?.()
+
+    expect(await service.listServants()).toEqual([])
+    expect(await service.getServant(sessionId)).toBeNull()
+  })
+
+  it('getSessionListSummaryForSession returns summary for known session, null for unknown', async () => {
+    const summary = await sessionService.getSessionListSummaryForSession(sessionId)
+    expect(summary).not.toBeNull()
+    expect(summary!.title).toBeDefined()
+    expect(typeof summary!.messageCount).toBe('number')
+
+    expect(
+      await sessionService.getSessionListSummaryForSession('00000000-0000-4000-8000-000000000000'),
+    ).toBeNull()
   })
 
   it('should exclude disabled servants from the roster', async () => {
@@ -430,9 +485,7 @@ describe('Servants API', () => {
     tmpDir = await createTmpDir()
     process.env.CLAUDE_CONFIG_DIR = tmpDir
     deliverMock = mock(async () => true)
-    mock.module('../services/sessionMessenger.js', () => ({
-      sessionMessenger: { deliver: deliverMock },
-    }))
+    setDeliverOverrideForTests(deliverMock as unknown as Parameters<typeof setDeliverOverrideForTests>[0])
     const mod = await import('../api/servants.js')
     handleServantsApi = mod.handleServantsApi
     const created = await sessionService.createSession(tmpDir)
@@ -440,6 +493,7 @@ describe('Servants API', () => {
   })
 
   afterEach(async () => {
+    setDeliverOverrideForTests(null)
     mock.restore()
     restoreConfigDir()
     await cleanupTmpDir(tmpDir)
@@ -671,15 +725,14 @@ describe('Session Messages API', () => {
     process.env.CLAUDE_CONFIG_DIR = tmpDir
 
     deliverMock = mock(async () => true)
-    mock.module('../services/sessionMessenger.js', () => ({
-      sessionMessenger: { deliver: deliverMock },
-    }))
+    setDeliverOverrideForTests(deliverMock as unknown as Parameters<typeof setDeliverOverrideForTests>[0])
 
     const mod = await import('../api/servants.js')
     handleSessionMessagesApi = mod.handleSessionMessagesApi
   })
 
   afterEach(async () => {
+    setDeliverOverrideForTests(null)
     mock.restore()
     restoreConfigDir()
     await cleanupTmpDir(tmpDir)
@@ -690,6 +743,9 @@ describe('Session Messages API', () => {
     input: { role?: string; enabled?: boolean; supervisor?: boolean } = {},
   ): Promise<string> {
     const worker = await sessionService.createSession(tmpDir)
+    // v1.3.0 阶段3（6a）：派活链有 registry.exists 短路——投递目标必须已登记
+    //（真实世界员工 CLI 拉起即 registerSession），测试对齐该前置
+    registerSession(worker.sessionId)
     const { ServantService } = await import('../services/servantService.js')
     await new ServantService().setServant(worker.sessionId, {
       role: input.role ?? '测试员工',
@@ -821,6 +877,8 @@ describe('Session Messages API', () => {
     await fs.mkdir(bossDir, { recursive: true })
     const worker = await realSessionService.createSession(workerDir)
     const boss = await realSessionService.createSession(bossDir)
+    // 阶段3（6a）：exists 短路要求投递目标已登记（同 registerRosterWorker 前置）
+    registerSession(worker.sessionId)
     const { ServantService } = await import('../services/servantService.js')
     await new ServantService().setServant(worker.sessionId, {
       role: '后端',
@@ -850,6 +908,8 @@ describe('Session Messages API', () => {
     )
     const worker = await realSessionService.createSession(tmpDir)
     const boss = await realSessionService.createSession(tmpDir)
+    // 阶段3（6a）：exists 短路要求投递目标已登记（同 registerRosterWorker 前置）
+    registerSession(worker.sessionId)
     const { ServantService } = await import('../services/servantService.js')
     await new ServantService().setServant(worker.sessionId, {
       role: '后端',

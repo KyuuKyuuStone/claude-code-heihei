@@ -1,10 +1,16 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import * as realServantService from '../services/servantService.js'
-import * as realSessionMessenger from '../services/sessionMessenger.js'
-import * as realProviderService from '../services/providerService.js'
+import {
+  notifySupervisorsOfProtocolUpdate,
+  setSupervisorNoticeDeps,
+} from '../services/supervisorProtocolNotice.js'
+
+// v1.3.0 阶段4：本文件原用 mock.module 替换 servantService/sessionMessenger
+// 模块——bun 的 mock.module 写全局注册表且跨文件残留（mock.restore 不还原），
+// 全量套件互污染（stage3-tombstone 3 fail 根因之一）。改 deps 注入缝，
+// afterEach 复原，与批次6「禁 mock.module，用 DI 注入缝」纪律一致。
 
 let tmpDir: string
 const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
@@ -15,6 +21,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  setSupervisorNoticeDeps(null)
   if (originalConfigDir) process.env.CLAUDE_CONFIG_DIR = originalConfigDir
   else delete process.env.CLAUDE_CONFIG_DIR
   mock.restore()
@@ -24,19 +31,15 @@ afterEach(async () => {
 describe('notifySupervisorsOfProtocolUpdate', () => {
   test('delivers once to registered supervisors and is idempotent across restarts', async () => {
     const deliverMock = mock(async () => true)
-    mock.module('../services/servantService.js', () => ({
-      servantService: {
-        listServants: async () => [
+    setSupervisorNoticeDeps({
+      listServants: async () =>
+        [
           { sessionId: 'sup-1', supervisor: true, enabled: true },
           { sessionId: 'emp-1', supervisor: false, enabled: true },
-        ],
-      },
-    }))
-    mock.module('../services/sessionMessenger.js', () => ({
-      sessionMessenger: { deliver: deliverMock },
-    }))
+        ] as never,
+      deliver: deliverMock as never,
+    })
 
-    const { notifySupervisorsOfProtocolUpdate } = await import('../services/supervisorProtocolNotice.js')
     await notifySupervisorsOfProtocolUpdate()
 
     expect(deliverMock).toHaveBeenCalledTimes(1)
@@ -50,23 +53,13 @@ describe('notifySupervisorsOfProtocolUpdate', () => {
   })
 
   test('writes the marker even when no supervisors exist (no repeated roster scans)', async () => {
-    mock.module('../services/servantService.js', () => ({
-      servantService: { listServants: async () => [] },
-    }))
-    mock.module('../services/sessionMessenger.js', () => ({
-      sessionMessenger: { deliver: async () => true },
-    }))
+    setSupervisorNoticeDeps({
+      listServants: async () => [] as never,
+    })
 
-    const { notifySupervisorsOfProtocolUpdate } = await import('../services/supervisorProtocolNotice.js')
     await notifySupervisorsOfProtocolUpdate()
 
     const marker = path.join(tmpDir, 'cc-heihei', 'supervisor-protocol-notice-v1.sent')
     await expect(fs.access(marker)).resolves.toBeDefined()
   })
-})
-
-afterAll(async () => {
-  mock.module('../services/servantService.js', () => realServantService)
-  mock.module('../services/sessionMessenger.js', () => realSessionMessenger)
-  mock.module('../services/providerService.js', () => realProviderService)
 })

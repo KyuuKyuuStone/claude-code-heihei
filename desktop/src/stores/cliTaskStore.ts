@@ -97,6 +97,49 @@ function resolveDismissState(tasks: CLITask[], dismissedCompletionKey: string | 
   }
 }
 
+/**
+ * 轮询结果与现有列表逐字段比对。1s 任务轮询每次拿到的是服务端新建数组，
+ * 若不经比对直接 set，每次轮询都会通知订阅方重渲染整个 ActiveSession
+ * （v1.3.2 实测：失焦但可见时后台每秒 ~20ms 渲染浪费）。
+ */
+function areTaskListsEqual(a: CLITask[], b: CLITask[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i += 1) {
+    const x = a[i]!
+    const y = b[i]!
+    if (
+      x.id !== y.id ||
+      x.taskListId !== y.taskListId ||
+      x.subject !== y.subject ||
+      x.description !== y.description ||
+      x.status !== y.status ||
+      (x.activeForm ?? '') !== (y.activeForm ?? '') ||
+      (x.owner ?? '') !== (y.owner ?? '') ||
+      x.blocks.join(',') !== y.blocks.join(',') ||
+      x.blockedBy.join(',') !== y.blockedBy.join(',')
+    ) {
+      return false
+    }
+  }
+  return true
+}
+
+/** 轮询落地：内容无变化时原样返回 state（zustand 对 Object.is 相等的结果不通知订阅方）。 */
+function applyPolledTasks(
+  state: CLITaskStore,
+  tasks: CLITask[],
+): Partial<CLITaskStore> | CLITaskStore {
+  const dismiss = resolveDismissState(tasks, state.dismissedCompletionKey)
+  if (
+    areTaskListsEqual(state.tasks, tasks) &&
+    state.completedAndDismissed === dismiss.completedAndDismissed &&
+    state.dismissedCompletionKey === dismiss.dismissedCompletionKey
+  ) {
+    return state
+  }
+  return { tasks, ...dismiss }
+}
+
 function mapTodosToTasks(todos: TodoItem[], sessionId: string | null): CLITask[] {
   return todos.map((todo, index) => ({
     id: String(index + 1),
@@ -151,10 +194,7 @@ export const useCLITaskStore = create<CLITaskStore>((set, get) => ({
           && !get().resetting
         ) {
           markTaskResponseApplied(sessionId, request)
-          set((state) => ({
-            tasks,
-            ...resolveDismissState(tasks, state.dismissedCompletionKey),
-          }))
+          set((state) => applyPolledTasks(state, tasks))
         }
       } catch {
         // Preserve the last known task state across transient polling failures.
@@ -185,10 +225,7 @@ export const useCLITaskStore = create<CLITaskStore>((set, get) => ({
         && !get().resetting
       ) {
         markTaskResponseApplied(sessionId, request)
-        set((state) => ({
-          tasks,
-          ...resolveDismissState(tasks, state.dismissedCompletionKey),
-        }))
+        set((state) => applyPolledTasks(state, tasks))
       }
     } catch {
       // ignore（session-not-found 由 api client 的 session-gone 登记表接管）

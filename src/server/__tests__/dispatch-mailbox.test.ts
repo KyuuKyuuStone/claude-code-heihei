@@ -86,6 +86,43 @@ describe('DispatchMailboxService', () => {
     expect(await pathExists(filePath)).toBe(false)
   })
 
+  // v1.4.0 阶段1-A ③（信箱一等化）：投递成功删除原文件后同目录回写
+  // `<原文件名>.ack` 回执，员工可 Read 确认送达，不必等主管口头确认。
+  test('writes an .ack receipt with target/from/messageId after successful delivery', async () => {
+    await writePayload('report-ack-1.json', {
+      targetSessionId: 'session-a',
+      content: '【汇报】完成',
+      fromSessionId: 'session-b',
+    })
+    const { service } = buildService()
+
+    const result = await service.handleMailboxFile(path.join(tmpDir, COLLAB_MAILBOX_DIR), 'report-ack-1.json')
+
+    expect(result).toEqual({ ok: true })
+    const ackRaw = await fs.readFile(mailboxPath('report-ack-1.json.ack'), 'utf-8')
+    const ack = JSON.parse(ackRaw) as Record<string, unknown>
+    expect(ack.ack).toBe(true)
+    expect(ack.file).toBe('report-ack-1.json')
+    expect(ack.targetSessionId).toBe('session-a')
+    expect(ack.fromSessionId).toBe('session-b')
+    expect(typeof ack.messageId).toBe('string')
+    expect(Number.isNaN(Date.parse(ack.deliveredAt as string))).toBe(false)
+  })
+
+  test('an .ack file is itself not treated as a dispatch payload (idempotent protocol)', () => {
+    expect(isDispatchPayloadName('report-ack-1.json.ack')).toBe(false)
+  })
+
+  test('a failed delivery writes no .ack receipt', async () => {
+    await writePayload('report-ack-2.json', { content: 'missing target' })
+    const { service } = buildService()
+
+    const result = await service.handleMailboxFile(path.join(tmpDir, COLLAB_MAILBOX_DIR), 'report-ack-2.json')
+
+    expect(result.ok).toBe(false)
+    expect(await pathExists(mailboxPath('report-ack-2.json.ack'))).toBe(false)
+  })
+
   test('records a dispatch receipt so mailbox dispatches are visible to the stall watcher', async () => {
     resetDispatchReceipts()
     await writePayload('dispatch-9.json', {

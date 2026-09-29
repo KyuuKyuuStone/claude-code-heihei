@@ -8,6 +8,17 @@ import { execFileSync } from 'node:child_process'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import { SessionService, sessionService } from '../services/sessionService.js'
+// v1.3.0 阶段3：deletedSessions Set 迁移至 registry tombstone——内省断言改读快照
+import {
+  getSessionSnapshot,
+  markCrashed,
+  markRunning,
+  markStarting,
+  markStopped,
+  registerSession,
+  resetRegistryForTests,
+  tombstoneSession,
+} from '../services/sessionRegistry.js'
 import {
   getRepositoryContext,
   prepareSessionWorkspace,
@@ -3179,6 +3190,59 @@ describe('Sessions API', () => {
     expect(inspection.status.permissionMode).toBe('bypassPermissions')
   })
 
+  it('GET /api/sessions/:id/inspection should present runtimePhase three-state from registry snapshot', async () => {
+    // v1.3.0 阶段3 · 6c 呈现类：crashed 从本阶段起对 API 可见（runtimePhase 三态）
+    const workDir = await fs.mkdtemp(path.join(tmpDir, 'api-session-runtime-phase-'))
+    const createRes = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workDir }),
+    })
+    expect(createRes.status).toBe(201)
+
+    const { sessionId } = (await createRes.json()) as { sessionId: string }
+    const inspectionUrl = `${baseUrl}/api/sessions/${sessionId}/inspection?includeContext=0`
+    const readRuntimePhase = async () => {
+      const res = await fetch(inspectionUrl)
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as {
+        active: boolean
+        runtimePhase: string | null
+      }
+      return body
+    }
+
+    // 未登记：runtimePhase 为 null（历史会话无运行时态）
+    expect((await readRuntimePhase()).runtimePhase).toBeNull()
+
+    // running：runtimePhase='running'。active 是进程级真活语义（需真 CLI 子进程），
+    // 本测试环境无进程对象，故只对 runtimePhase 做断言。
+    registerSession(sessionId)
+    markStarting(sessionId)
+    markRunning(sessionId)
+    const running = await readRuntimePhase()
+    expect(running.runtimePhase).toBe('running')
+
+    // crashed：active=false（无活进程）但 runtimePhase='crashed' 可见
+    markCrashed(sessionId, { exitCode: 2 })
+    const crashed = await readRuntimePhase()
+    expect(crashed.active).toBe(false)
+    expect(crashed.runtimePhase).toBe('crashed')
+
+    // stopped：active=false + runtimePhase='stopped'
+    markStopped(sessionId)
+    const stopped = await readRuntimePhase()
+    expect(stopped.active).toBe(false)
+    expect(stopped.runtimePhase).toBe('stopped')
+
+    // tombstone（软删除）：active=false + runtimePhase='deleted'，端点不 404
+    //（6b 读历史类：删除会话的 inspection 继续可用）
+    tombstoneSession(sessionId)
+    const deleted = await readRuntimePhase()
+    expect(deleted.active).toBe(false)
+    expect(deleted.runtimePhase).toBe('deleted')
+  })
+
   it('GET /api/sessions/repository-context should return branch launch metadata', async () => {
     const workDir = await createCleanGitRepo(tmpDir)
     const res = await fetch(
@@ -3843,7 +3907,8 @@ describe('Sessions API', () => {
     try {
       const res = await fetch(`${baseUrl}/api/sessions/${sessionId}`, { method: 'DELETE' })
       expect(res.status).toBe(500)
-      expect((conversationService as any).deletedSessions.has(sessionId)).toBe(false)
+      // 阶段3：deletedSessions Set → registry tombstone，内省改读快照
+      expect(getSessionSnapshot(sessionId)?.phase).not.toBe('deleted')
 
       const detailRes = await fetch(`${baseUrl}/api/sessions/${sessionId}`)
       expect(detailRes.status).toBe(200)
@@ -3934,7 +3999,8 @@ describe('Sessions API', () => {
           message: 'simulated batch unlink failure',
         }],
       })
-      expect((conversationService as any).deletedSessions.has(failedSessionId)).toBe(false)
+      // 阶段3：deletedSessions Set → registry tombstone，内省改读快照
+      expect(getSessionSnapshot(failedSessionId)?.phase).not.toBe('deleted')
       expect((await fetch(`${baseUrl}/api/sessions/${successSessionId}`)).status).toBe(404)
       expect((await fetch(`${baseUrl}/api/sessions/${failedSessionId}`)).status).toBe(200)
     } finally {

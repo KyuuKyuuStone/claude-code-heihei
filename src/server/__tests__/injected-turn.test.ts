@@ -5,7 +5,7 @@ import * as path from 'node:path'
 import {
   beginInjectedUserTurn,
   resetInjectedTurnsForTests,
-} from '../ws/handler.js'
+} from '../services/sessionMessenger.js'
 import { conversationService } from '../services/conversationService.js'
 import { resetTerminalShellEnvironmentCacheForTests } from '../../utils/terminalShellEnvironment.js'
 

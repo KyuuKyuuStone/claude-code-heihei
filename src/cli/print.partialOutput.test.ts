@@ -7,7 +7,20 @@ let configDir: string | null = null
 
 afterEach(async () => {
   if (configDir) {
-    await rm(configDir, { recursive: true, force: true })
+    // Windows：子进程刚退出时文件句柄释放有延迟，直接 rm 会 EACCES——退避重试
+    // （同 conversations.test.ts 的 rmWithRetry 模式）。
+    let lastError: unknown
+    for (let attempt = 0; attempt < (process.platform === 'win32' ? 5 : 1); attempt++) {
+      try {
+        await rm(configDir, { recursive: true, force: true })
+        lastError = undefined
+        break
+      } catch (error) {
+        lastError = error
+        await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)))
+      }
+    }
+    if (lastError) throw lastError
     configDir = null
   }
 })
@@ -28,8 +41,12 @@ describe('print mode partial output', () => {
       configDir = await mkdtemp(join(tmpdir(), 'cc-heihei-print-partial-'))
 
       try {
+        // Windows 不能直接执行无扩展名的 shebang 脚本（uv_spawn ENOENT）——经 bash
+        // 调用保住覆盖；测试意图是 CLI 的部分输出行为，不是 shebang 可执行性。
         const child = Bun.spawn(
-          ['./bin/claude-heihei', '--bare', '-p', 'Reply briefly'],
+          [process.platform === 'win32' ? 'bash' : './bin/claude-heihei',
+           ...(process.platform === 'win32' ? ['./bin/claude-heihei'] : []),
+           '--bare', '-p', 'Reply briefly'],
           {
             cwd: process.cwd(),
             env: {
@@ -105,8 +122,12 @@ describe('print mode partial output', () => {
       configDir = await mkdtemp(join(tmpdir(), 'cc-heihei-print-transport-'))
 
       try {
+        // Windows 不能直接执行无扩展名的 shebang 脚本（uv_spawn ENOENT）——经 bash
+        // 调用保住覆盖；测试意图是 CLI 的部分输出行为，不是 shebang 可执行性。
         const child = Bun.spawn(
-          ['./bin/claude-heihei', '--bare', '-p', 'Reply briefly'],
+          [process.platform === 'win32' ? 'bash' : './bin/claude-heihei',
+           ...(process.platform === 'win32' ? ['./bin/claude-heihei'] : []),
+           '--bare', '-p', 'Reply briefly'],
           {
             cwd: process.cwd(),
             env: {

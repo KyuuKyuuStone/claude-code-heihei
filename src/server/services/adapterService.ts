@@ -10,6 +10,7 @@ import * as path from 'path'
 import * as os from 'os'
 import * as crypto from 'crypto'
 import { ApiError } from '../middleware/errorHandler.js'
+import { renameWithRetry } from '../../utils/atomicFs.js'
 
 export type PairedUser = {
   userId: string | number
@@ -179,7 +180,7 @@ class AdapterService {
         encoding: 'utf-8',
         mode: 0o600,
       })
-      await fs.rename(tmpFile, filePath)
+      await renameWithRetry(fs, tmpFile, filePath)
       await fs.chmod(filePath, 0o600).catch(() => {})
     } catch (err) {
       await fs.unlink(tmpFile).catch(() => {})

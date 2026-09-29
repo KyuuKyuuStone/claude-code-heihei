@@ -10,8 +10,14 @@
  * 服务端在拉起会话时按花名册注入 CC_HEIHEI_SUPERVISOR=1（见
  * conversationService.buildChildEnv）；本模块只读环境变量，CLI 侧零依赖。
  *
- * 放行例外（主管的合法写路径）：派活协议本身需要 Write——
- * .dispatch-payload.json / report-payload.json / .heihei/dispatch/ 信箱文件。
+ * 放行例外（主管的合法写路径）：
+ * - 派活协议本身需要 Write：.dispatch-payload.json / report-payload.json /
+ *   .heihei/dispatch/ 信箱文件（工作目录内）；
+ * - 工作目录之外的任意位置（v1.4.1 用户拍板新增）：主管写派活 payload 到
+ *   临时目录、写汇总文档到用户桌面等合法需求此前被误拦，被迫走 curl stdin
+ *   heredoc（反斜杠折叠坑，6 连 400）。cwd 之外不涉及「主管顺手改项目代码」
+ *   的风险面，整体放行；cwd 之内维持原规则。
+ * 注意：主管的 Bash 从未被收权，本守卫是引导层（把模型引回协作通道），不是安全边界。
  */
 
 import { realpathSync } from 'node:fs'
@@ -59,17 +65,26 @@ function isInsideMailboxDir(normalizedPath: string): boolean {
 
 /**
  * 主管会话的 Write 目标是否放行（null=放行；否则返回拒绝原因）。
- * 只放行派活协议自身需要的写路径：根目录的派活 payload 与 .heihei/dispatch/ 信箱。
+ * 放行：①工作目录之外的任意位置（v1.4.1）；②cwd 内的派活 payload basename
+ * 与 .heihei/dispatch/ 信箱。cwd 之内其余路径仍拒（防主管顺手改项目代码）。
+ * 路径判定复用 whitelist 档的 normalize/isAbsolute/isInsideDir 工具（分隔符
+ * 归一 + win32 小写化 + 目录边界感知前缀）；非绝对路径按拒绝侧处理（纵深防御）。
+ * cwd/platform 可注入供单测（默认 process.cwd()/process.platform）。
  */
 export function supervisorWriteDeniedReason(
   filePath: string,
   env: NodeJS.ProcessEnv = process.env,
+  options?: { cwd?: string; platform?: NodeJS.Platform },
 ): string | null {
   if (!isSupervisorSession(env)) return null
-  const normalized = filePath.replace(/\\/g, '/').replace(/\/+$/, '')
-  const basename = normalized.split('/').pop() ?? ''
+  const platform = options?.platform ?? process.platform
+  const cwdNorm = normalizeForMatch(options?.cwd ?? process.cwd(), platform)
+  const targetNorm = normalizeForMatch(filePath, platform)
+  if (!isAbsoluteNormalized(targetNorm, platform)) return SUPERVISOR_DISPATCH_ONLY_REASON
+  if (!isInsideDir(targetNorm, cwdNorm)) return null
+  const basename = targetNorm.split('/').pop() ?? ''
   if (DISPATCH_PAYLOAD_BASENAMES.has(basename)) return null
-  if (isInsideMailboxDir(normalized)) return null
+  if (isInsideMailboxDir(targetNorm)) return null
   return SUPERVISOR_DISPATCH_ONLY_REASON
 }
 

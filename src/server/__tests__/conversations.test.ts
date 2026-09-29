@@ -5,7 +5,7 @@
  * WebSocket 集成测试验证消息从客户端经过服务端到达 CLI 的完整流转。
  */
 
-import { describe, it, expect, beforeAll, afterAll, afterEach, spyOn } from 'bun:test'
+import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, spyOn } from 'bun:test'
 import * as fs from 'fs/promises'
 import { readFileSync } from 'node:fs'
 import * as path from 'path'
@@ -30,6 +30,20 @@ import {
 import { SessionService, sessionService } from '../services/sessionService.js'
 import { ProviderService } from '../services/providerService.js'
 import { resetTerminalShellEnvironmentCacheForTests } from '../../utils/terminalShellEnvironment.js'
+// v1.3.0 阶段4 全量质检：registry 语义（阶段2/3 接线）下测试需模拟真实
+// startSession 的登记行为（registerSession）才能触发 tombstone/markCrashed 语义
+import { getSessionSnapshot, markStarting, registerSession } from '../services/sessionRegistry.js'
+// 污染族治理（2026-09-28）：handler.ts 的两处顶层订阅（rebind-on-running /
+// servant_turn_changed 广播）在**首个导入者**处注册，之后任何先跑文件调用
+// resetSessionEventsForTests / resetDispatchReceipts 都会清掉它们——本套件
+// beforeAll 动态 import('../index.js') 拿到的是已死的模块缓存订阅，表现为
+// prewarm/restart 类行为测试单文件绿、全量红（复现队列：conversation-service
+// → conversations，'initial context for a prewarmed empty session' 10012ms 超时挂）。
+// ensure 幂等（onSessionEvent 按 handler 引用去重），被清后重调即恢复。
+import {
+  ensureRebindOnRunningSubscribed,
+  ensureTurnChangeBroadcastSubscribed,
+} from '../ws/handler.js'
 
 async function rmWithRetry(targetPath: string): Promise<void> {
   const attempts = process.platform === 'win32' ? 5 : 1
@@ -69,6 +83,9 @@ describe('ConversationService', () => {
     const svc = new ConversationService()
     const sid = crypto.randomUUID()
 
+    // prewarm 语义：拉起即登记 registry（startSession 真实链路），
+    // 删除发生在登记之后——否则 tombstoneSession 对未登记 id no-op
+    registerSession(sid)
     svc.markSessionDeleted(sid)
 
     try {
@@ -823,6 +840,11 @@ describe('ConversationService', () => {
     const oldProc = { pid: 1 } as any
     const newProc = { pid: 2 } as any
 
+    // 模拟真实重启链路的 registry 登记（startSession 会 registerSession +
+    // markStarting）；未登记时 markCrashed no-op，hasSession 的 registry
+    // 过滤语义无从生效
+    registerSession('session-restart')
+    markStarting('session-restart')
     ;(svc as any).sessions.set('session-restart', {
       proc: newProc,
       outputCallbacks: [],
@@ -1749,6 +1771,11 @@ describe('WebSocket Chat Integration', () => {
   let wsUrl: string
   let tmpDir: string
 
+  beforeEach(() => {
+    ensureRebindOnRunningSubscribed()
+    ensureTurnChangeBroadcastSubscribed()
+  })
+
   function git(cwd: string, ...args: string[]): string {
     return execFileSync('git', args, {
       cwd,
@@ -2642,6 +2669,14 @@ describe('WebSocket Chat Integration', () => {
         await waitUntil(
           () => conversationService.hasSession(sessionId),
           `prewarmed CLI process for ${sessionId}`,
+        )
+        // 事件驱动等 prewarm 真正就绪（registry phase→running）：hasSession 只代表
+        // 注册发生，mock CLI 初始化（500ms mock + 进程拉起）在满载时会显著拉长——
+        // 此前直接发 inspection，服务端等 CLI 上下文，整体越过 10s 用例预算
+        // （低频 flaky，2026-09-28 分诊：症状恒为 ~10s 超时、单跑 1/6 频率）。
+        await waitUntil(
+          () => getSessionSnapshot(sessionId)?.phase === 'running',
+          `prewarmed CLI ready for ${sessionId}`,
         )
 
         const startedAt = performance.now()

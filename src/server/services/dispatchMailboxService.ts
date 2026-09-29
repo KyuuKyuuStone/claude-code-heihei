@@ -7,6 +7,8 @@
  * `{targetSessionId, content, fromSessionId?}`，服务端代为投递
  * （等价 POST /api/session-messages，含同样的项目隔离校验）后删除文件；
  * 投递失败把文件改名 `*.failed` 并写 `*.error.txt` 说明原因，供会话 Read 排查。
+ * 投递成功删除原文件后同目录回写 `<原文件名>.ack` 回执（v1.4.0 阶段1-A ③，
+ * 内容协议见 handleMailboxFile 内注释），员工可 Read 确认送达。
  *
  * 监听范围 = 存在 enabled 员工的项目工作目录（员工登记/移除时经 sync() 收敛）。
  * 主管与员工同项目才能合法派活，所以监听员工工作目录即覆盖全部合法派活/汇报。
@@ -331,6 +333,30 @@ export class DispatchMailboxService {
       }
 
       await fs.unlink(filePath).catch(() => {})
+
+      // 消费回执（v1.4.0 阶段1-A ③，信箱一等化）：原文件删除后同目录回写
+      // `<原文件名>.ack`，员工可 Read 确认送达，不必等主管口头确认。
+      // 协议：内容为 { ack: true, file, targetSessionId, fromSessionId?,
+      // messageId, deliveredAt(ISO8601) }；.ack 后缀不匹配
+      // isDispatchPayloadName（非 .json 结尾），不会被再次消费；写入失败
+      // 仅影响送达确认，不得影响投递主链路（静默吞掉）。
+      await fs.writeFile(
+        path.join(dir, `${name}.ack`),
+        JSON.stringify(
+          {
+            ack: true,
+            file: name,
+            targetSessionId: payload.targetSessionId,
+            ...(payload.fromSessionId ? { fromSessionId: payload.fromSessionId } : {}),
+            messageId,
+            deliveredAt: new Date().toISOString(),
+          },
+          null,
+          2,
+        ),
+        'utf-8',
+      ).catch(() => {})
+
       return { ok: true }
     } finally {
       this.inFlight.delete(key)

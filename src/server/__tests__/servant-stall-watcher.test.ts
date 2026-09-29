@@ -20,6 +20,7 @@ const MIN = 60_000
 let nowMs = 0
 /** 处于「回合进行中」的会话集合（v1.2.2 降噪后假死判定的前置条件） */
 const turnInProgress = new Set<string>()
+const sdkConnected = new Set<string>()
 /** 会话 → 未被消费的派活条数（告警二期的触发条件） */
 const pendingDispatches = new Map<string, number>()
 const deliverMock = mock(async (_target: string, _content: string, _host: string) => true)
@@ -66,6 +67,7 @@ function makeWatcher(): ServantStallWatcher {
     now: () => nowMs,
     isTurnInProgress: (sessionId: string) => turnInProgress.has(sessionId),
     countUnconsumedDispatches: (sessionId: string) => pendingDispatches.get(sessionId) ?? 0,
+    isSdkConnected: (sessionId: string) => sdkConnected.has(sessionId),
   }
   return new ServantStallWatcher(deps)
 }
@@ -87,6 +89,9 @@ beforeEach(() => {
   nowMs = Date.parse('2026-09-16T10:00:00.000Z')
   turnInProgress.clear()
   pendingDispatches.clear()
+  // 默认 SDK 控制通道已连接（盲区失联是专门用例的场景）
+  sdkConnected.add(EMP)
+  sdkConnected.add(SUP)
   // 除专门验证"空闲待命"的用例外，默认认为员工正跑着回合
   turnInProgress.add(EMP)
   deliverMock.mockClear()
@@ -380,4 +385,64 @@ describe('ServantStallWatcher', () => {
     await makeWatcher().watch()
     expect(deliverMock).not.toHaveBeenCalled()
   })
+  // v1.4.0 阶段2 · 6「转圈无上限」：进程活着但 SDK 控制通道断开（盲区失联）——
+  // detachSdkConnection 已清 turn（呈待命假象），watcher 必须补一条可行动路径：
+  // 同一 episode 只上报一次 blind-disconnect（error 级诊断），供人工介入。
+  test('reports a blind disconnect once when running but the SDK channel is gone', async () => {
+    listServantsMock.mockImplementation(async () =>
+      roster({ running: true, lastActivityAt: iso(nowMs - STALL_THRESHOLD_MS - 1) }),
+    )
+    sdkConnected.delete(EMP)
+    turnInProgress.delete(EMP) // turn 已在 detach 时被清：否则会先走假死重推分支
+
+    // 同一 watcher 实例（episode 去重状态在实例字段里）
+    const watcher = makeWatcher()
+    await watcher.watch()
+    const blind = recordEventMock.mock.calls.filter(
+      (call) => (call[0].details as { action?: string } | undefined)?.action === 'blind-disconnect',
+    )
+    expect(blind).toHaveLength(1)
+    expect(blind[0][0].severity).toBe('error')
+    expect(blind[0][0].sessionId).toBe(EMP)
+
+    // 同一 episode（lastActivityAt 未变）不重复上报
+    await watcher.watch()
+    const blindAgain = recordEventMock.mock.calls.filter(
+      (call) => (call[0].details as { action?: string } | undefined)?.action === 'blind-disconnect',
+    )
+    expect(blindAgain).toHaveLength(1)
+  })
+
+  test('does not report blind disconnect while the SDK channel is connected', async () => {
+    listServantsMock.mockImplementation(async () =>
+      roster({ running: true, lastActivityAt: iso(nowMs - STALL_THRESHOLD_MS - 1) }),
+    )
+    // 通道连接 + 回合已结束 → 走既有 skip-idle 分支，不得误报盲区
+    turnInProgress.delete(EMP)
+
+    await makeWatcher().watch()
+    const blind = recordEventMock.mock.calls.filter(
+      (call) => (call[0].details as { action?: string } | undefined)?.action === 'blind-disconnect',
+    )
+    expect(blind).toHaveLength(0)
+  })
+
+  test('a fresh blind disconnect after activity resumes is reported again', async () => {
+    const stale = iso(nowMs - STALL_THRESHOLD_MS - 1)
+    listServantsMock.mockImplementation(async () => roster({ running: true, lastActivityAt: stale }))
+    sdkConnected.delete(EMP)
+    turnInProgress.delete(EMP)
+
+    await makeWatcher().watch()
+    // 活动恢复（新 lastActivityAt）→ episode 重置 → 再次失联是新 episode
+    const fresh = iso(nowMs - STALL_THRESHOLD_MS - 2)
+    listServantsMock.mockImplementation(async () => roster({ running: true, lastActivityAt: fresh }))
+    await makeWatcher().watch()
+
+    const blind = recordEventMock.mock.calls.filter(
+      (call) => (call[0].details as { action?: string } | undefined)?.action === 'blind-disconnect',
+    )
+    expect(blind).toHaveLength(2)
+  })
 })
+

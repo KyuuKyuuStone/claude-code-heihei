@@ -36,6 +36,7 @@ import {
   readScheduledRunPage,
   type ScheduledRunReadModelTarget,
 } from './localIndex/scheduledRunReadModel.js'
+import { renameWithRetry } from '../../utils/atomicFs.js'
 import {
   paginateScheduledRunRecords,
   type ScheduledRunSummary,
@@ -274,7 +275,7 @@ async function writeRunsFile(
   const serialized = JSON.stringify(data, null, 2) + '\n'
   try {
     await fs.writeFile(tmpFile, serialized, 'utf-8')
-    await fs.rename(tmpFile, filePath)
+    await renameWithRetry(fs, tmpFile, filePath)
   } catch (err) {
     await fs.unlink(tmpFile).catch(() => {})
     throw err

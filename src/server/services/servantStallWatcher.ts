@@ -15,6 +15,7 @@
  */
 
 import { diagnosticsService } from './diagnosticsService.js'
+import { conversationService } from './conversationService.js'
 import { countUnconsumedReceipts, isSessionTurnInProgress } from './dispatchReceiptService.js'
 import { servantService } from './servantService.js'
 import { sessionMessenger } from './sessionMessenger.js'
@@ -57,6 +58,8 @@ export type ServantStallWatcherDeps = {
   isTurnInProgress: (sessionId: string) => boolean
   /** 该会话还有多少条未被消费的派活（0 = 没有悬着的活，见 countUnconsumedReceipts） */
   countUnconsumedDispatches: (sessionId: string) => number
+  /** 该会话的 SDK 控制通道是否连接（盲区失联判定：进程活但 socket 断） */
+  isSdkConnected: (sessionId: string) => boolean
 }
 
 const defaultDeps: ServantStallWatcherDeps = {
@@ -70,6 +73,7 @@ const defaultDeps: ServantStallWatcherDeps = {
   now: () => Date.now(),
   isTurnInProgress: (sessionId) => isSessionTurnInProgress(sessionId),
   countUnconsumedDispatches: (sessionId) => countUnconsumedReceipts(sessionId),
+  isSdkConnected: (sessionId) => conversationService.isSdkConnected(sessionId),
 }
 
 export class ServantStallWatcher {
@@ -80,6 +84,8 @@ export class ServantStallWatcher {
   private noProcessAlertedAt = new Map<string, number>()
   /** sessionId → 已记过「正常闲置」的 episode 活动时间戳（同一 episode 只记一次，避免 60s 一条的日志噪音） */
   private noProcessSkippedAt = new Map<string, number>()
+  /** sessionId → 已上报过的「盲区失联」episode 活动时间戳（同一 episode 只报一次） */
+  private blindAlertedAt = new Map<string, number>()
 
   constructor(private deps: ServantStallWatcherDeps = defaultDeps) {}
 
@@ -93,6 +99,7 @@ export class ServantStallWatcher {
     this.stallStates.clear()
     this.noProcessAlertedAt.clear()
     this.noProcessSkippedAt.clear()
+    this.blindAlertedAt.clear()
   }
 
   start(): void {
@@ -179,6 +186,7 @@ export class ServantStallWatcher {
         this.stallStates.delete(key)
         this.noProcessAlertedAt.delete(key)
         this.noProcessSkippedAt.delete(key)
+        this.blindAlertedAt.delete(key)
         continue
       }
 
@@ -187,6 +195,27 @@ export class ServantStallWatcher {
         continue
       }
       this.noProcessAlertedAt.delete(key)
+
+      // 盲区失联（v1.4.0 阶段2 · 6）：进程活着（running=true）但 SDK 控制通道
+      // 已断开——detachSdkConnection 已按「观察通道失联」清掉 turn（转圈立即
+      // 落下），但如果 CLI 既不重连也不退出，会话从此呈「正常待命」静默假象，
+      // 用户无从知晓。此处补一条可行动路径：同一 episode 只上报一次（error 级
+      // 诊断事件），给主管/用户人工介入的入口（重开会话或重启 app）。
+      if (!this.deps.isSdkConnected(key)) {
+        if (this.blindAlertedAt.get(key) !== lastActivityMs) {
+          this.blindAlertedAt.set(key, lastActivityMs)
+          const roleText = servant.role ? `${servant.role}（${servant.title}）` : servant.title
+          this.report(
+            'error',
+            'blind-disconnect',
+            `员工会话 SDK 连接已断开且进程未退出超过 ${Math.round(staleFor / 60_000)} 分钟（任务状态不可知，转圈已在断开时落下）：${roleText}（会话 ID：${servant.sessionId}）。建议在 UI 重开该会话或重启应用。`,
+            servant.sessionId,
+            { staleForMs: staleFor, running: true, sdkConnected: false },
+          )
+        }
+        continue
+      }
+      this.blindAlertedAt.delete(key)
 
       // 降噪（v1.2.2）：只有**回合进行中**却长时间没动静才算假死。回合已正常结束、
       // 只是待命的空闲会话属于正常状态——旧判定只看"running + 10 分钟无活动"，

@@ -26,6 +26,7 @@ import { handleMemoryApi } from './api/memory.js'
 import { handleDesktopUiApi } from './api/desktop-ui.js'
 import { handleTracesApi } from './api/traces.js'
 import { handleServantsApi, handleSessionMessagesApi } from './api/servants.js'
+import { getServerIdentity } from './services/serverIdentity.js'
 
 export async function handleApiRequest(req: Request, url: URL): Promise<Response> {
   const path = url.pathname
@@ -34,6 +35,15 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
   // GET /api — 端点名录：让会话内的 AI（和排障的人）不用穷举猜路径
   if (req.method === 'GET' && (path === '/api' || path === '/api/')) {
     return Response.json(buildApiCatalog())
+  }
+
+  // GET /api/whoami — 身份探活（v1.4.0 阶段1-A ②）：本机存在对任意路径回
+  // 200+空 body 的冒充服务（如华硕 ArmourySocketServer），探活方需要一击区分
+  // 「连上的是不是本服务」。app/version/pid/startedAt 同源于 serverIdentity。
+  if (req.method === 'GET' && path === '/api/whoami') {
+    return Response.json(getServerIdentity(), {
+      headers: { 'Cache-Control': 'no-store' },
+    })
   }
 
   // Route to appropriate handler based on the second segment
@@ -153,6 +163,11 @@ function buildApiCatalog() {
         method: 'GET',
         path: '/api',
         description: '本名录',
+      },
+      {
+        method: 'GET',
+        path: '/api/whoami',
+        description: '身份探活：返回 { app, version, pid, startedAt }，用于区分本服务与冒充 200 的其它本机服务',
       },
       {
         method: 'GET',

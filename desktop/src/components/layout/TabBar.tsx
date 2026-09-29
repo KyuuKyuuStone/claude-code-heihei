@@ -156,27 +156,52 @@ export function TabBar() {
       !activeTeam.leadAgentId || member.agentId !== activeTeam.leadAgentId
     )
   }))
-  const activityState = useChatStore(useShallow((state) => {
+  // 输入字段单独订阅：elapsedTimer 每秒 tick 会重建 session 对象，但
+  // messages / backgroundAgentTasks / agentTaskNotifications 的引用在 tick 间
+  // 保持不变。若把整个 buildSessionActivityModel 放进 useChatStore selector，
+  // 每次 tick（每次 store 通知）都会对全部消息做多趟 O(N) 扫描——4370 条消息
+  // 的会话在后台每秒空烧约一个核（v1.3.1 实测渲染进程 179% CPU）。改为订阅
+  // 稳定引用 + useMemo，仅在真实输入变化时才重建模型。
+  const activityMessages = useChatStore((state) =>
+    activeTabId && isActiveSessionTab ? state.sessions[activeTabId]?.messages : undefined,
+  )
+  const activityBackgroundTasks = useChatStore((state) =>
+    activeTabId && isActiveSessionTab ? state.sessions[activeTabId]?.backgroundAgentTasks : undefined,
+  )
+  const activityNotifications = useChatStore((state) =>
+    activeTabId && isActiveSessionTab ? state.sessions[activeTabId]?.agentTaskNotifications : undefined,
+  )
+  const activityState = useMemo(() => {
     if (!activeTabId || !isActiveSessionTab) {
       return { hasVisibleActivity: false }
     }
-    const sessionState = state.sessions[activeTabId]
     const includeCliTasks = cliTasksSessionId === activeTabId
 
     const model = buildSessionActivityModel({
       sessionId: activeTabId,
-      messages: sessionState?.messages ?? [],
+      messages: activityMessages ?? [],
       tasks: includeCliTasks ? cliTasks : [],
       completedAndDismissed: includeCliTasks ? cliTasksCompletedAndDismissed : false,
-      backgroundTasks: Object.values(sessionState?.backgroundAgentTasks ?? {}),
+      backgroundTasks: Object.values(activityBackgroundTasks ?? {}),
       dismissedBackgroundTaskKeys,
-      agentNotifications: Object.values(sessionState?.agentTaskNotifications ?? {}),
+      agentNotifications: Object.values(activityNotifications ?? {}),
       teamMembers: activityTeamMembers,
     })
     return {
       hasVisibleActivity: hasVisibleSessionActivity(model),
     }
-  }))
+  }, [
+    activeTabId,
+    isActiveSessionTab,
+    activityMessages,
+    activityBackgroundTasks,
+    activityNotifications,
+    cliTasks,
+    cliTasksSessionId,
+    cliTasksCompletedAndDismissed,
+    dismissedBackgroundTaskKeys,
+    activityTeamMembers,
+  ])
   const showActivityButton = activeTabId && activityState.hasVisibleActivity && !isWorkbenchOpen
 
   const moveTab = useTabStore((s) => s.moveTab)

@@ -27,25 +27,68 @@ describe('supervisorGuard', () => {
   })
 
   test('supervisor code writes are denied with dispatch guidance', () => {
-    const reason = supervisorWriteDeniedReason('C:/proj/src/main.ts', ENV_ON)
+    const reason = supervisorWriteDeniedReason('C:/proj/src/main.ts', ENV_ON, { cwd: 'C:/proj' })
     expect(reason).toBe(SUPERVISOR_DISPATCH_ONLY_REASON)
     expect(reason).toContain('派给员工')
     expect(supervisorEditDeniedReason(ENV_ON)).toBe(SUPERVISOR_DISPATCH_ONLY_REASON)
   })
 
   test('dispatch protocol write paths stay allowed for supervisors', () => {
-    // Windows 与 POSIX 风格都要放行
-    expect(supervisorWriteDeniedReason('C:/proj/.dispatch-payload.json', ENV_ON)).toBeNull()
-    expect(supervisorWriteDeniedReason('C:\\proj\\report-payload.json', ENV_ON)).toBeNull()
-    expect(supervisorWriteDeniedReason('C:/proj/.heihei/dispatch/dispatch-1.json', ENV_ON)).toBeNull()
-    expect(supervisorWriteDeniedReason('/home/u/proj/.heihei/dispatch/report-2.json', ENV_ON)).toBeNull()
+    // Windows 与 POSIX 风格都要放行（cwd 注入=C:/proj 与 /home/u/proj 各自的工作目录内）
+    expect(supervisorWriteDeniedReason('C:/proj/.dispatch-payload.json', ENV_ON, { cwd: 'C:/proj' })).toBeNull()
+    expect(supervisorWriteDeniedReason('C:\\proj\\report-payload.json', ENV_ON, { cwd: 'C:/proj' })).toBeNull()
+    expect(supervisorWriteDeniedReason('C:/proj/.heihei/dispatch/dispatch-1.json', ENV_ON, { cwd: 'C:/proj' })).toBeNull()
+    expect(supervisorWriteDeniedReason('/home/u/proj/.heihei/dispatch/report-2.json', ENV_ON, { cwd: '/home/u/proj', platform: 'linux' })).toBeNull()
   })
 
   test('similar-looking filenames are NOT allowed (strict allowlist)', () => {
-    expect(supervisorWriteDeniedReason('C:/proj/dispatch-payload.json', ENV_ON)).not.toBeNull()
-    expect(supervisorWriteDeniedReason('C:/proj/.dispatch-payload.json.bak', ENV_ON)).not.toBeNull()
+    expect(supervisorWriteDeniedReason('C:/proj/dispatch-payload.json', ENV_ON, { cwd: 'C:/proj' })).not.toBeNull()
+    expect(supervisorWriteDeniedReason('C:/proj/.dispatch-payload.json.bak', ENV_ON, { cwd: 'C:/proj' })).not.toBeNull()
     // .heihei 下但不是 dispatch 子目录
-    expect(supervisorWriteDeniedReason('C:/proj/.heihei/notes.txt', ENV_ON)).not.toBeNull()
+    expect(supervisorWriteDeniedReason('C:/proj/.heihei/notes.txt', ENV_ON, { cwd: 'C:/proj' })).not.toBeNull()
+  })
+
+  // ── v1.4.1：工作目录之外的 Write 放行（主管写临时 payload / 桌面汇总文档）──
+  test('writes OUTSIDE the working directory are allowed for supervisors', () => {
+    // 用户桌面 / 临时目录等 cwd 外位置整体放行
+    expect(supervisorWriteDeniedReason('C:/Users/x/Desktop/doc.md', ENV_ON, { cwd: 'C:/proj' })).toBeNull()
+    expect(supervisorWriteDeniedReason('C:/Users/x/AppData/Local/Temp/payload.json', ENV_ON, { cwd: 'C:/proj' })).toBeNull()
+    expect(supervisorWriteDeniedReason('/home/u/desktop/report.md', ENV_ON, { cwd: '/proj', platform: 'linux' })).toBeNull()
+  })
+
+  test('cwd-outside allowance does NOT leak to non-supervisor semantics (still denied inside cwd)', () => {
+    // cwd 内普通文件：v1.4.1 后仍拒（回归）
+    expect(supervisorWriteDeniedReason('C:/proj/notes.md', ENV_ON, { cwd: 'C:/proj' })).toBe(SUPERVISOR_DISPATCH_ONLY_REASON)
+    // cwd 内 payload basename / 信箱：v1.4.1 后仍放行（回归）
+    expect(supervisorWriteDeniedReason('C:/proj/report-payload.json', ENV_ON, { cwd: 'C:/proj' })).toBeNull()
+    expect(supervisorWriteDeniedReason('C:/proj/.heihei/dispatch/report-9.json', ENV_ON, { cwd: 'C:/proj' })).toBeNull()
+  })
+
+  test('directory boundary is prefix-aware: sibling directories are OUTSIDE cwd', () => {
+    // C:/proj-evil、C:/project 是 C:/proj 的兄弟目录——isInsideDir 的 dir+'/'
+    // 前缀判定必须把它们判为 cwd 外（cwd 外整体放行）。若前缀误判把它们当
+    // cwd 内，下面的普通文件名会被 SUPERVISOR_DISPATCH_ONLY_REASON 拒掉——
+    // 用 null 断言锁死正确的目录边界。
+    expect(supervisorWriteDeniedReason('C:/proj-evil/x.md', ENV_ON, { cwd: 'C:/proj' })).toBeNull()
+    expect(supervisorWriteDeniedReason('C:/project/notes.md', ENV_ON, { cwd: 'C:/proj' })).toBeNull()
+    // 反向确认：真在 cwd 内的同名文件仍拒
+    expect(supervisorWriteDeniedReason('C:/proj/notes.md', ENV_ON, { cwd: 'C:/proj' })).toBe(SUPERVISOR_DISPATCH_ONLY_REASON)
+  })
+
+  test('win32 path comparison is case-insensitive (NTFS semantics)', () => {
+    // cwd=C:/Proj 与目标 c:/proj/src/a.ts 同一目录：cwd 内 → 仍拒
+    expect(supervisorWriteDeniedReason('c:/proj/src/a.ts', ENV_ON, { cwd: 'C:/Proj', platform: 'win32' })).toBe(SUPERVISOR_DISPATCH_ONLY_REASON)
+    // 大小写不同的 cwd 外路径照常放行
+    expect(supervisorWriteDeniedReason('C:/USERS/x/Desktop/a.md', ENV_ON, { cwd: 'c:/proj', platform: 'win32' })).toBeNull()
+  })
+
+  test('non-absolute paths are denied (defense in depth)', () => {
+    expect(supervisorWriteDeniedReason('src/main.ts', ENV_ON, { cwd: 'C:/proj' })).toBe(SUPERVISOR_DISPATCH_ONLY_REASON)
+    expect(supervisorWriteDeniedReason('../outside/a.md', ENV_ON, { cwd: 'C:/proj' })).toBe(SUPERVISOR_DISPATCH_ONLY_REASON)
+  })
+
+  test('non-supervisor sessions are unaffected by the cwd-outside rule (regression)', () => {
+    expect(supervisorWriteDeniedReason('C:/anywhere/file.md', ENV_OFF, { cwd: 'C:/proj' })).toBeNull()
   })
 })
 

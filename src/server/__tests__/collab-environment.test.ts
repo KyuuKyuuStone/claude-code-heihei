@@ -50,6 +50,48 @@ describe('buildSupervisorOrientation', () => {
   })
 })
 
+// ── v1.4.0 阶段1-B：地址自愈 + 汇报成功判据（协议/注册块文案契约）──
+// 背景（v1.3.3 员工反馈 6/7 共同确认）：env 地址启动时注入、app 重启即陈旧；
+// 本机 curl 包装器失败时退出码也可能是 0，「curl && rm」会删掉还没发出的 payload。
+describe('v1.4.0 P1-B protocol & pocket-card copy contract', () => {
+  test('protocol: success criterion is messageId, not exit code; curl carries --max-time', () => {
+    expect(DISPATCH_PROTOCOL_MD).toContain('--max-time')
+    expect(DISPATCH_PROTOCOL_MD).toContain('成功判据 = 响应体含')
+    expect(DISPATCH_PROTOCOL_MD).toContain('禁止把 rm 与 curl')
+    // 危险模式根除：协议全文不得再出现「curl … && rm」连用（退出码 0 也可能失败）
+    expect(DISPATCH_PROTOCOL_MD).not.toMatch(/curl[^\n`]*&&\s*rm/)
+  })
+
+  test('protocol: stale-env self-heal points to desktop-server.json with pid-liveness rule and whoami', () => {
+    expect(DISPATCH_PROTOCOL_MD).toContain('~/.claude/cc-heihei/desktop-server.json')
+    expect(DISPATCH_PROTOCOL_MD).toContain('先校验 `pid` 存活再信 `port`')
+    expect(DISPATCH_PROTOCOL_MD).toContain('/api/whoami')
+    // 旧状态文件路径已被阶段1-A 新契约取代，协议里不得再指路旧文件
+    expect(DISPATCH_PROTOCOL_MD).not.toContain('desktop-server-state.json')
+  })
+
+  test('protocol: dispatch template carries an explicit server address instead of relying on worker env', () => {
+    // 员工汇报命令的地址占位必须显式（主管写入），不得再指向员工自身 env
+    expect(DISPATCH_PROTOCOL_MD).toContain('<当前服务地址>')
+    expect(DISPATCH_PROTOCOL_MD).toContain('服务地址来源优先级')
+  })
+
+  test('pocket card: serverUrl is marked startup-injected, never authoritative', () => {
+    const message = buildSupervisorOrientation({
+      skillAvailable: true,
+      shellOk: true,
+      sessionId: 'sup-1',
+      serverUrl: 'http://127.0.0.1:12345',
+    })
+    expect(message).toContain('启动时注入')
+    expect(message).toContain('desktop-server.json')
+    expect(message).toContain('先校验 pid 存活再信 port')
+    expect(message).toContain('/api/whoami')
+    // 旧文案主动宣称 env 地址可靠——正是误导根源，必须消失
+    expect(message).not.toContain('以它为可靠来源')
+  })
+})
+
 describe('CollabEnvironmentService.checkWorkOrchestratorSkill', () => {
   let tmpDir: string
   const originalCliPath = process.env.CLAUDE_CLI_PATH

@@ -5,11 +5,17 @@
  * 主动告知主管"任务可能中断 + 建议处理方式"，让中断在一分钟内被看见，
  * 而不是等主管假活巡检或用户人工发现（2026-09-10 实战反馈）。
  *
- * 依赖全部动态导入：本模块被 conversationService（handleProcessExit）调用，
- * 避免 conversationService ↔ servantService/sessionMessenger 静态依赖环。
+ * 依赖注入布局（v1.3.1 · R2b 后）：deliver 经 registerServantIncidentDeliver
+ * 由 index.ts 装配（静态依赖环已断）；getServant/listServants 静态 import
+ * servantService（7a 后 servantService 不再反向依赖 conversationService）；
+ * 对 conversationService 的两处引用（interrupt 的延迟加载 + 被它动态 import
+ * 调用）保持动态导入，静态初始化环不存在。
  */
 
 import { diagnosticsService } from './diagnosticsService.js'
+import { onSessionEvent, type SessionEvent } from './sessionEvents.js'
+import { ProviderService } from './providerService.js'
+import { servantService } from './servantService.js'
 
 export type ServantCrashInput = {
   sessionId: string
@@ -51,9 +57,34 @@ export type ServantIncidentDeps = {
   }) => void
 }
 
+/**
+ * deliver 装配缝（v1.3.1 整批复核 · R2b 断环）：本模块此前静态 import
+ * sessionMessenger 作为缺省 deliver——5e 造出
+ * conversationService → notifier → sessionMessenger → conversationService
+ * 静态依赖环（L2→L3 分层违规）。改为对齐 7a 的 servantInfoSource 模式：
+ * 生产入口 index.ts 启动时 registerServantIncidentDeliver 注入真实现，
+ * 本模块不再知道 sessionMessenger 存在（静态环消失）。
+ * 未装配即调用 = 编程错误，显式抛错（好过静默丢弃崩溃通知）。
+ */
+let wiredDeliver:
+  | ((targetSessionId: string, content: string, serverHost: string) => Promise<boolean>)
+  | null = null
+
+export function registerServantIncidentDeliver(
+  fn: (targetSessionId: string, content: string, serverHost: string) => Promise<boolean>,
+): void {
+  wiredDeliver = fn
+}
+
 const defaultDeps: ServantIncidentDeps = {
-  deliver: (targetSessionId, content, serverHost) =>
-    sessionMessenger.deliver(targetSessionId, content, serverHost),
+  deliver: (targetSessionId, content, serverHost) => {
+    if (!wiredDeliver) {
+      throw new Error(
+        'servantIncidentNotifier deliver not wired — index.ts must call registerServantIncidentDeliver',
+      )
+    }
+    return wiredDeliver(targetSessionId, content, serverHost)
+  },
   getServant: (sessionId) => servantService.getServant(sessionId),
   listServants: (options) => servantService.listServants(options),
   getServerPort: () => ProviderService.getServerPort(),
@@ -108,6 +139,62 @@ export async function notifyServantCrash(input: ServantCrashInput): Promise<void
     },
   })
 }
+
+/* ── 崩溃通知的订阅式接线（v1.3.0 阶段2 · 5e）─────────────────────────────
+ * 原接线：conversationService.handleProcessExit 动态 import 本模块调用
+ * notifyServantCrash——观察者硬编码进被观察者，每加一个观察者都要改核心文件。
+ * 现接线：本模块顶层订阅 sessionEvents 的 phase_changed(→crashed)，被观察者
+ * 只发事件。判定逻辑自 conversationService.cliExitSeverity **原样搬入**（架构
+ * 方案 §5e；不静态 import 以免引入依赖环——conversationService 侧剩余的
+ * 轮次报错/工具熔断挂钩仍动态 import 本模块）。告警文案/阈值零改动（C3）。
+ *
+ * 事件顺序保证：markCrashed 时点在 drain 完成与合成 error result 发出之后
+ * （阶段2 · 5d），观察者不会先收 crashed 再收 result。
+ *
+ * startup 拉起失败也走 markCrashed（meta.startup=true），但旧行为不触发崩溃
+ * 通知（走 cli_start_failed 诊断）——订阅处保持该区分。
+ */
+
+/** 与 conversationService.cliExitSeverity 同源（原样搬入，勿单边改动） */
+function cliExitSeverityLocal(code: number | null): 'info' | 'error' {
+  if (code === 0 || code === null || code === 143 || code === 137) return 'info'
+  return 'error'
+}
+
+let crashObserverOff: (() => void) | null = null
+
+function crashObserverHandler(event: SessionEvent): void {
+  if (event.type !== 'phase_changed' || event.to !== 'crashed') return
+  const meta = (event.meta ?? {}) as { startup?: boolean; exitCode?: number }
+  // startup 失败不触发崩溃通知（旧行为保真）
+  if (meta.startup === true) return
+  if (cliExitSeverityLocal(meta.exitCode ?? null) !== 'error') return
+  void notifyServantCrash({ sessionId: event.sessionId, exitCode: meta.exitCode ?? null })
+    .catch(() => {})
+}
+
+/**
+ * 订阅 phase_changed(→crashed)（模块加载时调用一次；测试可重置）。
+ *
+ * R1 收口（v1.3.1 整批复核）：此前用 crashSubscription 引用守卫（已订阅即
+ * early return）——而 resetSessionEventsForTests() 会 listeners.clear() 但
+ * 清不掉该引用，reset 后再订阅被守卫误判「已订阅」，观察者被静默清空后
+ * 永不恢复（崩溃通知零报错失效）。改 ensure 模式：无条件注册（handler 为
+ * 模块级稳定引用，onSessionEvent 按 handler 引用去重 → 重复调用幂等），
+ * 被清后重调即恢复。消费方（servant-incident.test.ts beforeEach）每次调用
+ * 并跑活性自检，将来任何清空都显式报错而非静默失效。
+ */
+export function subscribeServantCrashObserver(): void {
+  crashObserverOff = onSessionEvent(crashObserverHandler, { types: ['phase_changed'] })
+}
+
+/** 测试隔离：退订崩溃观察者（配合 resetServantIncidentState） */
+export function unsubscribeServantCrashObserver(): void {
+  crashObserverOff?.()
+  crashObserverOff = null
+}
+
+subscribeServantCrashObserver()
 
 /* ── 员工轮次报错自动续跑（有界）─────────────────────────────────────────────
  * 线上模型员工的 API 抖动会让轮次以报错结束、任务停摆——实战验证"注入一条

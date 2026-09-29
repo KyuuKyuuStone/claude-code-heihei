@@ -117,14 +117,42 @@ export function mergeMemberTranscriptDelta(
   return [...durableMessages, ...appended, ...pendingMessages]
 }
 
+/**
+ * 消息列表等价比对（id + pending + content）。1.5s 成员 transcript 轮询每次
+ * 都重建消息对象数组，若不经比对直接 set chatStore，每次轮询都会重建
+ * sessions map 并通知全量订阅方重渲染（v1.3.2 实测后台热源之一）。
+ */
+function areUiMessageListsEquivalent(a: UIMessage[], b: UIMessage[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i += 1) {
+    const x = a[i]!
+    const y = b[i]!
+    if (x.id !== y.id) return false
+    if (isPendingMemberMessage(x) !== isPendingMemberMessage(y)) return false
+    if ('content' in x && 'content' in y && x.content !== y.content) return false
+  }
+  return true
+}
+
 function syncMemberSessionMessages(
   sessionId: string,
   memberStatus: TeamMember['status'],
   messages: UIMessage[],
 ) {
   const hasPendingMessages = messages.some(isPendingMemberMessage)
+  const nextChatState: 'thinking' | 'idle' =
+    memberStatus === 'running' || hasPendingMessages ? 'thinking' : 'idle'
   useChatStore.setState((state) => {
     const existing = state.sessions[sessionId]
+    // 轮询无增量：返回原 state，zustand 对 Object.is 相等结果不通知订阅方。
+    if (
+      existing &&
+      existing.connectionState === 'connected' &&
+      existing.chatState === nextChatState &&
+      areUiMessageListsEquivalent(existing.messages, messages)
+    ) {
+      return state
+    }
     const nextState = existing ?? createMemberSessionState()
     return {
       sessions: {
@@ -133,10 +161,7 @@ function syncMemberSessionMessages(
           ...nextState,
           messages,
           connectionState: 'connected',
-          chatState:
-            memberStatus === 'running' || hasPendingMessages
-              ? 'thinking'
-              : 'idle',
+          chatState: nextChatState,
         },
       },
     }

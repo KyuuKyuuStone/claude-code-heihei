@@ -56,6 +56,20 @@ import {
 } from './networkSettings.js'
 import { readTraceCaptureSettings } from './traceCaptureService.js'
 import { observeSessionSdkMessage } from './dispatchReceiptService.js'
+// v1.3.0 阶段4 · 7a：花名册查询依赖注入点（断 conversationService ⇄ servantService 环）
+import { getServantEntry } from './servantInfoSource.js'
+import {
+  clearSession,
+  dropActiveTurn,
+  getSessionSnapshot,
+  markCrashed,
+  markRunning,
+  markStarting,
+  markStopped,
+  registerSession,
+  setAwaitingPermission,
+  tombstoneSession,
+} from './sessionRegistry.js'
 import { logError } from '../../utils/log.js'
 import {
   createImageMetadataText,
@@ -254,7 +268,9 @@ export class ConversationStartupError extends Error {
 
 export class ConversationService {
   private sessions = new Map<string, SessionProcess>()
-  private deletedSessions = new Set<string>()
+  // v1.3.0 阶段3：软删除标记迁移至 sessionRegistry 的 tombstone 机制
+  // （markSessionDeleted → tombstoneSession；unmarkSessionDeleted → registerSession
+  // 恢复），deletedSessions Set 本体删除。守卫语义由快照 phase==='deleted' 承接。
   private providerService = new ProviderService()
   private pendingPermissionModeChanges = new Map<string, Map<string, number>>()
 
@@ -321,13 +337,19 @@ export class ConversationService {
     sdkUrl: string,
     options?: SessionStartOptions,
   ): Promise<void> {
-    if (this.deletedSessions.has(sessionId)) {
+    // 阶段3：tombstone 守卫（registry 快照）——软删除会话不得复活。
+    // 必须在 registerSession 之前拦（registerSession 对 deleted 条目 = 恢复迁移）。
+    if (getSessionSnapshot(sessionId)?.phase === 'deleted') {
       throw new ConversationStartupError(
         `Session was deleted before startup completed: ${sessionId}`,
         'SESSION_DELETED',
       )
     }
-    if (this.sessions.has(sessionId)) return
+    // 防重复拉起守卫（阶段2 · 5d 修订，阶段4 全量质检修复）：条目保留设计下
+    // stopped/crashed 条目仍在 sessions map（元数据留待显式决策），重启是方案
+    // 的合法路径（crashed→starting / stopped→starting）——只有活跃进程
+    // （starting/running）才阻断重复拉起。与 handler 防重复拉起守卫同语义。
+    if (this.hasSession(sessionId)) return
 
     const launchInfo = await sessionService.getSessionLaunchInfo(sessionId)
     const shouldResume = !!launchInfo && launchInfo.transcriptMessageCount > 0
@@ -338,7 +360,8 @@ export class ConversationService {
     const hasMaterializedWorktree =
       !!launchInfo && isMaterializedWorktreeLaunch(launchInfo)
 
-    if (this.deletedSessions.has(sessionId)) {
+    // 阶段3：二次 tombstone 守卫（startSession await 期间被删除的竞态防复活）
+    if (getSessionSnapshot(sessionId)?.phase === 'deleted') {
       throw new ConversationStartupError(
         `Session was deleted before startup completed: ${sessionId}`,
         'SESSION_DELETED',
@@ -476,6 +499,10 @@ export class ConversationService {
       pendingPermissionRequests: new Map(),
     }
     this.sessions.set(sessionId, session)
+    // registry phase 接线（阶段2 · 5d）：登记（幂等，兼容 handler 阶段1先行
+    // ensureSessionRegistered 的场景）→ starting；成功后 running。
+    registerSession(sessionId)
+    markStarting(sessionId)
 
     session.outputDrain = Promise.all([
       this.readProcessOutputStream(sessionId, proc.stdout, 'stdout'),
@@ -501,7 +528,10 @@ export class ConversationService {
     if (startupExitCode !== null) {
       await this.waitForProcessOutputDrain(session)
       const startupError = this.buildStartupError(sessionId, startupExitCode)
-      this.sessions.delete(sessionId)
+      // registry 记账（阶段2 · 5d）：拉起失败 = crashed 中间态（保留元数据等
+      // 显式决策；stale-lock 重试走 crashed→starting 合法迁移）。
+      // 注意：session 对象保留在 sessions map（元数据），由 DELETE API 走 tombstone。
+      markCrashed(sessionId, { startup: true, exitCode: startupExitCode })
 
       if (this.clearStaleLock(sessionId)) {
         console.log(
@@ -558,6 +588,7 @@ export class ConversationService {
     }
 
     console.log(`[ConversationService] CLI started successfully for ${sessionId}`)
+    markRunning(sessionId)
   }
 
   onOutput(sessionId: string, callback: (msg: any) => void): void {
@@ -665,6 +696,8 @@ export class ConversationService {
     const pendingRequest = session?.pendingPermissionRequests.get(requestId)
     if (session) {
       session.pendingPermissionRequests.delete(requestId)
+      // registry 记账（阶段2 · 5c）：权限等待状态单一权威源同步
+      setAwaitingPermission(sessionId, session.pendingPermissionRequests.size > 0)
     }
 
     return this.sendSdkMessage(sessionId, {
@@ -906,8 +939,15 @@ export class ConversationService {
     })
   }
 
+  /**
+   * 会话是否有「活进程」语义（阶段2 · 5d）：crashed 会话进程已死，按不存在处理——
+   * 消费方含 handler 的防重复拉起守卫（hasSession=true 会阻断重启，而
+   * crashed→starting 重启是方案的合法路径）；元数据仍保留在 map（显式决策用），
+   * 内部 getSession* 直读 map 的路径不受影响。
+   */
   hasSession(sessionId: string): boolean {
-    return this.sessions.has(sessionId)
+    if (!this.sessions.has(sessionId)) return false
+    return this.getActiveSessions().includes(sessionId)
   }
 
   getSessionWorkDir(sessionId: string): string {
@@ -973,7 +1013,17 @@ export class ConversationService {
     const session = this.sessions.get(sessionId)
     if (session?.sdkSocket === socket) {
       session.sdkSocket = null
+      // 观察通道失联（v1.4.0 阶段2 · 6「转圈无上限」）：socket 断而进程未退
+      // 时，该回合既等不到 result、也不会有进程退出事件——turn 无任何清除
+      // 来源，前端转圈无上限。预防性清除（registry.dropActiveTurn）：CLI 重连
+      // 后的 result 重放对已清回合是 no-op，新回合照常经注入/WS 路径重建。
+      dropActiveTurn(sessionId, { cause: 'sdk_socket_disconnected' })
     }
+  }
+
+  /** SDK 控制通道当前是否连接（假死 watcher 判「盲区失联」用） */
+  isSdkConnected(sessionId: string): boolean {
+    return Boolean(this.sessions.get(sessionId)?.sdkSocket)
   }
 
   /**
@@ -1027,7 +1077,8 @@ export class ConversationService {
         // 员工会话工具可用性观察：连续调用不存在的工具达阈值 → 中断该轮次并通知主管。
         this.observeServantToolResults(sessionId, msg)
         // 派活消费回执：按回合边界推进「投递成功 ≠ 已消费」的状态（纯内存查表，无副作用）。
-        observeSessionSdkMessage(sessionId, msg?.type)
+        // is_error 随 result 传给 registry 的 observeTurnResult（meta 可回查）。
+        observeSessionSdkMessage(sessionId, msg?.type, Date.now(), msg?.is_error === true)
         const sdkError = this.extractSdkErrorEvent(msg)
         if (sdkError) {
           void diagnosticsService.recordEvent({
@@ -1067,18 +1118,22 @@ export class ConversationService {
               ? msg.request.permission_suggestions
               : undefined,
           })
+          // registry 记账（阶段2 · 5c）：权限等待状态单一权威源同步
+          setAwaitingPermission(sessionId, true)
         }
         if (
           (msg?.type === 'control_cancel_request' || msg?.type === 'control_response') &&
           typeof msg.request_id === 'string'
         ) {
           session.pendingPermissionRequests.delete(msg.request_id)
+          setAwaitingPermission(sessionId, session.pendingPermissionRequests.size > 0)
         }
         if (
           msg?.type === 'control_response' &&
           typeof msg.response?.request_id === 'string'
         ) {
           session.pendingPermissionRequests.delete(msg.response.request_id)
+          setAwaitingPermission(sessionId, session.pendingPermissionRequests.size > 0)
         }
         this.notifyOutputCallbacks(sessionId, session.outputCallbacks, msg)
       } catch {
@@ -1200,6 +1255,13 @@ export class ConversationService {
     const session = this.sessions.get(sessionId)
     if (!session) return
 
+    // registry 记账（阶段2 · 5d）：主动停止 = markStopped + clearSession
+    // （进程对象删除是 stopped 的充分事实；条目随后移除）。
+    markStopped(sessionId)
+    clearSession(sessionId)
+    // map 条目同步移除（阶段4 全量质检修复）：stopped 条目残留 map 会让
+    // startSession 的防重复拉起守卫（hasSession）在 clearSession 删掉 registry
+    // 条目后因 phase-undefined 保守保留而恒 true → 重启静默失效
     this.sessions.delete(sessionId)
     this.killProcess(sessionId, session)
   }
@@ -1211,6 +1273,8 @@ export class ConversationService {
     const session = this.sessions.get(sessionId)
     if (!session) return
 
+    markStopped(sessionId)
+    clearSession(sessionId)
     this.sessions.delete(sessionId)
     await this.stopProcessAndWait(sessionId, session, timeoutMs)
   }
@@ -1227,6 +1291,12 @@ export class ConversationService {
     const activeSessions = Array.from(this.sessions.entries())
     if (activeSessions.length === 0) return
 
+    // registry 记账（阶段2 · 5d）：批量停止逐会话 markStopped + clearSession；
+    // 进程对象仍全部清除（原 sessions.clear() 语义保真）
+    for (const [sessionId] of activeSessions) {
+      markStopped(sessionId)
+      clearSession(sessionId)
+    }
     this.sessions.clear()
     await Promise.all(
       activeSessions.map(([sessionId, session]) =>
@@ -1272,9 +1342,19 @@ export class ConversationService {
     }
   }
 
+  /**
+   * 软删除（阶段3：迁移至 registry tombstone）。
+   * 顺序关键：先 tombstoneSession（running→deleted 合法迁移，条目保留等恢复），
+   * 再清进程对象——不走 stopSession（其 markStopped 对 deleted 态是非法迁移 no-op，
+   * 且 clearSession 会把 tombstone 条目从 registry 删除，破坏「删除留痕/防复活」语义）。
+   */
   markSessionDeleted(sessionId: string): void {
-    this.deletedSessions.add(sessionId)
-    this.stopSession(sessionId)
+    tombstoneSession(sessionId)
+    const session = this.sessions.get(sessionId)
+    if (session) {
+      this.sessions.delete(sessionId)
+      this.killProcess(sessionId, session)
+    }
   }
 
   markSessionsDeleted(sessionIds: string[]): void {
@@ -1283,8 +1363,9 @@ export class ConversationService {
     }
   }
 
+  /** 恢复软删除（阶段3：registerSession 对 tombstone 条目 = deleted→registered 合法恢复迁移） */
   unmarkSessionDeleted(sessionId: string): void {
-    this.deletedSessions.delete(sessionId)
+    registerSession(sessionId)
   }
 
   unmarkSessionsDeleted(sessionIds: string[]): void {
@@ -1294,7 +1375,13 @@ export class ConversationService {
   }
 
   getActiveSessions(): string[] {
-    return Array.from(this.sessions.keys())
+    // 阶段2（5d）：crashed/stopped/deleted 会话无活进程，不再视为 active
+    // （stopAllSessions 遍历 kill、index.ts active 列表都只应看到有进程语义的会话）；
+    // 未登记条目保守保留（旧行为）。
+    return Array.from(this.sessions.keys()).filter((sessionId) => {
+      const phase = getSessionSnapshot(sessionId)?.phase
+      return phase === undefined || phase === 'starting' || phase === 'running'
+    })
   }
 
   private async readProcessOutputStream(
@@ -1421,15 +1508,10 @@ export class ConversationService {
           sdkMessages: this.summarizeSdkMessages(activeSession.sdkMessages),
         },
       })
-      // 员工会话异常崩溃（非刻意停止/回收，severity=error）：主动告知其主管
-      // "任务可能中断 + 处理建议"，让中断在一分钟内被看见而不是靠人工巡检
-      if (cliExitSeverity(code) === 'error') {
-        void import('./servantIncidentNotifier.js')
-          .then(({ notifyServantCrash }) => notifyServantCrash({ sessionId, exitCode: code }))
-          .catch(() => {})
-      }
+      // 员工会话异常崩溃通知（v1.3.0 阶段2 · 5e）：不再在此动态 import——
+      // servantIncidentNotifier 顶层订阅 phase_changed(→crashed)，由上方
+      // markCrashed 发出的事件触发（判定逻辑与事件顺序见该模块注释）。
       const callbacks = [...activeSession.outputCallbacks]
-      this.sessions.delete(sessionId)
       this.notifyOutputCallbacks(sessionId, callbacks, {
         type: 'result',
         subtype: 'error',
@@ -1438,6 +1520,13 @@ export class ConversationService {
         usage: { input_tokens: 0, output_tokens: 0 },
         session_id: sessionId,
       })
+      // registry 记账（阶段2 · 5d）：markCrashed 时点在 drain 完成与合成 error
+      // result 发出**之后**（09-26 质检修订）——保证观察者的事件顺序是
+      // 「先 result 后 crashed」，不会倒挂。session 对象保留在 map（元数据：
+      // pendingOutbound/权限请求等留待显式决策），getActiveSessions 已排除
+      // crashed；删除走既有 DELETE API（tombstone），重启复用 startSession
+      // （crashed→starting 合法迁移）。
+      markCrashed(sessionId, { exitCode: code })
     }
   }
 
@@ -1573,10 +1662,9 @@ export class ConversationService {
       writeDirs?: string[]
     } = { supervisor: false }
     try {
-      // 动态导入避免 conversationService ↔ servantService 静态依赖环
-      // （servantService 引用本类的 hasSession 做 running 标记）
-      const { servantService } = await import('./servantService.js')
-      const entry = await servantService.getServant(sessionId)
+      // v1.3.0 阶段4 · 7a：花名册查询走依赖注入（servantInfoSource），
+      // 未注入时 getServantEntry 返回 null = 按非主管处理（原 catch 降级语义）
+      const entry = await getServantEntry(sessionId)
       info = {
         supervisor: Boolean(entry?.supervisor),
         ...(entry?.constraint === 'readonly' || entry?.constraint === 'whitelist'

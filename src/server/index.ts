@@ -10,6 +10,11 @@ import { handleWebSocket, type WebSocketData } from './ws/handler.js'
 import { resolveCors, type CorsResolution } from './middleware/cors.js'
 import { requireAuth } from './middleware/auth.js'
 import { teamWatcher } from './services/teamWatcher.js'
+// side-effect import（v1.3.0 阶段2 · 5e）：触发 servantIncidentNotifier 顶层
+// 订阅 phase_changed(→crashed)。不放在 conversationService——避免
+// conversationService → notifier → sessionMessenger → conversationService
+// 静态依赖环（notifier 的崩溃观察者订阅需在服务启动时即就绪）。
+import './services/servantIncidentNotifier.js'
 import { cronScheduler } from './services/cronScheduler.js'
 import { handleProxyRequest } from './proxy/handler.js'
 import { ProviderService } from './services/providerService.js'
@@ -21,6 +26,28 @@ import { sessionService } from './services/sessionService.js'
 import { localIndexCoordinator } from './services/localIndex/coordinator.js'
 import { searchContentCoordinator } from './services/localIndex/searchContentCoordinator.js'
 import { conversationService } from './services/conversationService.js'
+// v1.3.0 阶段4 · 7a：花名册信息源装配（断 conversationService ⇄ servantService 环）——
+// conversationService.isRegisteredSupervisor 经注入点查花名册，启动时即注入
+import { servantService } from './services/servantService.js'
+import { registerServantInfoSource } from './services/servantInfoSource.js'
+// 端口自发现 + 身份探活（v1.4.0 阶段1-A ①②）：启动落盘 ~/.claude/cc-heihei/
+// desktop-server.json（员工投递前读取自愈，不再依赖启动时注入的 env），
+// whoami 端点的身份同源。
+import {
+  clearDesktopServerInfo,
+  clearDesktopServerInfoSync,
+  writeDesktopServerInfo,
+} from './services/serverIdentity.js'
+registerServantInfoSource((sessionId) => servantService.getServant(sessionId))
+// 崩溃通知的 deliver 经注入缝装配（v1.3.1 · R2b 断环）：servantIncidentNotifier
+// 不再静态 import sessionMessenger（conversationService → notifier →
+// sessionMessenger → conversationService 静态依赖环消失）——本模块是 L4 汇聚
+// 点，由它反向把两侧接起来。
+import { sessionMessenger } from './services/sessionMessenger.js'
+import { registerServantIncidentDeliver } from './services/servantIncidentNotifier.js'
+registerServantIncidentDeliver((targetSessionId, content, serverHost) =>
+  sessionMessenger.deliver(targetSessionId, content, serverHost),
+)
 import { dispatchMailboxService } from './services/dispatchMailboxService.js'
 import { OPENAI_CODEX_REDIRECT_PATH } from '../services/openaiAuth/client.js'
 import { ensureDesktopCliLauncherInstalled } from './services/desktopCliLauncherService.js'
@@ -477,6 +504,13 @@ export function startServer(port = PORT, host = HOST) {
   // dispatch/report when a session's Bash is unusable (e.g. no Git Bash).
   dispatchMailboxService.start(serverPort)
 
+  // 端口自发现落盘（v1.4.0 阶段1-A ①）：server.port 是实际绑定端口（port=0
+  // 自动分配时与入参不同）。写入失败只降级自发现（读方走 env 兜底），不炸启动。
+  void writeDesktopServerInfo(serverPort).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error)
+    console.warn(`[Server] Failed to write desktop-server.json (port discovery degraded): ${message}`)
+  })
+
   // Watch for stalled servant sessions (running but no activity) and
   // auto-repush with troubleshooting hints, escalating to the supervisor.
   void import('./services/servantStallWatcher.js')
@@ -564,6 +598,7 @@ function shutdownAndExit(signal: 'SIGTERM' | 'SIGINT', exitCode: number) {
   shutdownInProgress = (async () => {
     console.log(`[Server] Received ${signal}`)
     await cleanupAllSessionsAndWait()
+    await clearDesktopServerInfo()
     process.exit(exitCode)
   })().catch((error) => {
     console.error(
@@ -584,6 +619,9 @@ process.on('SIGINT', () => {
 
 process.on('exit', () => {
   cleanupAllSessions()
+  // 端口文件同步兜底清理（v1.4.0 阶段1-A ①）：残留的旧文件靠 pid/startedAt
+  // 仍可被读取方识别为陈旧，这里尽力而为之。
+  clearDesktopServerInfoSync()
 })
 
 // Direct execution

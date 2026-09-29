@@ -4171,7 +4171,7 @@ describe('chatStore history mapping', () => {
     expect(updateTabStatusMock).toHaveBeenLastCalledWith(TEST_SESSION_ID, 'running')
   })
 
-  it('starts an elapsed timer when a reconnected session reports running status', () => {
+  it('records turnStartedAt when a reconnected session reports running status, without per-second sets', () => {
     vi.useFakeTimers()
 
     useChatStore.setState({
@@ -4179,6 +4179,7 @@ describe('chatStore history mapping', () => {
         [TEST_SESSION_ID]: makeSession({
           chatState: 'idle',
           elapsedSeconds: 0,
+          turnStartedAt: null,
           elapsedTimer: null,
         }),
       },
@@ -4190,15 +4191,22 @@ describe('chatStore history mapping', () => {
       verb: 'Thinking',
     })
 
-    vi.advanceTimersByTime(2100)
+    const startedAt = useChatStore.getState().sessions[TEST_SESSION_ID]?.turnStartedAt
+    expect(startedAt).not.toBeNull()
 
-    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.elapsedSeconds).toBe(2)
+    const mapBefore = useChatStore.getState().sessions
+    vi.advanceTimersByTime(2100)
+    // store 不再每秒 set：sessions map 引用与 elapsedSeconds 都保持不变，
+    // 读秒由 StreamingIndicator 本地计时器从 turnStartedAt 推算。
+    expect(useChatStore.getState().sessions).toBe(mapBefore)
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.elapsedSeconds).toBe(0)
 
     useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
       type: 'status',
       state: 'idle',
     })
 
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.turnStartedAt).toBeNull()
     expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.elapsedTimer).toBeNull()
 
     vi.runOnlyPendingTimers()
@@ -4417,7 +4425,7 @@ describe('chatStore history mapping', () => {
     expect(updateTabStatusMock).toHaveBeenLastCalledWith(TEST_SESSION_ID, 'running')
   })
 
-  it('resumes the elapsed timer when streaming continues after the timer was lost', () => {
+  it('resumes the turn clock when streaming continues after the clock was lost', () => {
     vi.useFakeTimers()
 
     useChatStore.setState({
@@ -4425,6 +4433,7 @@ describe('chatStore history mapping', () => {
         [TEST_SESSION_ID]: makeSession({
           chatState: 'streaming',
           elapsedSeconds: 3,
+          turnStartedAt: null,
           elapsedTimer: null,
         }),
       },
@@ -4435,14 +4444,18 @@ describe('chatStore history mapping', () => {
       text: 'still running',
     })
 
-    vi.advanceTimersByTime(2100)
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.turnStartedAt).not.toBeNull()
 
-    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.elapsedSeconds).toBe(5)
+    vi.advanceTimersByTime(2100)
+    // 不再有每秒 tick 累加（delta 缓冲自身的 flush 不算读秒 set）。
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.elapsedSeconds).toBe(3)
 
     useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
       type: 'status',
       state: 'idle',
     })
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.turnStartedAt).toBeNull()
 
     vi.runOnlyPendingTimers()
     vi.useRealTimers()
@@ -6603,5 +6616,58 @@ describe('chatStore wake replay of a finished thinking turn', () => {
     replayFinishedTurn({ withText: true })
 
     expect(assistantTextOf()).toEqual(before)
+  })
+})
+
+// v1.3.1/v1.3.2 实测缺陷回归：渲染进程在后台（无用户操作）持续高热
+// （179% → 修复后仍 ~118% 单核）。根因：elapsedTimer 每秒无条件 set()，
+// 每次重建 sessions map 通知全量订阅方（Sidebar/ActiveSession）重渲染；
+// v1.3.1 的 document.hidden 门不覆盖「失焦但可见」场景（用户同屏看视频）。
+// v1.3.2 修复：store 只记录 turnStartedAt 时间戳，读秒改由 StreamingIndicator
+// 本地计时器推算——无论 hidden/失焦，store 都不再有每秒 set。
+describe('chatStore turn clock（无每秒 set）', () => {
+  beforeEach(() => {
+    sendMock.mockReset()
+    notifyDesktopMock.mockReset()
+    updateTabStatusMock.mockReset()
+    localStorage.clear()
+    useSettingsStore.setState({ locale: 'en' })
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false })
+    useChatStore.setState({
+      ...initialState,
+      sessions: { [TEST_SESSION_ID]: makeSession({ chatState: 'thinking' }) },
+    })
+  })
+
+  afterEach(() => {
+    const timer = useChatStore.getState().sessions[TEST_SESSION_ID]?.elapsedTimer
+    if (timer) clearInterval(timer)
+    vi.useRealTimers()
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false })
+  })
+
+  it('never sets the store per second, regardless of page visibility', () => {
+    vi.useFakeTimers()
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'status',
+      state: 'thinking',
+    })
+
+    const startedAt = useChatStore.getState().sessions[TEST_SESSION_ID]?.turnStartedAt
+    expect(startedAt).not.toBeNull()
+
+    // 可见（含失焦但可见，document.hidden=false）：不得有每秒 set
+    const mapVisible = useChatStore.getState().sessions
+    vi.advanceTimersByTime(5000)
+    expect(useChatStore.getState().sessions).toBe(mapVisible)
+
+    // 隐藏：同样不得有每秒 set
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true })
+    vi.advanceTimersByTime(5000)
+    expect(useChatStore.getState().sessions).toBe(mapVisible)
+
+    // 读秒语义保留：turnStartedAt 不变，展示端按时间戳推算即可得到 10s+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.turnStartedAt).toBe(startedAt)
   })
 })

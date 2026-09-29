@@ -10,6 +10,7 @@ import * as path from 'path'
 import * as os from 'os'
 import * as crypto from 'crypto'
 import { ApiError } from '../middleware/errorHandler.js'
+import { renameWithRetry } from '../../utils/atomicFs.js'
 
 export type TaskNotificationConfig = {
   enabled: boolean
@@ -160,7 +161,7 @@ export class CronService {
       try {
         await fs.mkdir(dir, { recursive: true })
         await fs.writeFile(tmpFile, contents, 'utf-8')
-        await fs.rename(tmpFile, filePath)
+        await renameWithRetry(fs, tmpFile, filePath)
         return
       } catch (err) {
         lastError = err as Error

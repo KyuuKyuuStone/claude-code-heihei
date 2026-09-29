@@ -33,6 +33,7 @@ import { enableConfigs, getGlobalConfig } from '../../utils/config.js'
 import { getCwd, runWithCwdOverride } from '../../utils/cwd.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { conversationService } from '../services/conversationService.js'
+import { getSessionSnapshot } from '../services/sessionRegistry.js'
 
 type McpEditableConfigDto =
   | {
@@ -115,7 +116,12 @@ async function syncMcpToggleToSession(
   enabled: boolean,
 ): Promise<McpSessionSyncDto | undefined> {
   if (!sessionId) return undefined
-  if (!conversationService.hasSession(sessionId)) {
+  // v1.3.0 阶段3 · 6c 呈现类：改读 registry 快照。旧 hasSession（sessions.map
+  // 含即真）≈ starting∪running 都算「有」；此处**有意收紧**为仅 running——
+  // starting 段 CLI 尚未 ready，控制请求（MCP toggle）下发更可能失败，宁可
+  // not_running 让调用方稍后重试。crashed → not_running（非 404）；tombstone/
+  // 未登记同此。（v1.3.1 · R3 注释如实修订，行为不变。）
+  if (getSessionSnapshot(sessionId)?.phase !== 'running') {
     return { applied: false, reason: 'not_running' }
   }
 

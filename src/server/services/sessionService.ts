@@ -2176,6 +2176,30 @@ export class SessionService {
     return (await this.findSessionFiles(sessionId))[0] ?? null
   }
 
+  /**
+   * 单会话列表摘要直查（轻量）：花名册等只需少数已知会话的调用方使用。
+   * 避免 listSessions({ limit: 500 }) 的全量摘要扫描——它会先对发现的全部
+   * 会话文件逐一 scanSessionListSummary 再切片（冷启动 = 全量扫；活跃会话
+   * mtime 一变就整文件重扫），渲染端 20s 花名册轮询曾因此把事件循环打到
+   * 分钟级阻塞（v1.4.0 实录花名册请求 120s 超时）。这里复用同一 mtime+size
+   * 摘要缓存与 in-flight 去重，只付目标会话一份成本。
+   */
+  async getSessionListSummaryForSession(sessionId: string): Promise<SessionListSummary | null> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) return null
+    try {
+      const stat = await fs.stat(found.filePath)
+      return await this.getCachedSessionListSummary(
+        found.filePath,
+        found.projectDir,
+        stat,
+        this.activeSessionListCacheScope ?? this.getConfigDir(),
+      )
+    } catch {
+      return null
+    }
+  }
+
   private isValidSessionId(id: string): boolean {
     // UUID v4 format
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)

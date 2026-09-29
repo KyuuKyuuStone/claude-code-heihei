@@ -1,6 +1,8 @@
 import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
 import { mkdir, readdir, writeFile, rm, symlink } from 'fs/promises'
 import { join } from 'path'
+import { tmpdir } from 'node:os'
+import { mkdirSync, symlinkSync, mkdtempSync, rmSync } from 'node:fs'
 import { randomUUID } from 'crypto'
 
 // We'll test the updateCronTask by directly exercising the exported functions
@@ -201,8 +203,23 @@ describe('writeCronTasks strips runtime fields', () => {
   })
 })
 
-describe('writeCronTasks symlink safety', () => {
-  test('refuses to write through a project .claude directory symlink', async () => {
+// Windows 下创建 symlink 需要开发者模式/管理员特权；无特权时 symlinkSync 直接
+  // EPERM，用例前提（能造出 symlink）不成立 → 探测后跳过并注明原因。
+  const symlinkSupported = (() => {
+    try {
+      const probeRoot = mkdtempSync(join(tmpdir(), 'cron-symlink-probe-'))
+      const target = join(probeRoot, 'real')
+      mkdirSync(target, { recursive: true })
+      symlinkSync(target, join(probeRoot, 'link'), 'dir')
+      rmSync(probeRoot, { recursive: true, force: true })
+      return true
+    } catch {
+      return false
+    }
+  })()
+
+  describe('writeCronTasks symlink safety', () => {
+  test.skipIf(!symlinkSupported)('refuses to write through a project .claude directory symlink', async () => {
     const { writeCronTasks } = await import('../cronTasks.js')
     const tmpDir = join('/tmp', `cron-symlink-${randomUUID().slice(0, 8)}`)
     const projectDir = join(tmpDir, 'project')

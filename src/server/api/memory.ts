@@ -19,6 +19,7 @@ import { extractJsonStringField } from '../../utils/sessionStoragePortable.js'
 import { getCwd } from '../../utils/cwd.js'
 import { parseMemoryType } from '../../memdir/memoryTypes.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
+import { renameWithRetry } from '../../utils/atomicFs.js'
 
 type MemoryProject = {
   id: string
@@ -650,7 +651,7 @@ async function writeFileAtomically(filePath: string, content: string): Promise<v
     await handle.sync()
     await handle.close()
     handle = undefined
-    await fs.rename(tempPath, filePath)
+    await renameWithRetry(fs, tempPath, filePath)
   } finally {
     await handle?.close().catch(() => undefined)
     await fs.unlink(tempPath).catch(() => undefined)

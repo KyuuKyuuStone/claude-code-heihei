@@ -37,16 +37,25 @@ export function StreamingIndicator() {
   const statusVerb = sessionState?.statusVerb ?? ''
   const apiRetry = sessionState?.apiRetry ?? null
   const streamingFallback = sessionState?.streamingFallback ?? null
-  const elapsedSeconds = sessionState?.elapsedSeconds ?? 0
+  const elapsedSecondsFromStore = sessionState?.elapsedSeconds ?? 0
+  const turnStartedAt = sessionState?.turnStartedAt ?? null
   // chars ÷ 4 estimates output tokens for this turn, mirroring the CLI spinner.
   const streamingTokens = Math.round((sessionState?.streamingResponseChars ?? 0) / 4)
 
+  // 读秒计时留在本组件本地：store 只记录 turnStartedAt 时间戳，不再每秒
+  // set（v1.3.2 实测：store 级 1s tick 每次重建 sessions map，失焦但可见时
+  // 仍触发 Sidebar/ActiveSession 全量重渲染，后台空烧单核）。本地 tick 只
+  // 重渲染这个小组件，且失焦/隐藏时读秒依旧准确（由时间戳推算）。
   useEffect(() => {
-    if (!apiRetry) return undefined
+    if (!apiRetry && turnStartedAt == null) return undefined
     setNow(Date.now())
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
-  }, [apiRetry?.receivedAt, apiRetry?.retryDelayMs])
+  }, [apiRetry, turnStartedAt])
+
+  const elapsedSeconds = turnStartedAt != null
+    ? Math.max(0, Math.floor((now - turnStartedAt) / 1000))
+    : elapsedSecondsFromStore
 
   if (apiRetry) {
     const remainingMs = Math.max(0, apiRetry.retryDelayMs - (now - apiRetry.receivedAt))

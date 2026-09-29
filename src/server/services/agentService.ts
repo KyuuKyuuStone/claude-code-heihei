@@ -16,6 +16,7 @@ import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { findCanonicalGitRoot, findGitRoot } from '../../utils/git.js'
 import { getAgentDefinitionsWithOverrides } from '../../tools/AgentTool/loadAgentsDir.js'
 import { ApiError } from '../middleware/errorHandler.js'
+import { renameWithRetry } from '../../utils/atomicFs.js'
 
 export type AgentScope = 'user' | 'project'
 
@@ -739,7 +740,7 @@ export class AgentService {
     try {
       await this.writeTempFile(tempPath, content, currentStat.mode)
       await this.assertFileIdentity(filePath, expectedIdentity)
-      await fs.rename(tempPath, filePath)
+      await renameWithRetry(fs, tempPath, filePath)
     } finally {
       await fs.rm(tempPath, { force: true }).catch(() => undefined)
     }

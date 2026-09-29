@@ -12,6 +12,20 @@ import {
   recordDelivery,
   resetDispatchReceipts,
 } from '../services/dispatchReceiptService.js'
+// v1.3.0 阶段2（5a）：turn 状态单一权威源迁至 sessionRegistry，观察流「只降不升」
+// （无 turn 时丢弃进行中信号）——「回合进行中」场景需先走注入路径建 turn。
+import {
+  beginTurn,
+  clearSession,
+  dropActiveTurn,
+  markCrashed,
+  registerSession,
+  resetRegistryForTests,
+  tombstoneSession,
+} from '../services/sessionRegistry.js'
+import {
+  ensureTurnChangeCompensationSubscribed,
+} from '../services/dispatchReceiptService.js'
 
 /**
  * 派活消费回执（A4）。
@@ -31,8 +45,36 @@ function deliverTo(target: string, at: number, from = SUP) {
   return recordDelivery({ messageId: `m-${target}-${at}`, targetSessionId: target, fromSessionId: from, at })
 }
 
+/** 阶段2（5a）：模拟生产「注入路径先建回合」的前置（断言语义不变） */
+function beginTurnFor(sessionId: string): void {
+  registerSession(sessionId)
+  beginTurn(sessionId, { awaitSend: false })
+}
+
+/** 活性自检专用会话（不与用例冲突；自检后处于 crashed 态，无副作用） */
+const LIVENESS_PROBE = 'liveness-probe-none'
+
 beforeEach(() => {
   resetDispatchReceipts()
+  resetRegistryForTests()
+  // 复核①收口：补偿订阅器必须常驻，但 resetSessionEventsForTests（先跑的
+  // 测试文件会调用）会 listeners.clear() 静默清掉它——不恢复则下方补偿测试
+  // 假失败（失败信息指向业务断言，真实原因无从看出）。ensure 幂等（底层
+  // onSessionEvent 按 handler 引用去重、同一引用至多一份），被清后重调即恢复注册。
+  ensureTurnChangeCompensationSubscribed()
+  // 活性自检：合成一次「广播 true → markCrashed 清 turn」流程，断言补偿
+  // false 能到达监听链——将来任何清空都会在此显式报错而非下游假失败。
+  ensureTurnChangeCompensationSubscribed()
+  const liveness: Array<boolean> = []
+  const offLiveness = addTurnChangeListener((sessionId, turnInProgress) => {
+    if (sessionId === LIVENESS_PROBE) liveness.push(turnInProgress)
+  })
+  registerSession(LIVENESS_PROBE)
+  beginTurn(LIVENESS_PROBE, { awaitSend: false })
+  observeSessionSdkMessage(LIVENESS_PROBE, 'assistant', Date.now())
+  markCrashed(LIVENESS_PROBE, { exitCode: 1 })
+  offLiveness()
+  expect(liveness).toEqual([true, false])
 })
 
 describe('dispatch receipts', () => {
@@ -59,7 +101,8 @@ describe('dispatch receipts', () => {
   })
 
   test('a busy target consumes only at the next turn boundary', () => {
-    // 目标正在跑一条回合：先有活动信号，回执投递时因此被标记为"忙碌中投递"
+    // 目标正在跑一条回合（阶段2：回合经注入路径建立）→ 回执投递时被标记为"忙碌中投递"
+    beginTurnFor(EMP)
     observeSessionSdkMessage(EMP, 'assistant', T0 - 1000)
     const receipt = deliverTo(EMP, T0)
     expect(receipt.targetWasBusy).toBe(true)
@@ -146,6 +189,8 @@ describe('dispatch receipts', () => {
     observeSessionSdkMessage(SILENT, 'control_request', T0 + 1)
     expect(isSessionTurnInProgress(SILENT)).toBe(false)
 
+    // 阶段2（5a）：回合经注入路径建立后，观察流信号与 result 边界推进该状态
+    beginTurnFor(SILENT)
     observeSessionSdkMessage(SILENT, 'assistant', T0 + 2)
     expect(isSessionTurnInProgress(SILENT)).toBe(true)
     observeSessionSdkMessage(SILENT, 'user', T0 + 3)
@@ -210,6 +255,7 @@ describe('turn change listeners (方案B: servant_turn_changed 事件源)', () =
       events.push({ sessionId, turnInProgress })
     })
 
+    beginTurnFor(EMP)
     observeSessionSdkMessage(EMP, 'assistant', T0)
     observeSessionSdkMessage(EMP, 'result', T0 + 100)
 
@@ -227,6 +273,7 @@ describe('turn change listeners (方案B: servant_turn_changed 事件源)', () =
     })
 
     // 连续活动信号：只有第一次翻转触发
+    beginTurnFor(EMP)
     observeSessionSdkMessage(EMP, 'stream_event', T0)
     observeSessionSdkMessage(EMP, 'assistant', T0 + 100)
     observeSessionSdkMessage(EMP, 'user', T0 + 200)
@@ -261,9 +308,136 @@ describe('turn change listeners (方案B: servant_turn_changed 事件源)', () =
       seen.push(turnInProgress)
     })
 
+    beginTurnFor(EMP)
     observeSessionSdkMessage(EMP, 'assistant', T0)
 
     expect(isSessionTurnInProgress(EMP)).toBe(true)
     expect(seen).toEqual([true])
   })
+
+  // v1.3.1 实测缺陷复现：会话已结束但前端仍显示「忙碌转圈」。
+  // 根因：turnActiveBroadcast 只在观察流 result 分支清除并补发 false——
+  // CLI 崩溃（markCrashed）/ 主动停止（clearSession）等非观察流路径清 turn 时，
+  // 前端收不到 servant_turn_changed(false) 补偿广播，状态灯永久卡 busy
+  // （服务端 isSessionTurnInProgress 已为 false，与主管复查吻合）。
+  test('compensates a false broadcast when a broadcast turn is cleared by a crash (markCrashed)', () => {
+    const events: Array<{ sessionId: string; turnInProgress: boolean }> = []
+    const off = addTurnChangeListener((sessionId, turnInProgress) => {
+      events.push({ sessionId, turnInProgress })
+    })
+
+    beginTurnFor(EMP)
+    observeSessionSdkMessage(EMP, 'assistant', T0)
+    expect(events).toEqual([{ sessionId: EMP, turnInProgress: true }])
+
+    // CLI 进程异常退出：handleProcessExit 匹配分支 → markCrashed → clearTurnInternal
+    markCrashed(EMP, { exitCode: 143 })
+    expect(isSessionTurnInProgress(EMP)).toBe(false)
+
+    // 缺陷断言：清 turn 必须补发 false，否则前端状态灯永久卡 busy
+    expect(events).toEqual([
+      { sessionId: EMP, turnInProgress: true },
+      { sessionId: EMP, turnInProgress: false },
+    ])
+    off()
+  })
+
+  test('compensates a false broadcast when a broadcast turn is cleared by an explicit stop (clearSession)', () => {
+    const events: Array<{ sessionId: string; turnInProgress: boolean }> = []
+    const off = addTurnChangeListener((sessionId, turnInProgress) => {
+      events.push({ sessionId, turnInProgress })
+    })
+
+    beginTurnFor(EMP)
+    observeSessionSdkMessage(EMP, 'stream_event', T0)
+    expect(events).toEqual([{ sessionId: EMP, turnInProgress: true }])
+
+    // 主动停止：stopSession → markStopped + clearSession（registry 条目删除）
+    clearSession(EMP)
+    expect(isSessionTurnInProgress(EMP)).toBe(false)
+    expect(events).toEqual([
+      { sessionId: EMP, turnInProgress: true },
+      { sessionId: EMP, turnInProgress: false },
+    ])
+    off()
+  })
+
+  test('a turn cleared without any true broadcast fires nothing (no spurious false)', () => {
+    const events: Array<{ sessionId: string; turnInProgress: boolean }> = []
+    const off = addTurnChangeListener((sessionId, turnInProgress) => {
+      events.push({ sessionId, turnInProgress })
+    })
+
+    // turn 建立（CLI 启动即死，从未产生观察流可见信号）→ 前端从未转圈 →
+    // 清 turn 时不得补发无中生有的 false
+    beginTurnFor(EMP)
+    markCrashed(EMP, { exitCode: 1 })
+    expect(events).toEqual([])
+    off()
+  })
+
+  // 复核③：两条等价路径——tombstoneSession 与 TurnHandle.abort 同样经
+  // clearTurnInternal 发 turn_changed(none)，补偿行为必须一致（全路径等价）。
+  test('compensates a false broadcast on the tombstone path (tombstoneSession)', () => {
+    const events: Array<{ sessionId: string; turnInProgress: boolean }> = []
+    const off = addTurnChangeListener((sessionId, turnInProgress) => {
+      events.push({ sessionId, turnInProgress })
+    })
+
+    beginTurnFor(EMP)
+    observeSessionSdkMessage(EMP, 'assistant', T0)
+    expect(events).toEqual([{ sessionId: EMP, turnInProgress: true }])
+
+    // DELETE API → tombstone：清 turn + phase=deleted（6a 操作类短路的标记源）
+    tombstoneSession(EMP)
+    expect(isSessionTurnInProgress(EMP)).toBe(false)
+    expect(events).toEqual([
+      { sessionId: EMP, turnInProgress: true },
+      { sessionId: EMP, turnInProgress: false },
+    ])
+    off()
+  })
+
+  test('compensates a false broadcast on the TurnHandle.abort path', () => {
+    const events: Array<{ sessionId: string; turnInProgress: boolean }> = []
+    const off = addTurnChangeListener((sessionId, turnInProgress) => {
+      events.push({ sessionId, turnInProgress })
+    })
+
+    // 注入方主动撤回：beginTurn 拿 handle → abort（settleTurnByIdentity）
+    registerSession(EMP)
+    const handle = beginTurn(EMP, { awaitSend: false })
+    observeSessionSdkMessage(EMP, 'assistant', T0)
+    expect(events).toEqual([{ sessionId: EMP, turnInProgress: true }])
+
+    handle?.abort()
+    expect(isSessionTurnInProgress(EMP)).toBe(false)
+    expect(events).toEqual([
+      { sessionId: EMP, turnInProgress: true },
+      { sessionId: EMP, turnInProgress: false },
+    ])
+    off()
+  })
+  // v1.4.0 阶段2 · 6「转圈无上限」：SDK socket 断开（进程未退）时
+  // conversationService.detachSdkConnection 调 dropActiveTurn 预防性清 turn——
+  // 补偿广播链路与 crash/stop 路径等价：前端立即从 busy 降下，不再无上限转圈。
+  test('compensates a false broadcast on the observation-blind path (dropActiveTurn)', () => {
+    const events: Array<{ sessionId: string; turnInProgress: boolean }> = []
+    const off = addTurnChangeListener((sessionId, turnInProgress) => {
+      events.push({ sessionId, turnInProgress })
+    })
+
+    beginTurnFor(EMP)
+    observeSessionSdkMessage(EMP, 'assistant', T0)
+    expect(events).toEqual([{ sessionId: EMP, turnInProgress: true }])
+
+    dropActiveTurn(EMP, { cause: 'sdk_socket_disconnected' })
+    expect(isSessionTurnInProgress(EMP)).toBe(false)
+    expect(events).toEqual([
+      { sessionId: EMP, turnInProgress: true },
+      { sessionId: EMP, turnInProgress: false },
+    ])
+    off()
+  })
 })
+

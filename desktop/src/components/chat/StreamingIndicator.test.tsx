@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 
 vi.mock('../../api/websocket', () => ({
   wsManager: {
@@ -78,6 +78,34 @@ describe('StreamingIndicator', () => {
     render(<StreamingIndicator />)
 
     expect(screen.getByText(/↓ 2\.2k tokens/)).toBeTruthy()
+  })
+
+  it('derives the elapsed readout from turnStartedAt via a local ticker, leaving the store untouched', () => {
+    // v1.3.2 回归：读秒改由本组件本地计时器从 turnStartedAt 推算；
+    // store 不再有每秒 set（后台/失焦时零高频重渲染），读秒语义不变。
+    vi.useFakeTimers()
+    try {
+      const startedAt = Date.now()
+      useChatStore.setState({
+        sessions: {
+          [ACTIVE_TAB]: makeSession({ chatState: 'thinking', turnStartedAt: startedAt }),
+        },
+      })
+
+      render(<StreamingIndicator />)
+
+      const sessionsBefore = useChatStore.getState().sessions
+      act(() => {
+        vi.advanceTimersByTime(5000)
+      })
+
+      expect(screen.getByText('5s')).toBeTruthy()
+      // 本地 tick 只重渲染本组件：chatStore 完全没被碰过。
+      expect(useChatStore.getState().sessions).toBe(sessionsBefore)
+      expect(useChatStore.getState().sessions[ACTIVE_TAB]?.elapsedSeconds).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('hides the token estimate until this turn has streamed output', () => {

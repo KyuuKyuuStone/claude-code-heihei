@@ -18,6 +18,7 @@ import {
 import { SessionStore } from '../common/session-store.js'
 import { AdapterHttpClient } from '../common/http-client.js'
 import { restoreStoredSessionBinding } from '../common/session-recovery.js'
+import { createSessionTimeoutThrottle } from './quietPoll.js'
 import { isAllowedUser, tryPair } from '../common/pairing.js'
 import { AttachmentStore } from '../common/attachment/attachment-store.js'
 import { checkAttachmentLimit } from '../common/attachment/attachment-limits.js'
@@ -575,6 +576,9 @@ async function collectAttachments(
   return attachments
 }
 
+// -14 空轮询日志节流器（v1.4.0 阶段2-8）：首条照报、每 5 分钟汇总、状态变化 flush
+const sessionTimeoutThrottle = createSessionTimeoutThrottle()
+
 async function pollLoop(): Promise<void> {
   while (!stopped) {
     try {
@@ -588,14 +592,30 @@ async function pollLoop(): Promise<void> {
       const hasRetError = typeof resp.ret === 'number' && resp.ret !== 0
       const hasErrCode = typeof resp.errcode === 'number' && resp.errcode !== 0
       if (hasRetError || hasErrCode) {
-        console.warn(`[WeChat] getupdates error: ${resp.errcode ?? resp.ret} ${resp.errmsg ?? ''}`)
+        const errCode = resp.errcode ?? resp.ret
+        if (errCode === -14) {
+          // -14 session timeout = 长轮询空闲期的正常会话轮换（3s 重试即可继续）。
+          // 不逐条刷屏（实测 7.6KB 诊断日志里 61 条全是它）：聚合计数——首次照报、
+          // 之后每 5 分钟汇总一条；离开本状态（收到消息 / 其他错误码 / 网络异常）时 flush。
+          const summary = sessionTimeoutThrottle.record(Date.now())
+          if (summary) console.warn(summary)
+          await sleep(3000)
+          continue
+        }
+        const pendingSummary = sessionTimeoutThrottle.flush()
+        if (pendingSummary) console.warn(pendingSummary)
+        console.warn(`[WeChat] getupdates error: ${errCode} ${resp.errmsg ?? ''}`)
         await sleep(3000)
         continue
       }
       for (const msg of resp.msgs ?? []) {
         await routeUserMessage(msg)
       }
+      const recoveredSummary = sessionTimeoutThrottle.flush()
+      if (recoveredSummary) console.warn(recoveredSummary)
     } catch (err) {
+      const catchSummary = sessionTimeoutThrottle.flush()
+      if (catchSummary) console.warn(catchSummary)
       console.error('[WeChat] poll loop error:', err instanceof Error ? err.message : err)
       await sleep(3000)
     }

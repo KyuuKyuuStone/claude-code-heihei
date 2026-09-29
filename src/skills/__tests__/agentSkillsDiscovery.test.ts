@@ -347,7 +347,11 @@ describe('.agents/skills discovery', () => {
       expect(names).toContain('project-skill')
     })
 
-    it('skips a skill whose directory name could forge lines in the listing', async () => {
+    // Windows 平台限制：无法创建含换行符的目录名（mkdirSync 直接 ENOENT，且报错在
+    // 换行处截断）。该攻击形态的目录名在 Windows（本产品唯一目标平台）上根本不存在，
+    // fixture 不可构造 → 平台不兼容用例，非 Windows 执行（v1.4.0 阶段3 更正：此失败
+    // 不是产品 skill 写入路径缺陷，此前"非递归 mkdir"的判断有误——源码本就是 recursive）。
+    it.skipIf(process.platform === 'win32')('skips a skill whose directory name could forge lines in the listing', async () => {
       // The model sees the catalog as one `- name: description` line per skill,
       // and the directory name goes in verbatim. A name carrying a line break
       // therefore writes its own entries — and `.agents` is a directory other

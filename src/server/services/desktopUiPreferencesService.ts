@@ -5,6 +5,7 @@ import { randomBytes } from 'node:crypto'
 import { ApiError } from '../middleware/errorHandler.js'
 import { readRecoverableJsonFile } from './recoverableJsonFile.js'
 import { ensurePersistentStorageUpgraded } from './persistentStorageMigrations.js'
+import { renameWithRetry } from '../../utils/atomicFs.js'
 
 // v5: the desktop pet feature was removed — `pet` is stripped from persisted
 // files on read (see normalizeDesktopUiPreferences) instead of being carried
@@ -259,7 +260,7 @@ export class DesktopUiPreferencesService {
 
     try {
       await fs.writeFile(tmpFile, contents, 'utf-8')
-      await fs.rename(tmpFile, filePath)
+      await renameWithRetry(fs, tmpFile, filePath)
     } catch (error) {
       await fs.unlink(tmpFile).catch(() => {})
       throw ApiError.internal(`Failed to write desktop-ui.json: ${error}`)

@@ -1,0 +1,360 @@
+[
+  {
+    "type": "dependency",
+    "from": "src/utils/managedEnv.ts",
+    "to": "src/server/proxy/standaloneProviderProxy.ts",
+    "unresolvedTo": "../server/proxy/standaloneProviderProxy.js",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "layer-L0-no-server-deps"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/utils/managedEnv.ts",
+    "to": "src/server/services/providerRuntimeEnv.ts",
+    "unresolvedTo": "../server/services/providerRuntimeEnv.js",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "layer-L0-no-server-deps"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/server/services/computerUseApprovalService.ts",
+    "to": "src/server/ws/handler.ts",
+    "unresolvedTo": "../ws/handler.js",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "layer-L2-no-upward"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/server/services/dispatchMailboxService.ts",
+    "to": "src/server/services/sessionMessenger.ts",
+    "unresolvedTo": "./sessionMessenger.js",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "layer-L2-no-upward"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/server/services/servantStallWatcher.ts",
+    "to": "src/server/services/sessionMessenger.ts",
+    "unresolvedTo": "./sessionMessenger.js",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "layer-L2-no-upward"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/server/services/sessionComponentReloadService.ts",
+    "to": "src/server/ws/handler.ts",
+    "unresolvedTo": "../ws/handler.js",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "layer-L2-no-upward"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/server/services/supervisorProtocolNotice.ts",
+    "to": "src/server/services/sessionMessenger.ts",
+    "unresolvedTo": "./sessionMessenger.js",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "layer-L2-no-upward"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/server/services/teamWatcher.ts",
+    "to": "src/server/ws/handler.ts",
+    "unresolvedTo": "../ws/handler.js",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "layer-L2-no-upward"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/server/api/computer-use.ts",
+    "to": "src/server/api/computer-use-python.ts",
+    "unresolvedTo": "./computer-use-python.js",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "layer-L4-no-same-layer"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/server/api/localFile.ts",
+    "to": "src/server/api/filesystem.ts",
+    "unresolvedTo": "./filesystem.js",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "layer-L4-no-same-layer"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/server/api/localFile.ts",
+    "to": "src/server/api/previewFs.ts",
+    "unresolvedTo": "./previewFs.js",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "layer-L4-no-same-layer"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/server/api/workspaceSearch.ts",
+    "to": "src/server/api/filesystem.ts",
+    "unresolvedTo": "./filesystem.js",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "layer-L4-no-same-layer"
+    }
+  },
+  {
+    "type": "cycle",
+    "from": "src/server/services/computerUseApprovalService.ts",
+    "to": "src/server/ws/handler.ts",
+    "unresolvedTo": "../ws/handler.js",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "no-circular"
+    },
+    "cycle": [
+      {
+        "name": "src/server/ws/handler.ts",
+        "dependencyTypes": [
+          "local",
+          "import"
+        ]
+      },
+      {
+        "name": "src/server/services/computerUseApprovalService.ts",
+        "dependencyTypes": [
+          "local",
+          "import"
+        ]
+      }
+    ]
+  },
+  {
+    "type": "cycle",
+    "from": "src/server/services/conversationService.ts",
+    "to": "src/server/services/servantIncidentNotifier.ts",
+    "unresolvedTo": "./servantIncidentNotifier.js",
+    "dependencyTypes": [
+      "local",
+      "dynamic-import"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "no-circular"
+    },
+    "cycle": [
+      {
+        "name": "src/server/services/servantIncidentNotifier.ts",
+        "dependencyTypes": [
+          "local",
+          "dynamic-import"
+        ]
+      },
+      {
+        "name": "src/server/services/conversationService.ts",
+        "dependencyTypes": [
+          "local",
+          "dynamic-import"
+        ]
+      }
+    ]
+  },
+  {
+    "type": "cycle",
+    "from": "src/server/services/grokOfficialProvider.ts",
+    "to": "src/server/services/heiheiGrokOAuthService.ts",
+    "unresolvedTo": "./heiheiGrokOAuthService.js",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "no-circular"
+    },
+    "cycle": [
+      {
+        "name": "src/server/services/heiheiGrokOAuthService.ts",
+        "dependencyTypes": [
+          "local",
+          "import"
+        ]
+      },
+      {
+        "name": "src/server/services/networkSettings.ts",
+        "dependencyTypes": [
+          "local",
+          "import"
+        ]
+      },
+      {
+        "name": "src/server/services/settingsService.ts",
+        "dependencyTypes": [
+          "local",
+          "import"
+        ]
+      },
+      {
+        "name": "src/server/services/persistentStorageMigrations.ts",
+        "dependencyTypes": [
+          "local",
+          "import"
+        ]
+      },
+      {
+        "name": "src/server/services/grokOfficialProvider.ts",
+        "dependencyTypes": [
+          "local",
+          "import"
+        ]
+      }
+    ]
+  },
+  {
+    "type": "cycle",
+    "from": "src/server/services/heiheiOpenAIOAuthService.ts",
+    "to": "src/server/services/networkSettings.ts",
+    "unresolvedTo": "./networkSettings.js",
+    "dependencyTypes": [
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "no-circular"
+    },
+    "cycle": [
+      {
+        "name": "src/server/services/networkSettings.ts",
+        "dependencyTypes": [
+          "local",
+          "import"
+        ]
+      },
+      {
+        "name": "src/server/services/settingsService.ts",
+        "dependencyTypes": [
+          "local",
+          "import"
+        ]
+      },
+      {
+        "name": "src/server/services/persistentStorageMigrations.ts",
+        "dependencyTypes": [
+          "local",
+          "import"
+        ]
+      },
+      {
+        "name": "src/server/services/openaiOfficialProvider.ts",
+        "dependencyTypes": [
+          "local",
+          "import"
+        ]
+      },
+      {
+        "name": "src/server/services/heiheiOpenAIOAuthService.ts",
+        "dependencyTypes": [
+          "local",
+          "import"
+        ]
+      }
+    ]
+  },
+  {
+    "type": "dependency",
+    "from": "src/server/services/conversationService.ts",
+    "to": "src/server/services/servantIncidentNotifier.ts",
+    "unresolvedTo": "./servantIncidentNotifier.js",
+    "dependencyTypes": [
+      "local",
+      "dynamic-import"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "no-dynamic-import-in-services"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/server/services/servantIncidentNotifier.ts",
+    "to": "src/server/services/conversationService.ts",
+    "unresolvedTo": "./conversationService.js",
+    "dependencyTypes": [
+      "local",
+      "dynamic-import"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "no-dynamic-import-in-services"
+    }
+  }
+]

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test'
 import type { ServerWebSocket } from 'bun'
 import {
   __markPrewarmPendingForTests,
@@ -20,6 +20,24 @@ import {
 import { conversationService } from '../services/conversationService.js'
 import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
 import { sessionService } from '../services/sessionService.js'
+// R4a/R4b（v1.3.1 整批复核）：rebind 触发时序测试 + 两处顶层订阅的 ensure 活性
+import {
+  ensureRebindOnRunningSubscribed,
+  ensureTurnChangeBroadcastSubscribed,
+} from '../ws/handler.js'
+import { GLOBAL_EVENTS_SESSION_ID } from '../ws/handler.js'
+import {
+  markRunning,
+  markStarting,
+  registerSession,
+} from '../services/sessionRegistry.js'
+import { resetSessionEventsForTests } from '../services/sessionEvents.js'
+import {
+  addTurnChangeListener,
+  observeSessionSdkMessage,
+  resetDispatchReceipts,
+} from '../services/dispatchReceiptService.js'
+import { beginTurn } from '../services/sessionRegistry.js'
 
 function makeClientSocket(sessionId: string) {
   const sent: string[] = []
@@ -972,5 +990,105 @@ describe('prewarm idle timer active-turn guard (issue #865 follow-up)', () => {
     fire()
 
     expect(stopSession).toHaveBeenCalledWith(sessionId)
+  })
+})
+
+// ── R4a/R4b（v1.3.1 整批复核）─────────────────────────────────────────────
+// 方案 §7c 清单要求「rebind 触发时序新测试」此前未落地；rebind 订阅与
+// servant_turn_changed 广播订阅是模块顶层一次性注册——被
+// resetSessionEventsForTests / resetDispatchReceipts 清空后静默失效。
+// ensure 模式 + 活性测试一并收口。
+describe('rebind on phase_changed(→running) (7b, R4a/R4b)', () => {
+  // 全量下先跑的文件（session-* 系列）会清空事件总线/回执监听集——不 ensure
+  // 则首条测试复现「静默失效」（实测全量红、单文件绿）；ensure 后恢复。
+  beforeEach(() => {
+    ensureRebindOnRunningSubscribed()
+    ensureTurnChangeBroadcastSubscribed()
+  })
+
+  afterEach(() => {
+    __resetWebSocketHandlerStateForTests()
+    mock.restore()
+    resetDispatchReceipts()
+  })
+
+  it('rebinds client output when the session phase flips to running', () => {
+    const sessionId = `rebind-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    handleWebSocket.open(ws)
+
+    const onOutput = spyOn(conversationService, 'onOutput').mockImplementation(() => () => {})
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+
+    // 合法迁移时序：registered → starting → running（事件在 markRunning 发出）
+    registerSession(sessionId)
+    markStarting(sessionId)
+    onOutput.mockClear()
+    markRunning(sessionId)
+
+    expect(onOutput).toHaveBeenCalledWith(sessionId, expect.any(Function))
+  })
+
+  it('still rebinds after resetSessionEventsForTests cleared the bus (R4b liveness)', () => {
+    resetSessionEventsForTests()
+    ensureRebindOnRunningSubscribed() // ensure：被清后重调即恢复
+
+    const sessionId = `rebind-liveness-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    handleWebSocket.open(ws)
+
+    const onOutput = spyOn(conversationService, 'onOutput').mockImplementation(() => () => {})
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+
+    registerSession(sessionId)
+    markStarting(sessionId)
+    onOutput.mockClear()
+    markRunning(sessionId)
+
+    expect(onOutput).toHaveBeenCalledWith(sessionId, expect.any(Function))
+  })
+
+  // v1.4.0 阶段2 · 9：桥接侧静默心跳帧——登记为已知类型，静默忽略（不回
+  // UNKNOWN_TYPE error、不回包），消除无意义告警。
+  it('silently ignores keep_alive frames instead of answering UNKNOWN_TYPE', () => {
+    const sessionId = `keepalive-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    handleWebSocket.open(ws)
+    ws.sent.length = 0
+
+    handleWebSocket.message(ws, JSON.stringify({ type: 'keep_alive' }))
+
+    const errors = ws.sent
+      .map((payload) => JSON.parse(payload) as { type?: string; code?: string })
+      .filter((m) => m.type === 'error' && m.code === 'UNKNOWN_TYPE')
+    expect(errors).toHaveLength(0)
+    expect(ws.sent).toHaveLength(0)
+  })
+
+  it('broadcasts servant_turn_changed to the global channel via the ensure-resubscribed listener (R4b liveness)', () => {
+    // 模拟先跑文件清掉广播订阅（resetDispatchReceipts 清 addTurnChangeListener
+    // 的 Set），ensure 重调恢复后回合翻转仍能广播到 _events 通道。
+    resetDispatchReceipts()
+    ensureTurnChangeBroadcastSubscribed()
+
+    const eventsSocket = makeClientSocket(GLOBAL_EVENTS_SESSION_ID)
+    handleWebSocket.open(eventsSocket)
+    eventsSocket.sent.length = 0
+
+    const sessionId = `turn-broadcast-${crypto.randomUUID()}`
+    registerSession(sessionId)
+    const off = addTurnChangeListener((id, inProgress) => {
+      if (id === sessionId) void inProgress
+    })
+    off()
+
+    beginTurn(sessionId, { awaitSend: false })
+    observeSessionSdkMessage(sessionId, 'assistant', Date.now())
+
+    const turns = eventsSocket.sent
+      .map((payload) => JSON.parse(payload) as { type: string; subtype?: string; data?: { sessionId?: string; turnInProgress?: boolean } })
+      .filter((m) => m.subtype === 'servant_turn_changed' && m.data?.sessionId === sessionId)
+    expect(turns.length).toBe(1)
+    expect(turns[0].data?.turnInProgress).toBe(true)
   })
 })

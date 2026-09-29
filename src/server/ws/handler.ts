@@ -22,6 +22,20 @@ import {
 } from '../services/conversationService.js'
 import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
 import {
+  beginTurn,
+  clearSession,
+  getSessionSnapshot,
+  hasActiveTurn,
+  isTurnMessageSent,
+  markTurnSent,
+  observeTurnResult,
+  registerSession,
+  resetRegistryForTests,
+  settleTurnIfOwner,
+  type TurnHandle,
+} from '../services/sessionRegistry.js'
+import { onSessionEvent, type SessionEvent } from '../services/sessionEvents.js'
+import {
   sessionService,
   type SessionTaskNotification,
 } from '../services/sessionService.js'
@@ -123,15 +137,35 @@ type RuntimeOverride = {
   effort?: string
 }
 
-type ActiveUserTurnState = {
-  messageSent: boolean
-}
-
 const runtimeOverrides = new Map<string, RuntimeOverride>()
-const activeUserTurns = new Map<string, ActiveUserTurnState>()
 const activeBackgroundTaskIds = new Map<string, Set<string>>()
 const deferredRuntimeRestarts = new Map<string, RuntimeOverride>()
 const deferredPermissionModes = new Map<string, PermissionMode>()
+
+/**
+ * 确保会话已在 registry 登记（幂等）：阶段 1 只收 turn，turn 生命周期尚不依赖
+ * registry 的 phase 接线（阶段 2/3 统一登记来源），因此 turn 建立前先补登记，
+ * 与旧行为「activeUserTurns 无条件 set（不论会话是否在 conversationService）」对齐。
+ */
+function ensureSessionRegistered(sessionId: string): void {
+  registerSession(sessionId)
+}
+
+/**
+ * 替换式建回合（WS user_message 语义保真）：旧行为是 activeUserTurns.set 直接
+ * 覆盖——同 session 并发第二条 user_message 会让新 turn 顶掉旧 turn，且旧
+ * handler 的收尾比对随之失效（websocket-handler 测试锁定的 replacement 语义）。
+ * registry 的 beginTurn 是幂等拒绝语义，故先按快照 owner 结束旧回合再建新回合，
+ * 等价还原「无条件 set 覆盖」。注入路径（beginInjectedUserTurn）不受此影响——
+ * 其幂等语义由 v1.2.6 测试锁定，保持 beginTurn 原样。
+ */
+function beginTurnReplacing(sessionId: string, awaitSend: boolean): TurnHandle | null {
+  const prevOwner = getSessionSnapshot(sessionId)?.turnOwner ?? null
+  if (prevOwner !== null) {
+    settleTurnIfOwner(sessionId, { identity: prevOwner, abort: () => {}, settle: () => {} })
+  }
+  return beginTurn(sessionId, { awaitSend })
+}
 
 export type SessionChatActivityState =
   | 'waiting'
@@ -248,7 +282,7 @@ export function getSessionChatActivityState(sessionId: string): SessionChatActiv
   ) {
     return 'waiting'
   }
-  if (activeUserTurns.has(sessionId) || hasActiveBackgroundTasks(sessionId)) return 'running'
+  if (hasActiveTurn(sessionId) || hasActiveBackgroundTasks(sessionId)) return 'running'
   return terminalSessionChatStates.get(sessionId)
     ?? (legacyQueuedSessionChats.has(sessionId) ? 'running' : 'idle')
 }
@@ -441,8 +475,8 @@ export const handleWebSocket = {
 
       switch (message.type) {
         case 'user_message': {
-          const activeTurn: ActiveUserTurnState = { messageSent: false }
-          handleUserMessage(ws, message, activeTurn).catch((err) => {
+          const turnRef: { current: TurnHandle | null } = { current: null }
+          handleUserMessage(ws, message, turnRef).catch((err) => {
             const sessionId = ws.data.sessionId
             void diagnosticsService.recordEvent({
               type: 'ws_user_message_failed',
@@ -455,9 +489,13 @@ export const handleWebSocket = {
             // A queued/newer turn may have replaced this handler while an
             // earlier await was pending. Only the handler that still owns the
             // active-turn token may terminate the desktop state.
-            if (activeUserTurns.get(sessionId) === activeTurn) {
+            const handle = turnRef.current
+            if (
+              handle !== null &&
+              getSessionSnapshot(sessionId)?.turnOwner === handle.identity
+            ) {
               failSessionChatActivity(sessionId)
-              clearActiveUserTurn(sessionId, activeTurn)
+              settleTurnIfOwner(sessionId, handle)
               const titleState = sessionTitleState.get(sessionId)
               if (titleState) titleState.activeTurn = undefined
               sendMessage(ws, {
@@ -511,6 +549,12 @@ export const handleWebSocket = {
 
         case 'ping':
           sendMessage(ws, { type: 'pong' })
+          break
+
+        case 'keep_alive':
+          // 桥接侧的静默心跳帧（replBridge 定期推送，供代理/中间层保活）。
+          // v1.4.0 阶段2 · 9：登记为已知类型静默忽略（不回包、不告警）——
+          // 此前落 default 分支被当未知消息回 UNKNOWN_TYPE error。
           break
 
         default:
@@ -580,7 +624,7 @@ export const handleWebSocket = {
 async function handleUserMessage(
   ws: ServerWebSocket<WebSocketData>,
   message: Extract<ClientMessage, { type: 'user_message' }>,
-  activeTurn: ActiveUserTurnState,
+  turnRef: { current: TurnHandle | null },
 ) {
   const { sessionId } = ws.data
 
@@ -608,11 +652,12 @@ async function handleUserMessage(
   // Send thinking status
   sendMessage(ws, { type: 'status', state: 'thinking', verb: 'Thinking' })
 
-  activeUserTurns.set(sessionId, activeTurn)
+  ensureSessionRegistered(sessionId)
+  turnRef.current = beginTurnReplacing(sessionId, true)
 
   const initialRuntimeTransition = await waitForRuntimeTransitionBeforeUserTurn(ws, sessionId)
   if (!initialRuntimeTransition.ok) {
-    clearActiveUserTurn(sessionId, activeTurn)
+    if (turnRef.current) settleTurnIfOwner(sessionId, turnRef.current)
     return
   }
   if (initialRuntimeTransition.waited) {
@@ -665,7 +710,7 @@ async function handleUserMessage(
     })
     sendMessage(ws, { type: 'status', state: 'idle' })
     failSessionChatActivity(sessionId)
-    clearActiveUserTurn(sessionId, activeTurn)
+    if (turnRef.current) settleTurnIfOwner(sessionId, turnRef.current)
     return
   }
 
@@ -675,7 +720,7 @@ async function handleUserMessage(
       sendMessage(ws, { type: 'status', state: 'thinking', verb: 'Thinking' })
     }
   } else {
-    clearActiveUserTurn(sessionId, activeTurn)
+    if (turnRef.current) settleTurnIfOwner(sessionId, turnRef.current)
     return
   }
 
@@ -697,7 +742,12 @@ async function handleUserMessage(
       return shouldForwardCurrentTurnLocalCommand(cliMsg)
     },
   })
-  const removeActiveTurnOutputCallback = bindActiveUserTurnCompletion(ws, sessionId, activeTurn)
+  const removeActiveTurnOutputCallback = bindActiveUserTurnCompletion(
+    ws,
+    sessionId,
+    () => userMessageSent,
+    turnRef,
+  )
 
   // The renderer may have left while the CLI was still starting, before this
   // turn could flip messageSent=true. The disconnect handler cannot attach an
@@ -713,7 +763,7 @@ async function handleUserMessage(
   )
   if (!sent) {
     removeActiveTurnOutputCallback()
-    clearActiveUserTurn(sessionId, activeTurn)
+    if (turnRef.current) settleTurnIfOwner(sessionId, turnRef.current)
     removeTitleOutputCallback?.()
     discardActiveTitleTurn(sessionId, titleTurnNumber)
     sendMessage(ws, {
@@ -727,91 +777,49 @@ async function handleUserMessage(
   }
 
   userMessageSent = true
-  activeTurn.messageSent = true
+  if (turnRef.current) markTurnSent(sessionId, turnRef.current)
 }
-
-function clearActiveUserTurn(sessionId: string, activeTurn: ActiveUserTurnState): void {
-  if (activeUserTurns.get(sessionId) === activeTurn) {
-    activeUserTurns.delete(sessionId)
-  }
-}
-
-/** 注入回合句柄：sendMessage 失败时对称清理（否则 turn 泄漏 → interrupt 永久 busy） */
-export type InjectedTurnHandle = { abort: () => void }
-
-const injectedTurnCleanups = new Map<string, () => void>()
 
 /**
- * 注入式回合（文件信箱 / HTTP 派活与汇报）的 turn 建立：这些路径不经 WS
- * 用户消息处理，此前从不 set activeUserTurns → interrupt 报 "already idle"、
- * stall watcher 与 runtime-restart defer 全部误判（会话冻结根因报告 §2.3 环节 C）。
- *
- * 建轻量 turn（messageSent=true：注入消息即刻送达 CLI）并挂 result 监听清理；
- * WS 路径的 deferred 权限/重启收尾不适用（无 WS 客户端），跳过。
- * 幂等：该会话已有活跃 turn 时返回 null、不覆盖、不重复挂监听。
+ * v1.3.0 阶段4 · 7b：注入回合建立（beginInjectedUserTurn）与清理登记
+ * （injectedTurnCleanups / resetInjectedTurnsForTests）已迁至
+ * services/sessionMessenger.ts——sessionMessenger 不再动态 import 本模块，
+ * services → ws 的反向边消失。本模块只保留传输层补绑：订阅
+ * phase_changed(→running) 事件自触发 rebindClientOutputForSession。
  */
-export function beginInjectedUserTurn(sessionId: string): InjectedTurnHandle | null {
-  if (activeUserTurns.has(sessionId)) return null
-  const activeTurn: ActiveUserTurnState = { messageSent: true }
-  activeUserTurns.set(sessionId, activeTurn)
-  void diagnosticsService
-    .recordEvent({
-      type: 'turn_started',
-      severity: 'info',
-      summary: 'Injected user turn started',
-      sessionId,
-      details: { sessionId, source: 'injected' },
-    })
-    .catch(() => {})
-  const cleanup = () => {
-    conversationService.removeOutputCallback(sessionId, callback)
-    injectedTurnCleanups.delete(sessionId)
-    if (activeUserTurns.get(sessionId) === activeTurn) {
-      clearActiveUserTurn(sessionId, activeTurn)
-    }
-  }
-  const callback: SessionOutputCallback = (cliMsg: any) => {
-    if (cliMsg?.type !== 'result') return
-    cleanup()
-    void diagnosticsService
-      .recordEvent({
-        type: 'turn_finished',
-        severity: 'info',
-        summary: 'Injected user turn finished',
-        sessionId,
-        details: {
-          sessionId,
-          source: 'injected',
-          is_error: cliMsg.is_error === true,
-        },
-      })
-      .catch(() => {})
-  }
-  conversationService.onOutput(sessionId, callback)
-  injectedTurnCleanups.set(sessionId, cleanup)
-  return { abort: cleanup }
+function rebindOnRunningHandler(event: SessionEvent): void {
+  if (event.type !== 'phase_changed' || event.to !== 'running') return
+  rebindClientOutputForSession(event.sessionId)
 }
 
-/** 测试收尾：清理全部注入回合（测试环境无 WS turn，不会误伤） */
-export function resetInjectedTurnsForTests(): void {
-  for (const cleanup of [...injectedTurnCleanups.values()]) cleanup()
-  injectedTurnCleanups.clear()
+/**
+ * R4b 收口（v1.3.1）：本订阅此前是模块顶层一次性注册——先跑的测试文件调
+ * resetSessionEventsForTests() 清空总线后静默失效（与崩溃观察者/补偿订阅同
+ * 族）。ensure 模式：handler 为模块级稳定引用，onSessionEvent 按 handler 引用
+ * 去重 → 重复调用幂等，被清后重调即恢复。消费方（websocket-handler.test.ts）
+ * 每次调用并跑活性自检。
+ */
+export function ensureRebindOnRunningSubscribed(): void {
+  onSessionEvent(rebindOnRunningHandler, { types: ['phase_changed'] })
 }
+
+ensureRebindOnRunningSubscribed()
 
 function bindActiveUserTurnCompletion(
   ws: ServerWebSocket<WebSocketData>,
   sessionId: string,
-  activeTurn: ActiveUserTurnState,
+  isTurnMessageSentNow: () => boolean,
+  turnRef: { current: TurnHandle | null },
 ): () => void {
   const callback = (cliMsg: any) => {
     if (
       cliMsg?.type !== 'result' ||
-      (!activeTurn.messageSent && !cliMsg.is_error)
+      (!isTurnMessageSentNow() && !cliMsg.is_error)
     ) return
 
     settleSessionChatActivity(sessionId, cliMsg)
     conversationService.removeOutputCallback(sessionId, callback)
-    clearActiveUserTurn(sessionId, activeTurn)
+    if (turnRef.current) settleTurnIfOwner(sessionId, turnRef.current)
     // Structurally disarm any prewarm idle timer that a concurrent
     // prewarm_session/user_message flush may have armed on this session: once a
     // turn completes the session is firmly user-owned, so no prewarm reaper
@@ -826,7 +834,7 @@ function bindActiveUserTurnCompletion(
 }
 
 function shouldDeferRuntimeRestartForActiveTurn(sessionId: string): boolean {
-  return activeUserTurns.get(sessionId)?.messageSent === true
+  return isTurnMessageSent(sessionId)
 }
 
 function applyDeferredPermissionModeAfterActiveTurn(
@@ -1333,7 +1341,7 @@ async function restartSessionWithRuntimeConfig(
  * 返回 stopped=false 表示当前没有进行中的轮次（会话空闲或未运行）。
  */
 export function interruptSessionRuntime(sessionId: string): { stopped: boolean } {
-  const stoppedTurn = activeUserTurns.get(sessionId)
+  const stoppedTurnOwner = getSessionSnapshot(sessionId)?.turnOwner ?? null
   console.log(`[WS] Stop generation requested for session: ${sessionId}`)
 
   sessionStopRequested.add(sessionId)
@@ -1342,7 +1350,7 @@ export function interruptSessionRuntime(sessionId: string): { stopped: boolean }
   interruptedSessionChats.add(sessionId)
 
   const stopped = Boolean(
-    stoppedTurn && conversationService.hasSession(sessionId),
+    stoppedTurnOwner !== null && conversationService.hasSession(sessionId),
   )
   if (stopped) {
     // First try graceful interrupt via SDK control message
@@ -1352,7 +1360,8 @@ export function interruptSessionRuntime(sessionId: string): { stopped: boolean }
     setTimeout(() => {
       if (
         sessionStopRequested.has(sessionId) &&
-        activeUserTurns.get(sessionId) === stoppedTurn &&
+        stoppedTurnOwner !== null &&
+        getSessionSnapshot(sessionId)?.turnOwner === stoppedTurnOwner &&
         conversationService.hasSession(sessionId)
       ) {
         console.log(`[WS] Force-killing CLI subprocess for session: ${sessionId}`)
@@ -1694,7 +1703,7 @@ function cleanupSessionRuntimeState(sessionId: string) {
   sessionSlashCommands.delete(sessionId)
   sessionTitleState.delete(sessionId)
   runtimeOverrides.delete(sessionId)
-  activeUserTurns.delete(sessionId)
+  clearSession(sessionId)
   sessionStopRequested.delete(sessionId)
   activeBackgroundTaskIds.delete(sessionId)
   terminalSessionChatStates.delete(sessionId)
@@ -2542,15 +2551,16 @@ function getDisconnectCleanupDelayMs(sessionId: string): number {
 
 /**
  * Whether a user turn has been registered for this session and not yet settled,
- * INCLUDING the CLI-startup window before messageSent flips true. handleUserMessage
- * registers the turn in its synchronous prefix (activeUserTurns.set), well before
- * the message is actually sent. Checking the registration is not blind to that
- * window, so the prewarm idle timer can neither arm on nor fire against a
- * session a user turn has already claimed — even when a concurrent
- * prewarm_session/user_message flush inverts their ordering.
+ * INCLUDING the CLI-startup window before the message is actually sent.
+ * handleUserMessage registers the turn in its synchronous prefix (registry
+ * beginTurn), well before the message is actually sent. Checking the
+ * registration is not blind to that window, so the prewarm idle timer can
+ * neither arm on nor fire against a session a user turn has already claimed —
+ * even when a concurrent prewarm_session/user_message flush inverts their
+ * ordering.
  */
 function hasPendingOrActiveUserTurn(sessionId: string): boolean {
-  return activeUserTurns.has(sessionId)
+  return hasActiveTurn(sessionId)
 }
 
 /**
@@ -3495,14 +3505,26 @@ export function broadcastGlobalEvent(message: ServerMessage): number {
 }
 
 // 回合翻转 → 全局事件广播。状态源与花名册 turnInProgress 完全同源
-// （dispatchReceiptService.sessionMidTurn），前端收到即可局部更新，免等轮询。
-addTurnChangeListener((sessionId, turnInProgress) => {
+// （dispatchReceiptService.turnActiveBroadcast 观察流），前端收到即可局部
+// 更新，免等轮询。
+function broadcastTurnChangeListener(sessionId: string, turnInProgress: boolean): void {
   broadcastGlobalEvent({
     type: 'system_notification',
     subtype: 'servant_turn_changed',
     data: { sessionId, turnInProgress },
   })
-})
+}
+
+/**
+ * R4b 收口（v1.3.1）：同 ensureRebindOnRunningSubscribed——被
+ * resetDispatchReceipts（清 addTurnChangeListener 的 Set）清掉后可重调恢复。
+ * Set 直接存函数引用，同一稳定引用天然去重幂等。
+ */
+export function ensureTurnChangeBroadcastSubscribed(): void {
+  addTurnChangeListener(broadcastTurnChangeListener)
+}
+
+ensureTurnChangeBroadcastSubscribed()
 
 export function updateSessionSlashCommands(
   sessionId: string,
@@ -3591,7 +3613,7 @@ export function __resetWebSocketHandlerStateForTests(): void {
   prewarmPendingSessions.clear()
   prewarmedSessions.clear()
   prewarmIdleTimers.clear()
-  activeUserTurns.clear()
+  resetRegistryForTests()
   activeBackgroundTaskIds.clear()
   sessionStopRequested.clear()
   terminalSessionChatStates.clear()
@@ -3606,22 +3628,26 @@ export function __markPrewarmPendingForTests(sessionId: string): void {
 /** Test hook: mark a session as mid-turn so disconnect keeps the CLI alive. */
 export function __markActiveTurnForTests(sessionId: string): void {
   beginSessionChatActivity(sessionId)
-  activeUserTurns.set(sessionId, { messageSent: true })
+  ensureSessionRegistered(sessionId)
+  beginTurnReplacing(sessionId, false)
 }
 
 /**
  * Test hook: register a user turn still in the pre-send (messageSent:false)
- * window — i.e. the CLI-startup window before messageSent becomes true.
+ * window — i.e. the CLI-startup window before the message is actually sent.
  */
 export function __registerPendingUserTurnForTests(sessionId: string): void {
   beginSessionChatActivity(sessionId)
-  activeUserTurns.set(sessionId, { messageSent: false })
+  ensureSessionRegistered(sessionId)
+  beginTurnReplacing(sessionId, true)
 }
 
 /** Test hook: settle a registered turn through the same CLI-result seam. */
 export function __settleActiveTurnForTests(sessionId: string, cliMsg: any): void {
   settleSessionChatActivity(sessionId, cliMsg)
-  activeUserTurns.delete(sessionId)
+  const owner = getSessionSnapshot(sessionId)?.turnOwner ?? null
+  const handle = owner === null ? null : { identity: owner, abort: () => {}, settle: () => {} }
+  if (handle) settleTurnIfOwner(sessionId, handle)
 }
 
 /** Test hook: simulate CLI startup completing after the last client left. */

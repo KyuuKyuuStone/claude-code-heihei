@@ -4,11 +4,19 @@
  * 启动真实服务器，模拟 UI 前端的完整操作流程。
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'bun:test'
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'bun:test'
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import * as os from 'os'
 import { fileURLToPath } from 'node:url'
+// 污染族治理（2026-09-28）：本套件开真实 WebSocket，依赖 handler.ts 两处顶层
+// 订阅（rebind-on-running / servant_turn_changed 广播）；它们在首个导入者处注册，
+// 先跑文件 resetSessionEventsForTests / resetDispatchReceipts 会清掉——被清后本
+// 套件拿到的是死的模块缓存订阅。ensure 幂等，重调即恢复（同 conversations.test.ts）。
+import {
+  ensureRebindOnRunningSubscribed,
+  ensureTurnChangeBroadcastSubscribed,
+} from '../../ws/handler.js'
 
 let server: ReturnType<typeof Bun.serve>
 let baseUrl: string
@@ -97,6 +105,11 @@ async function api(method: string, path: string, body?: unknown): Promise<{ stat
 }
 
 describe('E2E: Full Flow', () => {
+  beforeEach(() => {
+    ensureRebindOnRunningSubscribed()
+    ensureTurnChangeBroadcastSubscribed()
+  })
+
   beforeAll(async () => {
     await startTestServer()
   })

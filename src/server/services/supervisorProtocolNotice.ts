@@ -32,6 +32,27 @@ function buildProtocolNotice(): string {
   ].join('\n')
 }
 
+/**
+ * 依赖注入缝（v1.3.0 阶段4：替代跨文件不安全的 mock.module，模式同
+ * servantIncidentNotifier 的 setServantIncidentDeps）。传 null 恢复默认。
+ */
+export type SupervisorNoticeDeps = {
+  listServants: typeof servantService.listServants
+  deliver: (targetSessionId: string, content: string, serverHost: string) => Promise<boolean>
+}
+
+const defaultDeps: SupervisorNoticeDeps = {
+  listServants: (options) => servantService.listServants(options),
+  deliver: (targetSessionId, content, serverHost) =>
+    sessionMessenger.deliver(targetSessionId, content, serverHost),
+}
+
+let noticeDeps: SupervisorNoticeDeps = defaultDeps
+
+export function setSupervisorNoticeDeps(overrides: Partial<SupervisorNoticeDeps> | null): void {
+  noticeDeps = overrides ? { ...defaultDeps, ...overrides } : defaultDeps
+}
+
 export async function notifySupervisorsOfProtocolUpdate(): Promise<void> {
   const markerPath = noticeMarkerPath()
   try {
@@ -43,7 +64,7 @@ export async function notifySupervisorsOfProtocolUpdate(): Promise<void> {
 
   let supervisors: Array<{ sessionId: string }> = []
   try {
-    const all = await servantService.listServants({ includeAll: true })
+    const all = await noticeDeps.listServants({ includeAll: true })
     supervisors = all.filter((s) => s.supervisor)
   } catch (error) {
     console.warn(
@@ -62,7 +83,7 @@ export async function notifySupervisorsOfProtocolUpdate(): Promise<void> {
   let delivered = 0
   for (const supervisor of supervisors) {
     try {
-      const ok = await sessionMessenger.deliver(supervisor.sessionId, notice, '127.0.0.1:0')
+      const ok = await noticeDeps.deliver(supervisor.sessionId, notice, '127.0.0.1:0')
       if (ok) delivered++
     } catch (error) {
       console.warn(

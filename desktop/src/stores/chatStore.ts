@@ -127,6 +127,12 @@ export type PerSessionState = {
   streamAttemptStartIndex?: number
   streamAttemptStartResponseChars?: number
   elapsedSeconds: number
+  /**
+   * 当前回合的开始时刻（ms）。读秒由 StreamingIndicator 本地计时器从该
+   * 时间戳推算——store 不再每秒 set（v1.3.2 实测：可见但失焦时 1s tick
+   * 仍全速重建 sessions map，触发 Sidebar/ActiveSession 全量重渲染）。
+   */
+  turnStartedAt?: number | null
   statusVerb: string
   apiRetry?: ApiRetryState | null
   // 流式恢复/非流式降级提示（活动回合状态，与 apiRetry 同清除时机）。
@@ -170,6 +176,7 @@ const DEFAULT_SESSION_STATE: PerSessionState = {
   compactCount: 0,
   streamingResponseChars: 0,
   elapsedSeconds: 0,
+  turnStartedAt: null,
   statusVerb: '',
   apiRetry: null,
   streamingFallback: null,
@@ -1302,12 +1309,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
       if (!isMemberSession && session.elapsedTimer) clearInterval(session.elapsedTimer)
 
-      const timer = !isMemberSession
-        ? setInterval(() => {
-            set((st) => ({ sessions: updateSessionIn(st.sessions, sessionId, (sess) => ({ elapsedSeconds: sess.elapsedSeconds + 1 })) }))
-          }, 1000)
-        : null
-
       return {
         sessions: {
           ...s.sessions,
@@ -1316,6 +1317,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             messages: newMessages,
             chatState: 'thinking',
             elapsedSeconds: 0,
+            turnStartedAt: isMemberSession ? null : now,
             suppressNextTaskNotificationResponse: false,
             replaceHistoryOnCompletion: false,
             streamingText: '',
@@ -1323,7 +1325,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             statusVerb: isMemberSession ? '' : randomSpinnerVerb(),
             apiRetry: null,
             streamingFallback: null,
-            elapsedTimer: timer,
+            elapsedTimer: null,
             connectionState: isMemberSession ? 'connected' : session.connectionState,
           },
         },
@@ -1460,6 +1462,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             streamingFallback: null,
             suppressNextTaskNotificationResponse: false,
             elapsedTimer: null,
+            turnStartedAt: null,
           },
         },
       }
@@ -1622,6 +1625,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             pendingComputerUsePermission: null,
             pendingComputerUsePermissions: {},
             elapsedTimer: null,
+            turnStartedAt: null,
             statusVerb: '',
             apiRetry: null,
             streamingFallback: null,
@@ -1821,23 +1825,20 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const update = (updater: (session: PerSessionState) => Partial<PerSessionState>) => {
       set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, updater) }))
     }
-    const ensureElapsedTimer = () => {
+    const ensureTurnStartedAt = () => {
       const session = get().sessions[sessionId]
-      if (!session || session.elapsedTimer) return
-      const timer = setInterval(() => {
-        set((st) => ({
-          sessions: updateSessionIn(st.sessions, sessionId, (sess) => ({
-            elapsedSeconds: sess.elapsedSeconds + 1,
-          })),
-        }))
-      }, 1000)
-      update(() => ({ elapsedTimer: timer }))
+      // 只记录回合开始时刻，不再起 1s interval 每秒 set——读秒由
+      // StreamingIndicator 本地计时器从该时间戳推算（v1.3.2 实测：可见但
+      // 失焦时 store 级 tick 仍每秒触发全量订阅方重渲染，document.hidden
+      // 不覆盖「失焦但可见」场景）。
+      if (!session || session.turnStartedAt != null) return
+      update(() => ({ turnStartedAt: Date.now() }))
     }
-    const clearElapsedTimer = () => {
+    const clearTurnClock = () => {
       const session = get().sessions[sessionId]
-      if (!session?.elapsedTimer) return
-      clearInterval(session.elapsedTimer)
-      update(() => ({ elapsedTimer: null }))
+      if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
+      if (!session || (session.elapsedTimer == null && session.turnStartedAt == null)) return
+      update(() => ({ elapsedTimer: null, turnStartedAt: null }))
     }
 
     switch (msg.type) {
@@ -1890,7 +1891,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             }
           })
           useTabStore.getState().updateTabStatus(sessionId, 'running')
-          ensureElapsedTimer()
+          ensureTurnStartedAt()
           void get().loadHistory(sessionId)
           break
         }
@@ -1914,6 +1915,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           pendingPermission: null,
           pendingComputerUsePermission: null,
           elapsedTimer: null,
+          turnStartedAt: null,
           statusVerb: '',
           apiRetry: null,
           streamingFallback: null,
@@ -1985,9 +1987,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             } : pendingText !== session.streamingText ? { streamingText: pendingText } : {}),
           }
         })
-        if (msg.state !== 'idle') ensureElapsedTimer()
+        if (msg.state !== 'idle') ensureTurnStartedAt()
         if (msg.state === 'idle') {
-          clearElapsedTimer()
+          clearTurnClock()
         }
         // Sync tab status
         useTabStore.getState().updateTabStatus(
@@ -2070,7 +2072,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             streamingFallback: null,
           }))
         }
-        ensureElapsedTimer()
+        ensureTurnStartedAt()
         break
       }
 
@@ -2092,7 +2094,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           activeThinkingId: null,
           statusVerb: '',
         }))
-        ensureElapsedTimer()
+        ensureTurnStartedAt()
         useTabStore.getState().updateTabStatus(sessionId, 'running')
         break
       }
@@ -2135,7 +2137,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               statusVerb: '',
             }
           })
-          ensureElapsedTimer()
+          ensureTurnStartedAt()
           useTabStore.getState().updateTabStatus(sessionId, 'running')
           break
         }
@@ -2152,7 +2154,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           activeThinkingId: null,
           statusVerb: '',
         }))
-        ensureElapsedTimer()
+        ensureTurnStartedAt()
         useTabStore.getState().updateTabStatus(sessionId, 'running')
         break
       }
@@ -2217,7 +2219,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             toolInputFlushTimerBySession.set(sessionId, timer)
           }
         }
-        if (receivedLiveDelta && get().sessions[sessionId]?.chatState !== 'idle') ensureElapsedTimer()
+        if (receivedLiveDelta && get().sessions[sessionId]?.chatState !== 'idle') ensureTurnStartedAt()
         break
 
       case 'thinking': {
@@ -2274,7 +2276,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             streamingResponseChars: s.streamingResponseChars + msg.text.length,
           }
         })
-        if (!skippedThinkingBlock) ensureElapsedTimer()
+        if (!skippedThinkingBlock) ensureTurnStartedAt()
         break
       }
 
@@ -2542,6 +2544,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             pendingComputerUsePermission: null,
             pendingComputerUsePermissions: {},
             elapsedTimer: null,
+            turnStartedAt: null,
             apiRetry: null,
             streamingFallback: null,
             streamingText: '',
@@ -2587,6 +2590,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           pendingComputerUsePermission: null,
           pendingComputerUsePermissions: {},
           elapsedTimer: null,
+          turnStartedAt: null,
           apiRetry: null,
           streamingFallback: null,
           replaceHistoryOnCompletion: false,
@@ -2669,9 +2673,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         useTabStore.getState().updateTabStatus(sessionId, 'error')
         {
           const session = get().sessions[sessionId]
-          if (session?.elapsedTimer) {
-            clearInterval(session.elapsedTimer)
-            update(() => ({ elapsedTimer: null }))
+          if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
+          if (session && (session.elapsedTimer != null || session.turnStartedAt != null)) {
+            update(() => ({ elapsedTimer: null, turnStartedAt: null }))
           }
         }
         break
@@ -2749,6 +2753,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             pendingComputerUsePermissions: {},
             chatState: 'idle',
             elapsedTimer: null,
+            turnStartedAt: null,
             elapsedSeconds: 0,
             statusVerb: '',
             apiRetry: null,

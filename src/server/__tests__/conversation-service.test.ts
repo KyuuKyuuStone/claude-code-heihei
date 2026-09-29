@@ -8,8 +8,20 @@ import {
   DESKTOP_CLI_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
 } from '../services/conversationService.js'
 import { ProviderService } from '../services/providerService.js'
+// v1.3.0 阶段2（5d）：crashed 生命周期接线——直插 session 的用例需 registry 前置
+import {
+  markRunning,
+  markStarting,
+  registerSession,
+  resetRegistryForTests,
+} from '../services/sessionRegistry.js'
 import { updateTraceCaptureSettings } from '../services/traceCaptureService.js'
 import { resetTerminalShellEnvironmentCacheForTests } from '../../utils/terminalShellEnvironment.js'
+// v1.3.0 阶段4 · 7a：花名册查询走 servantInfoSource 注入点——测试环境模拟
+// index.ts 启动装配（经 servantService 读真实花名册文件，与生产装配一致）
+import { registerServantInfoSource } from '../services/servantInfoSource.js'
+import { servantService } from '../services/servantService.js'
+registerServantInfoSource((sessionId) => servantService.getServant(sessionId))
 
 describe('ConversationService', () => {
   let tmpDir: string
@@ -96,6 +108,7 @@ describe('ConversationService', () => {
   })
 
   afterEach(async () => {
+    resetRegistryForTests()
     if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
     else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
 
@@ -1443,6 +1456,13 @@ describe('ConversationService', () => {
       sdkMessages: [],
       pendingPermissionRequests: new Map(),
     })
+    // v1.3.0 阶段2（5d）：进程退出 → markCrashed（crashed 中间态，元数据保留）。
+    // 该测试直插 session 对象绕过 startSession 的 registry 登记，故此处补
+    // 登记+running（生产路径由 startSession 保证），使 hasSession 的
+    // 「crashed 按无进程处理」语义可被断言。
+    registerSession(sessionId)
+    markStarting(sessionId)
+    markRunning(sessionId)
 
     await service.handleProcessExit(sessionId, proc, 1)
 

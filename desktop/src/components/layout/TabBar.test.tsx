@@ -170,6 +170,15 @@ vi.mock('./WindowControls', () => ({
   },
 }))
 
+// 穿透式 spy：保留真实实现，仅用于断言模型重建次数（见 elapsed tick 回归用例）。
+vi.mock('../activity/sessionActivityModel', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../activity/sessionActivityModel')>()
+  return {
+    ...actual,
+    buildSessionActivityModel: vi.fn(actual.buildSessionActivityModel),
+  }
+})
+
 describe('TabBar', () => {
   const installElectronDesktopHost = () => {
     window.desktopHost = {
@@ -373,6 +382,74 @@ describe('TabBar', () => {
     })
 
     expect(screen.queryByRole('button', { name: /activity/i })).not.toBeInTheDocument()
+  })
+
+  it('does not rebuild the activity model when only the elapsed timer ticks', async () => {
+    // v1.3.1 实测缺陷回归：elapsedTimer 每秒 set() 会重建 session 对象，
+    // 此前 buildSessionActivityModel 写在 useChatStore selector 里，每次 tick
+    // 都对全部消息做多趟 O(N) 扫描——4370 条消息的会话在后台每秒烧约一个核。
+    // 修复后仅当 messages/backgroundAgentTasks/agentTaskNotifications 等真实
+    // 输入的引用变化时才重建模型；tick（只动 elapsedSeconds）不得触发重建。
+    const { TabBar } = await import('./TabBar')
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { useChatStore } = await import('../../stores/chatStore')
+    const { useSessionStore } = await import('../../stores/sessionStore')
+    const { buildSessionActivityModel } = await import('../activity/sessionActivityModel')
+    const buildSpy = vi.mocked(buildSessionActivityModel)
+    const sessionId = 'session-1'
+    const chatSession = makeChatSession('thinking')
+    chatSession.messages = [completedTodoWriteMessage()]
+
+    useTabStore.setState({
+      tabs: [{ sessionId, title: 'Chat', type: 'session', status: 'running' }],
+      activeTabId: sessionId,
+    })
+    useSessionStore.setState({
+      sessions: [{ id: sessionId, title: 'Chat', workDir: '/tmp/project', workDirExists: true }],
+    } as Partial<ReturnType<typeof useSessionStore.getState>>)
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: chatSession,
+      },
+      disconnectSession: vi.fn(),
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+
+    expect(screen.getByRole('button', { name: /activity/i })).toBeInTheDocument()
+    buildSpy.mockClear()
+
+    // 模拟 elapsedTimer tick：重建 sessions map 与 session 对象，
+    // 但 messages 等引用保持不变（与 updateSessionIn 行为一致）。
+    await act(async () => {
+      const current = useChatStore.getState().sessions[sessionId]
+      expect(current).toBeDefined()
+      useChatStore.setState({
+        sessions: {
+          ...useChatStore.getState().sessions,
+          [sessionId]: { ...current!, elapsedSeconds: current!.elapsedSeconds + 1 },
+        },
+      } as Partial<ReturnType<typeof useChatStore.getState>>)
+    })
+
+    expect(useChatStore.getState().sessions[sessionId]?.elapsedSeconds).toBe(1)
+    expect(buildSpy).not.toHaveBeenCalled()
+
+    // 对照组：真实输入（messages 引用）变化时必须重建。
+    await act(async () => {
+      const current = useChatStore.getState().sessions[sessionId]
+      expect(current).toBeDefined()
+      useChatStore.setState({
+        sessions: {
+          ...useChatStore.getState().sessions,
+          [sessionId]: { ...current!, messages: [...current!.messages] },
+        },
+      } as Partial<ReturnType<typeof useChatStore.getState>>)
+    })
+
+    expect(buildSpy).toHaveBeenCalled()
   })
 
   it('shows the activity button without a numeric badge for running or failed activity', async () => {

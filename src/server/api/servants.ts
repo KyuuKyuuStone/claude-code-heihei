@@ -17,6 +17,7 @@ import { sessionMessenger } from '../services/sessionMessenger.js'
 import { sessionService } from '../services/sessionService.js'
 import { collabEnvironmentService } from '../services/collabEnvironmentService.js'
 import { dispatchMailboxService } from '../services/dispatchMailboxService.js'
+import { isTombstoned } from '../services/sessionRegistry.js'
 import { forgetReceipt, getReceipt, listReceipts, recordDelivery } from '../services/dispatchReceiptService.js'
 import { diagnosticsService } from '../services/diagnosticsService.js'
 import {
@@ -199,6 +200,14 @@ export async function handleSessionMessagesApi(
         )
       }
 
+      // tombstone 短路（v1.3.0 阶段3 · 6a 操作类）：仅拦**显式删除**（tombstone）
+      // 的会话，直接拒绝投递，不再往下查磁盘元数据（防软删除会话复活/接收派活）。
+      // 不能用 !exists()：registry 内存态、启动不重放，重启后存量会话全为
+      // 「未登记」态，exists() 会对其返回 false 而误拦存活员工（v1.3.0 回归）。
+      if (isTombstoned(targetSessionId)) {
+        throw ApiError.notFound(`Session not found: ${targetSessionId}`)
+      }
+
       // 项目隔离（模式 A）：向员工会话派活时，发送方必须与员工同项目。
       // 员工向主管汇报不受此限（主管不是 enabled 员工）。
       if (fromSessionId && targetSessionId) {
@@ -352,7 +361,15 @@ function buildPocketCardLines(sessionId?: string, serverUrl?: string): string[] 
       lines.push(`- 你的会话 ID：${sessionId}（汇报时 fromSessionId / 回邮地址用它）`)
     }
     if (serverUrl) {
-      lines.push(`- 桌面服务地址：${serverUrl}（HTTP 通道以此为准，以它为可靠来源）`)
+      lines.push(
+        `- 桌面服务地址：${serverUrl}——注意：此值是**会话启动时注入**的，app 重启换端口后会失效（陈旧风险），投递失败先按下条自愈。`,
+      )
+      lines.push(
+        '- 最新地址优先读固定端口文件 ~/.claude/cc-heihei/desktop-server.json 的 url 字段（服务端每次启动更新，内容严格为 { url, port, pid, startedAt }，port 为实际绑定端口）。**先校验 pid 存活再信 port**——进程被强杀时文件会残留旧值（正常退出才清理）；读到 null / 非法结构 / 死 pid 一律回退 env 或向主管要当前地址。',
+      )
+      lines.push(
+        '- 探活验身份：GET <地址>/api/whoami 必须返回含 "app":"cc-heihei" 的 JSON——空 200 或非 JSON 一律不是本服务（本机存在对任意路径回 200 空 body 的冒名端口）。',
+      )
     }
     lines.push('- 文件信箱：<工作目录>/.heihei/dispatch/report-<序号>.json（Bash 不可用时的汇报通道）')
   }

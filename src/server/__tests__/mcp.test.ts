@@ -11,6 +11,7 @@ import { normalizePathForConfigKey } from '../../utils/path.js'
 import * as mcpHostPreflight from '../services/mcpHostPreflight.js'
 import { handleMcpApi } from '../api/mcp.js'
 import { conversationService } from '../services/conversationService.js'
+import { markRunning, markStarting, registerSession, resetRegistryForTests } from '../services/sessionRegistry.js'
 
 let tmpDir: string
 let projectRoot: string
@@ -106,6 +107,7 @@ describe('MCP API', () => {
     hostPreflightSpy = undefined
     conversationService.requestControl = originalRequestControl
     conversationService.hasSession = originalHasSession
+    resetRegistryForTests()
     await teardown()
   })
 
@@ -826,6 +828,11 @@ describe('MCP API', () => {
     const requestControl = mock(async () => ({}))
     conversationService.hasSession = ((sessionId: string) => sessionId === 'session-1') as typeof conversationService.hasSession
     conversationService.requestControl = requestControl as typeof conversationService.requestControl
+    // v1.3.0 阶段3 · 6c：toggle 同步判定改读 registry 快照（phase==='running'）——
+    // 测试需按真实链路登记会话为 running
+    registerSession('session-1')
+    markStarting('session-1')
+    markRunning('session-1')
 
     const disable = makeRequest('POST', '/api/mcp/session-sync/toggle', {
       cwd: projectRoot,

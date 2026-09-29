@@ -33,8 +33,37 @@ describe('cliTaskStore', () => {
     useCLITaskStore.getState().clearTasks()
   })
 
-  it('clears stale tasks immediately when switching tracked sessions', async () => {
-    let resolveRequest: ((value: { tasks: ReturnType<typeof makeTask>[] }) => void) | null = null
+  it('skips the store update when a poll returns an unchanged task list', async () => {
+    // v1.3.2 回归：1s 任务轮询拿到的是服务端新建数组（同内容新引用），
+    // 此前无条件 set 导致每秒全量重渲染 ActiveSession（后台空烧 CPU）。
+    const tasks = [makeTask('session-1')]
+    useCLITaskStore.setState({ sessionId: 'session-1', tasks })
+    vi.mocked(cliTasksApi.getTasksForList).mockResolvedValue({
+      tasks: [makeTask('session-1')],
+    })
+
+    let notifications = 0
+    const unsubscribe = useCLITaskStore.subscribe(() => { notifications += 1 })
+    await useCLITaskStore.getState().fetchSessionTasks('session-1')
+    unsubscribe()
+
+    expect(notifications).toBe(0)
+    // 引用保持不变：selector 订阅方零重渲染。
+    expect(useCLITaskStore.getState().tasks).toBe(tasks)
+  })
+
+  it('still applies a poll whose payload actually changed', async () => {
+    useCLITaskStore.setState({ sessionId: 'session-1', tasks: [makeTask('session-1')] })
+    vi.mocked(cliTasksApi.getTasksForList).mockResolvedValue({
+      tasks: [makeTask('session-1', 'completed')],
+    })
+
+    await useCLITaskStore.getState().fetchSessionTasks('session-1')
+
+    expect(useCLITaskStore.getState().tasks).toMatchObject([{ status: 'completed' }])
+  })
+
+  it('clears stale tasks immediately when switching tracked sessions', async () => {    let resolveRequest: ((value: { tasks: ReturnType<typeof makeTask>[] }) => void) | null = null
 
     vi.mocked(cliTasksApi.getTasksForList).mockImplementation(
       (sessionId: string) =>

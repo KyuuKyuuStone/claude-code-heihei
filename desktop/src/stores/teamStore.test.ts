@@ -39,6 +39,38 @@ describe('teamStore incremental transcript polling', () => {
     useTeamStore.getState().clearTeam()
   })
 
+  it('does not touch chatStore when a poll returns an unchanged transcript', async () => {
+    // v1.3.2 回归：1.5s 成员 transcript 轮询此前无条件 set chatStore，
+    // 每次轮询重建 sessions map 并触发全量订阅方重渲染（后台热源）。
+    getMemberTranscriptMock.mockResolvedValue({
+      messages: [{
+        id: 'm-1',
+        type: 'user',
+        content: 'hello',
+        timestamp: '2026-01-01T00:00:01.000Z',
+      }],
+      signature: 'sig-1',
+      cursor: 'cur-1',
+      afterOrdinal: 1,
+    })
+    useTeamStore.setState({
+      activeTeam: {
+        name: 'team-1',
+        members: [{ agentId: 'agent-1', role: 'worker', status: 'running' }],
+      },
+    })
+    const sessionId = 'team-member:agent-1'
+
+    await useTeamStore.getState().refreshMemberSession(sessionId)
+    expect(useChatStore.getState().sessions[sessionId]?.messages.map(m => m.id)).toEqual(['m-1'])
+
+    const mapAfterFirstPoll = useChatStore.getState().sessions
+    await useTeamStore.getState().refreshMemberSession(sessionId)
+
+    // 无增量轮询：sessions map 引用不变（zustand 未通知任何订阅方）。
+    expect(useChatStore.getState().sessions).toBe(mapAfterFirstPoll)
+  })
+
   it('appends unseen messages once and removes a matching pending echo', () => {
     const pending = userMessage('pending-1', 'please review', 1_000, true)
     const existing = [userMessage('durable-1', 'old', 500), pending]
