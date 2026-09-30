@@ -40,6 +40,7 @@ import {
 import { writeToMailbox } from '../../utils/teammateMailbox.js'
 import { AGENT_TOOL_NAME } from '../AgentTool/constants.js'
 import { TEAM_CREATE_TOOL_NAME } from '../TeamCreateTool/constants.js'
+import { isManualWaitToolEnabled } from '../../collaboration/collabToolContract.js'
 import { EXIT_PLAN_MODE_V2_TOOL_NAME } from './constants.js'
 import { EXIT_PLAN_MODE_V2_TOOL_PROMPT } from './prompt.js'
 import {
@@ -165,6 +166,7 @@ export const ExitPlanModeV2Tool: Tool<InputSchema, Output> = buildTool({
   },
   shouldDefer: true,
   isEnabled() {
+    if (!isManualWaitToolEnabled(EXIT_PLAN_MODE_V2_TOOL_NAME)) return false
     // When --channels is active the user is likely on Telegram/Discord, not
     // watching the TUI. The plan-approval dialog would hang. Paired with the
     // same gate on EnterPlanMode so plan mode isn't a trap.

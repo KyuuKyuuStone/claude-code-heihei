@@ -19,6 +19,7 @@ import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import * as crypto from 'node:crypto'
 import { COLLAB_MAILBOX_DIR } from '../../collaboration/dispatchProtocol.js'
+import { sameProject } from '../../collaboration/projectPath.js'
 import { diagnosticsService } from './diagnosticsService.js'
 import { forgetReceipt, recordDelivery } from './dispatchReceiptService.js'
 import { servantService, type ServantInfo } from './servantService.js'
@@ -383,25 +384,43 @@ export class DispatchMailboxService {
       const reportTaskId =
         reportPayload && typeof reportPayload.taskId === 'string' ? reportPayload.taskId.trim() : ''
       if (reportTaskId) {
-        try {
-          await collabTaskService.reportTask(reportTaskId, {
-            summary: typeof reportPayload?.summary === 'string' ? reportPayload.summary : '',
-            ...(Array.isArray(reportPayload?.deliverables)
-              ? {
-                  deliverables: reportPayload.deliverables.filter(
-                    (item): item is string => typeof item === 'string',
-                  ),
-                }
-              : {}),
+        // (a) 归属校验（架构决策 taskId信任边界 §3）：report.taskId 对应任务的
+        // toSessionId 必须等于 payload.fromSessionId——发送方得确实是该任务的受派人。
+        // taskId 是标识符不是凭证（本机同信任域，不做安全修复），但便宜模型抄错
+        // taskId 时会把**别人的任务**静默推进到 delivered，是真实完整性问题。
+        // 归属不符：不推进任务，消息照常投递（汇报正文仍要送达），并留诊断。
+        const reportTask = await collabTaskService
+          .getTask(reportTaskId)
+          .catch(() => null)
+        const claimedWorker = payload.fromSessionId?.trim() ?? ''
+        if (reportTask && reportTask.toSessionId !== claimedWorker) {
+          logForDiagnosticsNoPII('warn', 'collab_report_task_mismatch', {
+            requestedTaskId: reportTaskId,
+            workerSessionId: claimedWorker || 'unknown',
+            taskOwnerSessionId: reportTask.toSessionId,
+            channel: 'mailbox',
           })
-        } catch (error) {
-          // 记账失败（任务不存在 / 状态非法）**不阻断投递**：汇报正文仍要送达主管。
-          // 与 CLI 侧「照样投递消息 + warnings:['ledger_not_updated']」的降级一致，
-          // 不伪造状态、也不吞掉原因——留一条 warn 供排查。
-          logForDiagnosticsNoPII('warn', 'mailbox_report_task_failed', {
-            taskId: reportTaskId,
-            reason: error instanceof Error ? error.message : String(error),
-          })
+        } else {
+          try {
+            await collabTaskService.reportTask(reportTaskId, {
+              summary: typeof reportPayload?.summary === 'string' ? reportPayload.summary : '',
+              ...(Array.isArray(reportPayload?.deliverables)
+                ? {
+                    deliverables: reportPayload.deliverables.filter(
+                      (item): item is string => typeof item === 'string',
+                    ),
+                  }
+                : {}),
+            })
+          } catch (error) {
+            // 记账失败（任务不存在 / 状态非法）**不阻断投递**：汇报正文仍要送达主管。
+            // 与 CLI 侧「照样投递消息 + warnings:['ledger_not_updated']」的降级一致，
+            // 不伪造状态、也不吞掉原因——留一条 warn 供排查。
+            logForDiagnosticsNoPII('warn', 'mailbox_report_task_failed', {
+              taskId: reportTaskId,
+              reason: error instanceof Error ? error.message : String(error),
+            })
+          }
         }
       }
 
@@ -588,7 +607,9 @@ export class DispatchMailboxService {
     const targetWorkDir = await this.deps.getSessionWorkDir(payload.targetSessionId)
     if (!targetWorkDir) return null
     const projectRoot = projectRootFromMailboxDir(dir)
-    return path.resolve(targetWorkDir) === projectRoot
+    // 共享归一口径（原先为 path.resolve 后的原始串 ===，大小写/分隔符写法差异
+    // 会被误判成跨项目）。与 HTTP 派活侧 servants.ts 的判据保持一致。
+    return sameProject(targetWorkDir, projectRoot)
       ? null
       : `Cross-project dispatch is not allowed: mailbox project is ${projectRoot}, worker is in ${targetWorkDir}`
   }

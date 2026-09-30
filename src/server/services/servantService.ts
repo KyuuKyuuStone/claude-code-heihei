@@ -19,6 +19,7 @@ import type { SessionListSummary } from './localIndex/types.js'
 import { getSessionSnapshot } from './sessionRegistry.js'
 import { isSessionTurnInProgress } from './dispatchReceiptService.js'
 import { emitCollabPush } from '../../collaboration/collabPushSignals.js'
+import { normalizeProjectPath, sameProject } from '../../collaboration/projectPath.js'
 import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 
@@ -165,13 +166,13 @@ export class ServantService {
    * 被判成两个项目（与 collabTaskService.projectHash 的归一标准对齐）。
    */
   async findSupervisorForProject(workDir: string): Promise<ServantEntry | null> {
-    const norm = (p: string): string => path.resolve(p).replace(/\\/g, '/').toLowerCase()
-    const want = norm(workDir)
     const data = await this.readFile()
     for (const entry of data.servants) {
       if (!entry.supervisor) continue
       const summary = await sessionService.getSessionListSummaryForSession(entry.sessionId)
-      if (summary?.workDir && norm(summary.workDir) === want) return entry
+      // 共享口径（src/collaboration/projectPath.ts）：原先此处内联了一份 norm，
+      // 现在与台账、派活侧引用同一个 sameProject。
+      if (summary?.workDir && sameProject(summary.workDir, workDir)) return entry
     }
     return null
   }
@@ -225,7 +226,9 @@ export class ServantService {
           (s) =>
             // 自排除：请求者不出现在自己的花名册里（防主管把自己当员工自派）
             s.sessionId !== options.forSessionId &&
-            byId.get(s.sessionId)?.workDir === forWorkDir,
+            // 项目隔离按共享归一口径比较（原先为原始串 ===，`D:\X` 与 `d:/x`
+            // 会被误判成两个项目）。
+            sameProject(byId.get(s.sessionId)?.workDir, forWorkDir),
         )
       }
     }
@@ -328,7 +331,9 @@ export class ServantService {
           (s) =>
             s.supervisor &&
             s.sessionId !== sessionId &&
-            workDirById.get(s.sessionId) === thisSession.workDir,
+            // 共享归一口径；两侧都为空时 sameProject 返回 true，与历史行为一致
+            // （workDir 未知的会话之间仍按同项目处理，归一不放宽隔离）。
+            sameProject(workDirById.get(s.sessionId), thisSession.workDir),
         )
         if (existing) {
           throw ApiError.conflict(
@@ -419,7 +424,8 @@ export class ServantService {
           s.enabled &&
           s.sessionId !== sessionId &&
           s.role === entry.role &&
-          workDirById.get(s.sessionId) === thisSession.workDir,
+          // 共享归一口径（原先为原始串 ===）：同一项目换写法时不该漏报重复角色。
+          sameProject(workDirById.get(s.sessionId), thisSession.workDir),
       )
       if (duplicate) {
         void diagnosticsService

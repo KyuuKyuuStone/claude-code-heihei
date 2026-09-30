@@ -4,6 +4,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { handleApiRequest } from '../router.js'
 import { collabTaskService } from '../services/collabTaskService.js'
+import { sameProject } from '../../collaboration/projectPath.js'
 import { registerSession, resetRegistryForTests } from '../services/sessionRegistry.js'
 import { sessionService } from '../services/sessionService.js'
 import { ServantService } from '../services/servantService.js'
@@ -300,5 +301,156 @@ describe('POST /api/collab-tasks — 客户端预生成 taskId 幂等', () => {
     const task = await collabTaskService.getTask('client-pregen-2')
     expect(task?.status).toBe('delivered') // 状态没有被重置
     expect(await collabTaskService.listTasks({ projectDir: tmpDir })).toHaveLength(1)
+  })
+})
+
+/**
+ * 架构裁决五第 3 条：面板标题与列表过滤必须同源。
+ *
+ * 响应新增 `projectDir`（服务端 resolveProjectDir 的结果），前端标题只显示它、
+ * 不自己算路径——否则会出现「标题写 A、列表其实是 B」。本组断言的关键是
+ * **回显值 = 实际过滤目录**，而不只是「字段存在」。
+ */
+describe('GET /api/collab-tasks — projectDir 回显（标题与过滤同源）', () => {
+  /** 在另一个项目下建一条任务，用来证明过滤真的生效（不是全量返回） */
+  async function makeOtherProjectTask(id: string): Promise<string> {
+    const otherDir = await fs.mkdtemp(path.join(os.tmpdir(), 'collab-tasks-other-'))
+    const t = await collabTaskService.createTask({
+      id,
+      projectDir: otherDir,
+      fromSessionId: 'someone',
+      toSessionId: 'someone-else',
+      title: '别的项目',
+      content: '正文',
+    })
+    return t.id
+  }
+
+  it('forSessionId 入参：回显值 = 服务端解析的 workDir = 实际过滤目录', async () => {
+    const supervisor = await registerWorker({ role: '主管', supervisor: true })
+    const worker = await registerWorker({ role: '后端' })
+    const mine = await makeTask({ from: supervisor, to: worker, id: 'pdr-mine' })
+    await makeOtherProjectTask('pdr-other')
+
+    const res = await callApi('GET', `/api/collab-tasks?forSessionId=${worker}`)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { tasks: Array<{ id: string; projectDir: string }>; projectDir: string }
+
+    // 字段来自服务端解析（resolve 后的会话 workDir），前端无需自己算
+    expect(body.projectDir).toBe(path.resolve(tmpDir))
+    // 过滤真的生效：只返回本项目的那条
+    expect(body.tasks.map((t) => t.id)).toEqual([mine])
+    // 同源：每条返回的任务都与回显目录同项目（归一后相等）
+    for (const t of body.tasks) expect(sameProject(t.projectDir, body.projectDir)).toBe(true)
+    // 反证：用回显值当过滤条件查，得到的就是同一批任务
+    const byEchoed = await collabTaskService.listTasks({ projectDir: body.projectDir })
+    expect(byEchoed.map((t) => t.id)).toEqual(body.tasks.map((t) => t.id))
+  })
+
+  it('project 入参：回显值 = resolve 后的该项目目录', async () => {
+    const supervisor = await registerWorker({ role: '主管', supervisor: true })
+    const worker = await registerWorker({ role: '后端' })
+    const mine = await makeTask({ from: supervisor, to: worker, id: 'pdr-proj' })
+    await makeOtherProjectTask('pdr-other-2')
+
+    const res = await callApi('GET', `/api/collab-tasks?project=${encodeURIComponent(tmpDir)}`)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { tasks: Array<{ id: string }>; projectDir: string }
+
+    expect(body.projectDir).toBe(path.resolve(tmpDir))
+    expect(body.tasks.map((t) => t.id)).toEqual([mine])
+  })
+
+  it('无有效入参：既有行为不变（200 + 全量任务），projectDir 为 null', async () => {
+    // 现状核实：不带 project / forSessionId 时**不是** 400，而是不过滤、返回全部任务。
+    // 本字段只增不改，因此该路径必须保持原样。
+    const supervisor = await registerWorker({ role: '主管', supervisor: true })
+    const worker = await registerWorker({ role: '后端' })
+    await makeTask({ from: supervisor, to: worker, id: 'pdr-all' })
+    await makeOtherProjectTask('pdr-other-3')
+
+    const res = await callApi('GET', '/api/collab-tasks')
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { tasks: unknown[]; projectDir: unknown }
+    expect(body.tasks).toHaveLength(2) // 两个项目的任务都在
+    expect(body.projectDir).toBe(null) // 没有解析出目录 → 不谎报一个
+  })
+
+  it('forSessionId 无效：既有 404 语义不变', async () => {
+    const res = await callApi('GET', '/api/collab-tasks?forSessionId=no-such-session')
+    expect(res.status).toBe(404)
+  })
+
+  it('status 过滤与 projectDir 回显可以同时使用', async () => {
+    const supervisor = await registerWorker({ role: '主管', supervisor: true })
+    const worker = await registerWorker({ role: '后端' })
+    const deliveredId = await makeTask({ from: supervisor, to: worker, id: 'pdr-done' })
+    await collabTaskService.reportTask(deliveredId, { summary: '完成' })
+    await makeTask({ from: supervisor, to: worker, id: 'pdr-open' })
+
+    const res = await callApi(
+      'GET',
+      `/api/collab-tasks?forSessionId=${worker}&status=delivered`,
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { tasks: Array<{ id: string }>; projectDir: string }
+    expect(body.tasks.map((t) => t.id)).toEqual([deliveredId])
+    expect(body.projectDir).toBe(path.resolve(tmpDir))
+  })
+})
+
+/**
+ * 裁决四方案 A 的调用方约束：身份校验必须**先于**补推进。
+ * 403 的情况下不得顺手把任务补推到 delivered——否则误投防护被绕开。
+ */
+describe('POST /api/collab-tasks/:id/report — 调用方校验先于补推进', () => {
+  /** 造一个**真的停在 dispatched** 的任务（makeTask 会推进到 in_progress，不适用） */
+  async function makeDispatchedTask(id: string, from: string, to: string): Promise<string> {
+    const task = await collabTaskService.createTask({
+      id,
+      projectDir: tmpDir,
+      fromSessionId: from,
+      toSessionId: to,
+      title: '排队派活',
+      content: '员工忙碌时入队',
+    })
+    return task.id
+  }
+
+  it('callerSessionId 不是受派人 → 403，且不触发补推进（仍停在 dispatched）', async () => {
+    const supervisor = await registerWorker({ role: '主管', supervisor: true })
+    const worker = await registerWorker({ role: '后端' })
+    const other = await registerWorker({ role: '前端' })
+    const id = await makeDispatchedTask('catchup-403', supervisor, worker)
+
+    const res = await callApi('POST', `/api/collab-tasks/${id}/report`, {
+      summary: '冒名汇报',
+      callerSessionId: other,
+    })
+    expect(res.status).toBe(403)
+
+    const task = await collabTaskService.getTask(id)
+    expect(task?.status).toBe('dispatched')
+    expect(task?.history).toHaveLength(1) // 没有补链
+    expect(task?.report).toBeUndefined()
+  })
+
+  it('callerSessionId 是受派人 → 200，且 dispatched 补链到 delivered', async () => {
+    const supervisor = await registerWorker({ role: '主管', supervisor: true })
+    const worker = await registerWorker({ role: '后端' })
+    const id = await makeDispatchedTask('catchup-ok', supervisor, worker)
+
+    const res = await callApi('POST', `/api/collab-tasks/${id}/report`, {
+      summary: '做完了',
+      deliverables: ['src/a.ts'],
+      callerSessionId: worker,
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      task: { status: string; report: string; history: Array<{ by?: string }> }
+    }
+    expect(body.task.status).toBe('delivered')
+    expect(body.task.report).toBe('做完了')
+    expect(body.task.history.filter((h) => h.by === 'system')).toHaveLength(2)
   })
 })

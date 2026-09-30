@@ -30,6 +30,7 @@ import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { collabTaskService } from '../services/collabTaskService.js'
 import { withBroadcastLock } from '../services/broadcastLock.js'
 import { appendReportFooter, resolveReportTarget } from '../services/reportTargetResolver.js'
+import { sameProject } from '../../collaboration/projectPath.js'
 import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 
 export async function handleServantsApi(
@@ -270,7 +271,9 @@ export async function handleSessionMessagesApi(
             sessionService.getSessionWorkDir(fromSessionId),
             sessionService.getSessionWorkDir(targetSessionId),
           ])
-          if (fromWorkDir && targetWorkDir && fromWorkDir !== targetWorkDir) {
+          // 共享归一口径比较（原先为原始串 !==，`D:\X` 与 `d:/x` 会被误判成跨项目
+          // 而拒绝派活）。两侧都有值时才可能判异项目，语义不变。
+          if (fromWorkDir && targetWorkDir && !sameProject(fromWorkDir, targetWorkDir)) {
             throw ApiError.conflict(
               `Cross-project dispatch is not allowed: sender is in ${fromWorkDir}, worker is in ${targetWorkDir}`,
             )

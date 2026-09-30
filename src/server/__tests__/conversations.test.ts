@@ -4467,6 +4467,62 @@ describe('WebSocket Chat Integration', () => {
     })
   }, 20_000)
 
+  // ── v1.6.1：员工会话不得停在「等用户点击」（架构决策_员工会话不得等待用户审批.md）──
+
+  it('should reject a servant session switching to a non-bypass permission mode', async () => {
+    const createRes = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workDir: process.cwd(), permissionMode: 'default' }),
+    })
+    expect(createRes.status).toBe(201)
+    const { sessionId } = await createRes.json() as { sessionId: string }
+
+    // 登记为员工（非主管）——契约 §3.1：服务端按花名册 enabled && !supervisor 判定
+    const { servantService } = await import('../services/servantService.js')
+    await servantService.setServant(sessionId, { enabled: true, supervisor: false })
+
+    const ws = new WebSocket(`${wsUrl}/ws/${sessionId}`)
+    const messages: any[] = []
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(
+          () => reject(new Error(`Timed out connecting servant permission session ${sessionId}`)),
+          5_000,
+        )
+        ws.onmessage = (event) => {
+          const msg = JSON.parse(event.data as string)
+          messages.push(msg)
+          if (msg.type === 'connected') {
+            clearTimeout(timeout)
+            resolve()
+          }
+        }
+        ws.onerror = () => {
+          clearTimeout(timeout)
+          reject(new Error(`WebSocket error for ${sessionId}`))
+        }
+      })
+
+      // 员工切到非 bypass → 直接拒绝（契约 §3.3 第 2 条）
+      ws.send(JSON.stringify({ type: 'set_permission_mode', mode: 'auto' }))
+      await waitUntil(
+        () => messages.some((msg) => msg.type === 'error'),
+        `servant permission mode rejection ${sessionId}`,
+      )
+      const error = messages.find((msg) => msg.type === 'error')
+      expect(error.code).toBe('SERVANT_PERMISSION_MODE_LOCKED')
+      // 模式不得被改掉
+      expect(conversationService.getSessionPermissionMode(sessionId)).not.toBe('auto')
+      // 不得出现切换成功回执
+      expect(messages.some((msg) => msg.type === 'permission_mode_changed')).toBe(false)
+    } finally {
+      ws.close()
+      await servantService.setServant(sessionId, { enabled: false, supervisor: false }).catch(() => undefined)
+      conversationService.stopSession(sessionId)
+    }
+  }, 15_000)
+
   it('should persist permission changes made before the CLI starts', async () => {
     await fetch(`${baseUrl}/api/permissions/mode`, {
       method: 'PUT',

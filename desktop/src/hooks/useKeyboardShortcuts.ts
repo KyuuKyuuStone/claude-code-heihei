@@ -8,6 +8,9 @@ import {
   nextAppZoomLevel,
 } from '../lib/appZoom'
 import { useSettingsStore } from '../stores/settingsStore'
+import { getDesktopHost } from '../lib/desktopHost'
+
+const isDesktopRuntime = getDesktopHost().isDesktop
 
 export function useKeyboardShortcuts() {
   const setActiveSession = useSessionStore((s) => s.setActiveSession)
@@ -41,40 +44,30 @@ export function useKeyboardShortcuts() {
         return
       }
 
-      const meta = e.metaKey || e.ctrlKey
+      if (isDesktopRuntime && e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 't') {
+        e.preventDefault()
+        useTabStore.getState().openCollabTasksTab()
+        return
+      }
 
-      // Cmd+N — New session
+      const meta = e.metaKey || e.ctrlKey
       if (meta && e.key === 'n') {
         e.preventDefault()
         setActiveSession(null)
         setActiveView('code')
       }
-
-      // Cmd+K — Open global session search
       if (meta && e.key === 'k') {
         e.preventDefault()
         openModal('globalSearch')
       }
-
-      // Ctrl+F — Open find-in-page bar
       if (meta && e.key === 'f') {
         e.preventDefault()
         openModal('findInPage')
       }
-
-      // Escape — Close modal or clear state
-      if (e.key === 'Escape') {
-        if (activeModalRef.current) {
-          closeModal()
-        }
-      }
-
-      // Cmd+. — Stop generation
-      if (meta && e.key === '.') {
-        if (chatStateRef.current !== 'idle' && activeTabIdRef.current) {
-          e.preventDefault()
-          stopGeneration(activeTabIdRef.current)
-        }
+      if (e.key === 'Escape' && activeModalRef.current) closeModal()
+      if (meta && e.key === '.' && chatStateRef.current !== 'idle' && activeTabIdRef.current) {
+        e.preventDefault()
+        stopGeneration(activeTabIdRef.current)
       }
     }
 

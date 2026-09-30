@@ -37,6 +37,32 @@ async function setup() {
   process.env.APPDATA = path.join(tmpDir, '.config')
 }
 
+/**
+ * 临时目录清理：Windows 上杀软/索引器会短暂持有目录句柄，裸 fs.rm 偶发
+ * EBUSY（同 conversations.test.ts / tasks.test.ts 的 rmWithRetry 模式）。
+ * 只对锁类错误退避重试；重试耗尽仍被锁就放弃清理并返回——这是 teardown
+ * 的目录回收，不是断言，残留目录落在 OS 临时区，不该把测试判红（也不能
+ * 因此吞掉其它错误：非锁类错误一律照抛）。
+ */
+async function rmWithRetry(targetPath: string): Promise<void> {
+  const LOCK_CODES = ['EBUSY', 'EPERM', 'ENOTEMPTY']
+  const attempts = process.platform === 'win32' ? 5 : 1
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      await fs.rm(targetPath, { recursive: true, force: true })
+      return
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? ''
+      if (attempt === attempts - 1) {
+        if (LOCK_CODES.includes(code)) return
+        throw error
+      }
+      if (!LOCK_CODES.includes(code)) throw error
+      await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)))
+    }
+  }
+}
+
 async function teardown() {
   for (const key of ENV_KEYS) {
     const value = originalEnv[key]
@@ -46,7 +72,7 @@ async function teardown() {
       process.env[key] = value
     }
   }
-  await fs.rm(tmpDir, { recursive: true, force: true })
+  await rmWithRetry(tmpDir)
 }
 
 /** Mirror of the platform-specific Tauri store location. */

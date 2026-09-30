@@ -7,7 +7,9 @@ import { fileURLToPath } from 'node:url'
 import { buildSupervisorOrientation } from '../api/servants.js'
 import {
   DISPATCH_PROTOCOL_MD,
+  PROTOCOL_BUDGET_BASELINE,
   WORK_ORCHESTRATOR_SKILL_NAME,
+  manualFallbackSection,
 } from '../../collaboration/dispatchProtocol.js'
 import { CollabEnvironmentService } from '../services/collabEnvironmentService.js'
 import { DoctorService } from '../services/doctorService.js'
@@ -66,9 +68,8 @@ describe('v1.6.0 protocol & pocket-card copy contract', () => {
 
   // ── v1.6.0 协议瘦身：兜底只覆盖「无工具 / 传输层故障」，不许拿 curl 绕过业务判定 ──
   test('manual fallback states its two trigger conditions and forbids bypassing business errors', () => {
-    const start = DISPATCH_PROTOCOL_MD.indexOf('## 安全手动兜底')
-    const end = DISPATCH_PROTOCOL_MD.indexOf('## 失败处理与主管职责')
-    const fallback = DISPATCH_PROTOCOL_MD.slice(start, end)
+    // 切片走共用的 manualFallbackSection()，本文件不再自己算下标或写门槛数字。
+    const fallback = manualFallbackSection()
 
     // 触发范围：只在这两种情况
     expect(fallback).toContain('仅未注入工具或传输失败且信箱不可写时使用')
@@ -91,13 +92,10 @@ describe('v1.6.0 protocol & pocket-card copy contract', () => {
   })
 
   test('curl appears only inside the manual-fallback section', () => {
-    const start = DISPATCH_PROTOCOL_MD.indexOf('## 安全手动兜底')
-    const end = DISPATCH_PROTOCOL_MD.indexOf('## 失败处理与主管职责')
-    expect(start).toBeGreaterThanOrEqual(0)
-    expect(end).toBeGreaterThan(start)
-    const outside = DISPATCH_PROTOCOL_MD.slice(0, start) + DISPATCH_PROTOCOL_MD.slice(end)
+    const fallback = manualFallbackSection()
+    const outside = DISPATCH_PROTOCOL_MD.replace(fallback, '')
     expect(outside).not.toContain('curl')
-    expect(DISPATCH_PROTOCOL_MD.slice(start, end)).toContain('curl')
+    expect(fallback).toContain('curl')
   })
 
   test('interrupt and the DELETE red line are both present', () => {
@@ -120,19 +118,16 @@ describe('v1.6.0 protocol & pocket-card copy contract', () => {
   })
 
   test('manual fallback is retained but stays near the approved 300-character size', () => {
-    const fallbackStart = DISPATCH_PROTOCOL_MD.indexOf('## 安全手动兜底')
-    const fallbackEnd = DISPATCH_PROTOCOL_MD.indexOf('## 失败处理与主管职责')
-    expect(fallbackStart).toBeGreaterThanOrEqual(0)
-    expect(fallbackEnd).toBeGreaterThan(fallbackStart)
-    const fallback = DISPATCH_PROTOCOL_MD.slice(fallbackStart, fallbackEnd)
-    expect(Array.from(fallback).length).toBeLessThanOrEqual(550)
+    // 兜底节的长度断言**只留一处**（在 collab-protocol-rules.test.ts，引用
+    // MANUAL_FALLBACK_MAX_CODEPOINTS）。这里只确认该节存在、仍在协议里——
+    // 不在两个文件里各写一份门槛数字（裁决 e0bf0ad3 第 3 条清理重复门槛）。
+    expect(Array.from(manualFallbackSection()).length).toBeGreaterThan(0)
   })
 
   test('protocol plus injected tool prompts does not exceed the pre-tool protocol budget', async () => {
-    // 预算口径（架构裁决 2026-09-30）：左 = 协议 + 四工具 description/prompt 之和；
-    // 右 = v1.5.1 协议全文 11266 码点。计量 Array.from(text).length。
-    // 复现：git show v1.5.1:src/collaboration/dispatchProtocol.ts 取模板串计数。
-    const V151_BASELINE_CHARS = 11266
+    // 预算口径（架构裁决 2026-09-30，补充裁决 c8bc8164）：左 = 协议 + 四工具
+    // description/prompt 之和；右 = v1.5.1 协议全文。门槛引用真源常量，
+    // 不在测试里写同义字面量。计量 Array.from(text).length。
     const { CollabDispatchTool } = await import('../../tools/CollabTools/CollabDispatchTool.js')
     const { CollabReviewTool } = await import('../../tools/CollabTools/CollabReviewTool.js')
     const { CollabListTasksTool } = await import('../../tools/CollabTools/CollabListTasksTool.js')
@@ -146,7 +141,9 @@ describe('v1.6.0 protocol & pocket-card copy contract', () => {
         }),
       )
     ).reduce((sum, n) => sum + n, 0)
-    expect(Array.from(DISPATCH_PROTOCOL_MD).length + toolChars).toBeLessThanOrEqual(V151_BASELINE_CHARS)
+    expect(Array.from(DISPATCH_PROTOCOL_MD).length + toolChars).toBeLessThanOrEqual(
+      PROTOCOL_BUDGET_BASELINE,
+    )
   })
 
   test('protocol never claims task status from turn state', () => {

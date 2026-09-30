@@ -222,6 +222,134 @@ describe('DispatchMailboxService', () => {
     }
   })
 
+  test('信箱 report 的 taskId 属于别人 → 不推进任务，消息照常投递，记诊断', async () => {
+    const original = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = tmpDir
+    const { setDiagnosticsLogWriterForTests } = await import('../../utils/diagLogs.js')
+    const events: Array<{ event: string; data: Record<string, unknown> }> = []
+    setDiagnosticsLogWriterForTests((_level, event, data) => {
+      events.push({ event, data })
+    })
+    try {
+      const supervisor = await registerWorker({ role: '主管', supervisor: true })
+      const otherDispatcher = await registerWorker({ role: '别人的派活人' })
+      const worker = await registerWorker({ role: '后端' })
+      const otherWorker = await registerWorker({ role: '前端' })
+      const { collabTaskService } = await import('../services/collabTaskService.js')
+
+      // 别人的任务：别人派给别人的员工，推进到可 report 的状态
+      await collabTaskService.createTask({
+        id: 'mb-other-task',
+        projectDir: tmpDir,
+        fromSessionId: otherDispatcher,
+        fromRole: 'servant',
+        toSessionId: otherWorker,
+        title: '别人的派活',
+        content: '做点事',
+      })
+      await collabTaskService.transitionTask('mb-other-task', 'accepted')
+      await collabTaskService.transitionTask('mb-other-task', 'in_progress')
+
+      const { service, calls } = buildService()
+      // 我（worker）汇报时抄错了 taskId，写成别人的
+      await writePayload('report-mb-mismatch.json', {
+        targetSessionId: supervisor,
+        fromSessionId: worker,
+        taskId: 'mb-other-task',
+        content: '【汇报】做完了',
+        report: { taskId: 'mb-other-task', summary: '做完了' },
+      })
+
+      const result = await service.handleMailboxFile(
+        path.join(tmpDir, COLLAB_MAILBOX_DIR),
+        'report-mb-mismatch.json',
+      )
+
+      // 不推进别人的任务（修复前会被静默推到 delivered）
+      expect(result).toEqual({ ok: true })
+      const otherTask = await collabTaskService.getTask('mb-other-task')
+      expect(otherTask?.status).toBe('in_progress')
+      expect(otherTask?.report).toBeUndefined()
+
+      // 消息照常投递，汇报正文不能丢
+      expect(calls).toHaveLength(1)
+
+      // 诊断留痕：信箱层一条。payload 顶层的 taskId 还会走一次 resolveReportTarget
+      // 解析改投，那里也会为同一次误操作留一条，两层各自记录、互不替代。
+      const mismatch = events.filter((e) => e.event === 'collab_report_task_mismatch')
+      expect(mismatch.length).toBeGreaterThanOrEqual(1)
+      const mailboxMismatch = mismatch.filter((e) => e.data.channel === 'mailbox')
+      expect(mailboxMismatch).toHaveLength(1)
+      expect(mailboxMismatch[0]!.data.requestedTaskId).toBe('mb-other-task')
+      expect(mailboxMismatch[0]!.data.taskOwnerSessionId).toBe(otherWorker)
+    } finally {
+      setDiagnosticsLogWriterForTests(null)
+      if (original === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = original
+    }
+  })
+
+  test('信箱 report 的 fromSessionId 缺失 → 判归属不符：不推进任务、诊断记 unknown', async () => {
+    const original = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = tmpDir
+    const { setDiagnosticsLogWriterForTests } = await import('../../utils/diagLogs.js')
+    const events: Array<{ event: string; data: Record<string, unknown> }> = []
+    setDiagnosticsLogWriterForTests((_level, event, data) => {
+      events.push({ event, data })
+    })
+    try {
+      const supervisor = await registerWorker({ role: '主管', supervisor: true })
+      const worker = await registerWorker({ role: '后端' })
+      const { collabTaskService } = await import('../services/collabTaskService.js')
+      await collabTaskService.createTask({
+        id: 'mb-nofrom-task',
+        projectDir: tmpDir,
+        fromSessionId: supervisor,
+        fromRole: 'supervisor',
+        toSessionId: worker,
+        title: '派活',
+        content: '做点事',
+      })
+      await collabTaskService.transitionTask('mb-nofrom-task', 'accepted')
+      await collabTaskService.transitionTask('mb-nofrom-task', 'in_progress')
+
+      const { service, calls } = buildService()
+      // payload 不带 fromSessionId：claimedWorker 退化为空串
+      await writePayload('report-mb-nofrom.json', {
+        targetSessionId: supervisor,
+        content: '【汇报】做完了',
+        report: { taskId: 'mb-nofrom-task', summary: '做完了' },
+      })
+
+      const result = await service.handleMailboxFile(
+        path.join(tmpDir, COLLAB_MAILBOX_DIR),
+        'report-mb-nofrom.json',
+      )
+
+      // 无从证明发送方就是受派人 → 保守起见不推进（空串必然 ≠ 真实 toSessionId）
+      expect(result).toEqual({ ok: true })
+      const task = await collabTaskService.getTask('mb-nofrom-task')
+      expect(task?.status).toBe('in_progress')
+      expect(task?.report).toBeUndefined()
+
+      // 消息照常投递
+      expect(calls).toHaveLength(1)
+
+      // 诊断留痕：workerSessionId 缺省记 'unknown'
+      const mailboxMismatch = events.filter(
+        (e) => e.event === 'collab_report_task_mismatch' && e.data.channel === 'mailbox',
+      )
+      expect(mailboxMismatch).toHaveLength(1)
+      expect(mailboxMismatch[0]!.data.requestedTaskId).toBe('mb-nofrom-task')
+      expect(mailboxMismatch[0]!.data.workerSessionId).toBe('unknown')
+      expect(mailboxMismatch[0]!.data.taskOwnerSessionId).toBe(worker)
+    } finally {
+      setDiagnosticsLogWriterForTests(null)
+      if (original === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = original
+    }
+  })
+
   test('旧 dispatch payload（无 report 字段）行为不变', async () => {
     const { service, calls } = buildService()
     await writePayload('dispatch-old-1.json', {
@@ -728,5 +856,96 @@ describe('DispatchMailboxService', () => {
     expect(withTimer.rescanTimer).not.toBeNull()
     service.stop()
     expect(withTimer.rescanTimer).toBeNull()
+  })
+
+  /**
+   * 裁决四方案 A：信箱通道的归属校验也必须**先于**补推进。
+   * 停在 dispatched 的任务，若汇报方不是受派人，既不能推进、也不能补链。
+   */
+  test('信箱归属不符：停在 dispatched 的任务不推进、也不触发补链', async () => {
+    const original = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = tmpDir
+    try {
+      const supervisor = await registerWorker({ role: '主管', supervisor: true })
+      const worker = await registerWorker({ role: '后端' })
+      const other = await registerWorker({ role: '前端' })
+      const { collabTaskService } = await import('../services/collabTaskService.js')
+      await collabTaskService.createTask({
+        id: 'mb-catchup-mismatch',
+        projectDir: tmpDir,
+        fromSessionId: supervisor,
+        fromRole: 'supervisor',
+        toSessionId: worker,
+        title: '派活',
+        content: '做点事',
+      })
+
+      const { service, calls } = buildService()
+      // 汇报方是 other，不是受派人 worker
+      await writePayload('report-mb-mismatch.json', {
+        targetSessionId: supervisor,
+        fromSessionId: other,
+        content: '【汇报】做完了',
+        report: { taskId: 'mb-catchup-mismatch', summary: '做完了' },
+      })
+
+      const result = await service.handleMailboxFile(
+        path.join(tmpDir, COLLAB_MAILBOX_DIR),
+        'report-mb-mismatch.json',
+      )
+      expect(result).toEqual({ ok: true })
+
+      // 消息照常投递，但台账不动：既没推进，也没有补链
+      expect(calls).toHaveLength(1)
+      const task = await collabTaskService.getTask('mb-catchup-mismatch')
+      expect(task?.status).toBe('dispatched')
+      expect(task?.history).toHaveLength(1)
+      expect(task?.report).toBeUndefined()
+    } finally {
+      if (original === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = original
+    }
+  })
+
+  test('信箱归属相符：停在 dispatched 的任务补链到 delivered', async () => {
+    const original = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = tmpDir
+    try {
+      const supervisor = await registerWorker({ role: '主管', supervisor: true })
+      const worker = await registerWorker({ role: '后端' })
+      const { collabTaskService } = await import('../services/collabTaskService.js')
+      await collabTaskService.createTask({
+        id: 'mb-catchup-ok',
+        projectDir: tmpDir,
+        fromSessionId: supervisor,
+        fromRole: 'supervisor',
+        toSessionId: worker,
+        title: '派活',
+        content: '做点事',
+      })
+
+      const { service, calls } = buildService()
+      await writePayload('report-mb-ok.json', {
+        targetSessionId: supervisor,
+        fromSessionId: worker,
+        content: '【汇报】做完了',
+        report: { taskId: 'mb-catchup-ok', summary: '做完了' },
+      })
+
+      const result = await service.handleMailboxFile(
+        path.join(tmpDir, COLLAB_MAILBOX_DIR),
+        'report-mb-ok.json',
+      )
+      expect(result).toEqual({ ok: true })
+      expect(calls).toHaveLength(1)
+
+      const task = await collabTaskService.getTask('mb-catchup-ok')
+      expect(task?.status).toBe('delivered')
+      expect(task?.report).toBe('做完了')
+      expect(task?.history.filter((h) => h.by === 'system')).toHaveLength(2)
+    } finally {
+      if (original === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = original
+    }
   })
 })

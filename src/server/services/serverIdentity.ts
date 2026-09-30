@@ -57,8 +57,8 @@ export type ServerIdentity = {
  * - collab-tasks：协作台账 REST（/api/collab-tasks*）
  * - report-caller-check：report/review 的 callerSessionId 权限校验
  * - mailbox-report：文件信箱 payload 支持 report 字段（先记账再投递）
- * - broadcast-ledger：广播逐目标独立记账 + broadcastId 关联
  * - broadcast-lock：同一 broadcastId 的进程内串行（仅单进程内保证）
+ * - collab-context：GET /api/collab-context（compact 后按调用者身份裁剪的上下文快照）
  */
 export const SERVER_CAPABILITIES: readonly string[] = [
   'collab-tasks',
@@ -66,6 +66,7 @@ export const SERVER_CAPABILITIES: readonly string[] = [
   'mailbox-report',
   'broadcast-ledger',
   'broadcast-lock',
+  'collab-context',
 ]
 
 export const DESKTOP_SERVER_INFO_FILENAME = 'desktop-server.json'

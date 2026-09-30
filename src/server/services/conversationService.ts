@@ -77,6 +77,19 @@ import {
   createImageMetadataText,
   maybeResizeAndDownsampleImageBuffer,
 } from '../../utils/imageResizer.js'
+import {
+  COLLAB_SERVANT_NONINTERACTIVE_ENV,
+  COLLAB_SERVANT_PERMISSION_DENIED_MESSAGE,
+} from '../../collaboration/collabToolContract.js'
+
+/**
+ * v1.6.1（契约 §3.6）：员工会话免审批兜底总开关，默认开；置 '0' 关闭自动拒绝
+ * 与 CLI 侧的工具裁剪。只控「自动拒绝」——强制 bypass 是既定语义的收口，不设开关。
+ * 服务端与 CLI 子进程读同一个环境变量（子进程继承）。
+ */
+export function isServantNonInteractiveEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[COLLAB_SERVANT_NONINTERACTIVE_ENV] !== '0'
+}
 
 const MAX_CAPTURED_PROCESS_LINES = 80
 const MAX_CAPTURED_SDK_MESSAGES = 40
@@ -230,6 +243,11 @@ type SessionProcess = {
       permissionSuggestions?: unknown[]
     }
   >
+  /**
+   * v1.6.1：本会话是不是「员工」（花名册在册且非主管）。拉起时按花名册定格，
+   * 用于 can_use_tool 自动拒绝——员工不得停在等用户点击。主管一律 false。
+   */
+  servantNonInteractive: boolean
 }
 
 export type PendingPermissionRequest = {
@@ -300,6 +318,8 @@ export class ConversationService {
     shouldResume: boolean,
     options?: SessionStartOptions,
     repository?: PreparedSessionWorkspace['repository'],
+    /** v1.6.1：员工会话（在册且非主管）→ 强制 bypass，见 getPermissionArgs */
+    servantNonInteractive = false,
   ): string[] {
     const dangerousMode = process.env.CLAUDE_DANGEROUS_MODE === '1'
     const worktreeArgs =
@@ -329,7 +349,7 @@ export class ConversationService {
       ...worktreeArgs,
       '--replay-user-messages',
       ...this.getRuntimeArgs(options),
-      ...this.getPermissionArgs(options?.permissionMode, dangerousMode),
+      ...this.getPermissionArgs(options?.permissionMode, dangerousMode, servantNonInteractive),
     ])
   }
 
@@ -412,12 +432,18 @@ export class ConversationService {
       )
     }
 
+    // v1.6.1：员工会话强制免审批。身份取一次，既用于 CLI 参数，也定格到 session
+    // 供 can_use_tool 自动拒绝使用（契约 §3.3 第 1、3 条）。
+    const collabIdentityForStart = await this.getCollabIdentity(sessionId)
+    const servantNonInteractive = collabIdentityForStart.servant
+
     const args = this.buildSessionCliArgs(
       sessionId,
       sdkUrl,
       shouldResume,
       options,
       launchRepository,
+      servantNonInteractive,
     )
 
     console.log(
@@ -499,6 +525,7 @@ export class ConversationService {
       usesOfficialOAuth,
       officialOAuthToken: childEnv.CLAUDE_CODE_OAUTH_TOKEN ?? null,
       pendingPermissionRequests: new Map(),
+      servantNonInteractive,
     }
     this.sessions.set(sessionId, session)
     // registry phase 接线（阶段2 · 5d）：登记（幂等，兼容 handler 阶段1先行
@@ -1099,6 +1126,30 @@ export class ConversationService {
           msg.request?.subtype === 'can_use_tool' &&
           typeof msg.request_id === 'string'
         ) {
+          // v1.6.1（契约 §3.3 第 3 条）：员工会话不得停在等用户点击——无人可
+          // 审批。不登记、不转发给客户端，直接 deny 并附汇报指引；诊断留痕便于
+          // 下次判定事故走的是哪条路径。主管不走这条（AskUserQuestion 是其唯一
+          // 升级出口，必须照常推给用户，见契约 §3.3 第 4 条）。
+          if (session.servantNonInteractive && isServantNonInteractiveEnabled()) {
+            const toolName =
+              typeof msg.request.tool_name === 'string' ? msg.request.tool_name : 'Unknown'
+            this.respondToPermission(
+              sessionId,
+              msg.request_id,
+              false,
+              undefined,
+              undefined,
+              COLLAB_SERVANT_PERMISSION_DENIED_MESSAGE,
+            )
+            void diagnosticsService.recordEvent({
+              type: 'collab_servant_permission_auto_denied',
+              severity: 'warning',
+              sessionId,
+              summary: `员工会话的 ${toolName} 权限请求已自动拒绝（无人可审批）`,
+              details: { sessionId, toolName, at: Date.now() },
+            })
+            continue
+          }
           session.pendingPermissionRequests.set(msg.request_id, {
             toolName:
               typeof msg.request.tool_name === 'string'
@@ -1548,8 +1599,18 @@ export class ConversationService {
   private getPermissionArgs(
     mode: string | undefined,
     dangerousMode: boolean,
+    servantNonInteractive = false,
   ): string[] {
     if (dangerousMode) {
+      return ['--dangerously-skip-permissions']
+    }
+
+    // v1.6.1（契约 §3.3 第 1 条）：员工会话强制免审批——不管元数据或界面选的是
+    // 什么模式。这不是新放宽：员工本来就是 bypass（既定设计），此处只是不让
+    // 「权限模式漂移」（登记后未重启、界面上切换）把员工改回会等人的模式。
+    // 安全边界仍由约束档位负责（CC_HEIHEI_SERVANT_CONSTRAINT，结构性收权，
+    // 不是靠逐次审批）。不设开关：这是收紧既定语义，不是可选项。
+    if (servantNonInteractive) {
       return ['--dangerously-skip-permissions']
     }
 
@@ -1590,7 +1651,14 @@ export class ConversationService {
    */
   private supervisorSessionCache = new Map<
     string,
-    { supervisor: boolean; registered: boolean; constraint?: 'readonly' | 'whitelist'; writeDirs?: string[] }
+    {
+      supervisor: boolean
+      registered: boolean
+      /** v1.6.1：在册且非主管——员工会话的免审批兜底只作用于这一类 */
+      servant: boolean
+      constraint?: 'readonly' | 'whitelist'
+      writeDirs?: string[]
+    }
   >()
 
   /** 协作身份变化后调用（任命/卸任/移除），让下次会话启动按最新花名册注入标记 */
@@ -1694,6 +1762,8 @@ export class ConversationService {
     supervisor: boolean
     /** 是否花名册在册的协作会话（主管或员工都算；A7 据此不注入 computer-use） */
     registered: boolean
+    /** v1.6.1：在册且非主管 */
+    servant: boolean
     constraint?: 'readonly' | 'whitelist'
     writeDirs?: string[]
   }> {
@@ -1702,16 +1772,20 @@ export class ConversationService {
     let info: {
       supervisor: boolean
       registered: boolean
+      servant: boolean
       constraint?: 'readonly' | 'whitelist'
       writeDirs?: string[]
-    } = { supervisor: false, registered: false }
+    } = { supervisor: false, registered: false, servant: false }
     try {
       // v1.3.0 阶段4 · 7a：花名册查询走依赖注入（servantInfoSource），
       // 未注入时 getServantEntry 返回 null = 按非主管处理（原 catch 降级语义）
       const entry = await getServantEntry(sessionId)
+      const supervisor = Boolean(entry?.supervisor)
       info = {
-        supervisor: Boolean(entry?.supervisor),
+        supervisor,
         registered: entry !== null,
+        // 契约 §3.1：服务端侧用花名册的 enabled && !supervisor 判定员工
+        servant: entry !== null && !supervisor && entry.enabled !== false,
         ...(entry?.constraint === 'readonly' || entry?.constraint === 'whitelist'
           ? { constraint: entry.constraint }
           : {}),
@@ -1729,10 +1803,19 @@ export class ConversationService {
   private async getCollabIdentity(sessionId: string): Promise<{
     supervisor: boolean
     registered: boolean
+    servant: boolean
     constraint?: 'readonly' | 'whitelist'
     writeDirs?: string[]
   }> {
     return this.isRegisteredSupervisor(sessionId)
+  }
+
+  /**
+   * v1.6.1（契约 §3.3 第 2 条）：会话是不是员工（花名册在册且非主管）。
+   * 供 handler 拒绝员工把权限模式切出 bypass 使用。
+   */
+  async isServantSession(sessionId: string): Promise<boolean> {
+    return (await this.getCollabIdentity(sessionId)).servant
   }
 
   private async buildChildEnv(
@@ -1932,6 +2015,14 @@ export class ConversationService {
       // 轮次。走上游自带开关（utils/computerUse/gates.ts getChicagoEnabled）；
       // 普通（非协作）会话不注入，行为不变。
       ...(collabIdentity?.registered ? { CLAUDE_COMPUTER_USE_ENABLED: '0' } : {}),
+      // v1.6.1（契约 §3.6）：员工会话免审批兜底开关，默认开。CLI 侧据此裁剪
+      // 交互类工具，服务端据此自动拒绝漏网的 can_use_tool。只对员工注入（主管
+      // 的 AskUserQuestion 是唯一升级出口，必须可用），置 '0' 即关闭。
+      ...(collabIdentity?.servant
+        ? {
+            [COLLAB_SERVANT_NONINTERACTIVE_ENV]: isServantNonInteractiveEnabled() ? '1' : '0',
+          }
+        : {}),
       ...(collabIdentity?.constraint === 'readonly'
         ? { CC_HEIHEI_SERVANT_CONSTRAINT: 'readonly' }
         : {}),

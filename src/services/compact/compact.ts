@@ -31,6 +31,7 @@ import type {
   SystemMessage,
   UserMessage,
 } from '../../types/message.js'
+import { createCollabContextAttachmentIfNeeded } from '../../collaboration/collabContextAttachment.js'
 import {
   createAttachmentMessage,
   generateFileAttachment,
@@ -561,18 +562,20 @@ export async function compactConversation(
     // early-return in getSkillListingAttachments.
 
     // Run async attachment generation in parallel
-    const [fileAttachments, asyncAgentAttachments] = await Promise.all([
+    const [fileAttachments, asyncAgentAttachments, collabContextAttachment] = await Promise.all([
       createPostCompactFileAttachments(
         preCompactReadFileState,
         context,
         POST_COMPACT_MAX_FILES_TO_RESTORE,
       ),
       createAsyncAgentAttachmentsIfNeeded(context),
+      createCollabContextAttachmentIfNeeded(process.env),
     ])
 
     const postCompactFileAttachments: AttachmentMessage[] = [
       ...fileAttachments,
       ...asyncAgentAttachments,
+      ...(collabContextAttachment ? [collabContextAttachment] : []),
     ]
     const planAttachment = createPlanAttachmentIfNeeded(context.agentId)
     if (planAttachment) {
@@ -954,7 +957,7 @@ export async function partialCompactConversation(
     // Intentionally NOT resetting sentSkillNames — see compactConversation()
     // for rationale (~4K tokens saved per compact event).
 
-    const [fileAttachments, asyncAgentAttachments] = await Promise.all([
+    const [fileAttachments, asyncAgentAttachments, collabContextAttachment] = await Promise.all([
       createPostCompactFileAttachments(
         preCompactReadFileState,
         context,
@@ -962,11 +965,13 @@ export async function partialCompactConversation(
         messagesToKeep,
       ),
       createAsyncAgentAttachmentsIfNeeded(context),
+      createCollabContextAttachmentIfNeeded(process.env),
     ])
 
     const postCompactFileAttachments: AttachmentMessage[] = [
       ...fileAttachments,
       ...asyncAgentAttachments,
+      ...(collabContextAttachment ? [collabContextAttachment] : []),
     ]
     const planAttachment = createPlanAttachmentIfNeeded(context.agentId)
     if (planAttachment) {

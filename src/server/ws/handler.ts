@@ -56,6 +56,7 @@ import { GROK_DEFAULT_MAIN_MODEL } from '../../services/grokAuth/models.js'
 import { getGrokModelCatalog } from '../../services/grokAuth/modelCatalog.js'
 import { heiheiGrokOAuthService } from '../services/heiheiGrokOAuthService.js'
 import { diagnosticsService } from '../services/diagnosticsService.js'
+import { COLLAB_SERVANT_PERMISSION_MODE_LOCKED_MESSAGE } from '../../collaboration/collabToolContract.js'
 import { addTurnChangeListener } from '../services/dispatchReceiptService.js'
 import {
   buildConversationTitleInput,
@@ -1027,6 +1028,27 @@ async function handleSetPermissionMode(
       type: 'error',
       message: 'Permission mode is invalid.',
       code: 'PERMISSION_MODE_INVALID',
+    })
+    return
+  }
+  // v1.6.1（契约 §3.3 第 2 条）：员工会话固定为免审批——界面/元数据切到非 bypass
+  // 会覆盖掉员工的 bypass，之后每个工具调用都要问人，而无人可点。直接拒绝，并
+  // 引导用户改用约束档位（结构性收权，不靠逐次审批）。
+  if (
+    message.mode !== 'bypassPermissions' &&
+    (await conversationService.isServantSession(sessionId))
+  ) {
+    sendMessage(ws, {
+      type: 'error',
+      message: COLLAB_SERVANT_PERMISSION_MODE_LOCKED_MESSAGE,
+      code: 'SERVANT_PERMISSION_MODE_LOCKED',
+    })
+    void diagnosticsService.recordEvent({
+      type: 'collab_servant_permission_mode_change_rejected',
+      severity: 'warning',
+      sessionId,
+      summary: `员工会话的权限模式切换请求（${message.mode}）已拒绝`,
+      details: { sessionId, requestedMode: message.mode, at: Date.now() },
     })
     return
   }

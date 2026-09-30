@@ -10,9 +10,13 @@
  * 路径行为一致。
  *
  * 解析顺序（决策记录「收件人解析顺序」）：
- *   1. 消息带 taskId        → 该任务的 fromSessionId
- *   2. 不带 taskId          → 发送方名下最近一条未结任务的 fromSessionId；
- *                             若未结任务来自不同派活人 → 歧义，不改投只告警
+ *   1. 消息带 taskId        → 该任务的 fromSessionId；**该任务的 toSessionId 必须
+ *                             等于发送方**（归属校验，防抄错 taskId 静默改投给
+ *                             别人的派活人），不符则记 collab_report_task_mismatch
+ *                             并降级到第 2 步
+ *   2. 不带 taskId（或第 1 步归属不符） → 发送方名下最近一条未结任务的
+ *                             fromSessionId；若未结任务来自不同派活人 → 歧义，
+ *                             不改投只告警
  *   3. 交接修正             → 派活人快照是 supervisor、现在已不是、且同项目有现任
  *                             主管 → 改投现任主管
  *   4. 台账查不到           → 同项目花名册里 supervisor=true 的会话
@@ -109,12 +113,27 @@ export async function resolveReportTarget(input: {
   let basis: ResolveBasis | null = null
 
   const explicitTaskId = input.taskId?.trim()
+  // 带了 taskId 但归属不符（task.toSessionId ≠ 发送方）时，不按这个 taskId 改投，
+  // 降级走「未带 taskId」的兜底解析（第 ②③④ 步）。见本文件顶部与下面的说明。
+  let fallbackLookup = !explicitTaskId
   if (explicitTaskId) {
     const task = await collabTaskService.getTask(explicitTaskId)
-    if (task) {
+    if (task && task.toSessionId === from) {
       dispatcherId = task.fromSessionId
       dispatcherRole = task.fromRole
       basis = 'task-id'
+    } else if (task) {
+      // (c) 归属校验失败：这个任务不是派给发送方的（便宜模型抄错了 taskId）。
+      // 若照旧按 taskId 改投，汇报会被静默送给**别人**的派活人；这里降级到兜底
+      // 步骤，并按兜底语义解析。记诊断便于定位——taskId 是标识符不是凭证，
+      // 本机同信任域内不按安全事件处理，只是防误操作。
+      fallbackLookup = true
+      logForDiagnosticsNoPII('warn', 'collab_report_task_mismatch', {
+        requestedTaskId: explicitTaskId,
+        workerSessionId: from,
+        taskOwnerSessionId: task.toSessionId,
+        requestedTarget: original,
+      })
     } else {
       // 员工带了 taskId，但台账里查不到（taskId 抄错、任务被清理、台账尚未加载）。
       // 这里不改投、不拒绝、不重试——后续 fallback 与最终投递结果完全不变——但
@@ -125,25 +144,30 @@ export async function resolveReportTarget(input: {
         requestedTarget: original,
       })
     }
-  } else if (workDir) {
+  }
+
+  if (fallbackLookup && !basis && workDir) {
     const open = await collabTaskService.findOpenTasksForWorker(from, { projectDir: workDir })
     if (open.length === 0) {
-      // 没带 taskId 且名下没有未结任务 → 不是汇报，原样放行。
-      return unchanged(original)
+      // 名下没有未结任务：没带 taskId 的 → 不是汇报，原样放行。
+      // 带了 taskId 的（说明前面归属校验没过）不算「不是汇报」——发送方确实在
+      // 汇报，只是抄错了 ID；不在这里返回，继续走第 4 步兜底（架构决策 §3(c)）。
+      if (!explicitTaskId) return unchanged(original)
+    } else {
+      const senders = new Set(open.map((task) => task.fromSessionId))
+      if (senders.size > 1) {
+        // 多来源歧义：规则只在证据明确时生效，这里不改投，只留告警。
+        // 仍标记为汇报——歧义说的是「回给谁」不明，不是「这不是汇报」。
+        return unchanged(original, {
+          warning: `ambiguous-dispatchers:${[...senders].sort().join(',')}`,
+          isReport: true,
+        })
+      }
+      const latest = open[0]!
+      dispatcherId = latest.fromSessionId
+      dispatcherRole = latest.fromRole
+      basis = 'latest-open-task'
     }
-    const senders = new Set(open.map((task) => task.fromSessionId))
-    if (senders.size > 1) {
-      // 多来源歧义：规则只在证据明确时生效，这里不改投，只留告警。
-      // 仍标记为汇报——歧义说的是「回给谁」不明，不是「这不是汇报」。
-      return unchanged(original, {
-        warning: `ambiguous-dispatchers:${[...senders].sort().join(',')}`,
-        isReport: true,
-      })
-    }
-    const latest = open[0]!
-    dispatcherId = latest.fromSessionId
-    dispatcherRole = latest.fromRole
-    basis = 'latest-open-task'
   }
 
   // ── 第 3 步：主管交接修正 ─────────────────────────────────────────

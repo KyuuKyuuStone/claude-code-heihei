@@ -1,146 +1,194 @@
 import { create } from 'zustand'
-import { collabTasksApi } from '../api/collabTasks'
+import { collabTasksApi, type CollabTask, type CollabTaskStatus } from '../api/collabTasks'
 import type { ServerMessage } from '../types/chat'
+import type { WebSocketConnectionState } from '../api/websocket'
 import { subscribeGlobalEvents } from './globalEventsChannel'
 
-/**
- * 全局 `_events` 通道上的任务台账事件（事件契约 v1.5.2）：
- * - collab_task_changed：任务台账变化，data = { taskId, projectDir, change, status }。
- *   事件里**不带 toSessionId**，无法在前端直接定位归属会话，故收到即防抖重拉
- *   dispatched 列表（台账是唯一权威源，前端只做副本，不自行推断）。
- */
 const COLLAB_TASK_CHANGED_SUBTYPE = 'collab_task_changed'
-
-/** 突发事件合并窗口（本地第二道防抖，避免状态流转连发时拉取风暴）。 */
 export const TASK_EVENT_DEBOUNCE_MS = 150
 
 type CollabTaskStore = {
-  /**
-   * 会话 → 是否存在 dispatched（待接单）任务。派生自台账 GET ?status=dispatched，
-   * 前端只做只读副本。按 sessionId 做局部 selector 订阅，避免整表重渲染。
-   */
   dispatchedBySessionId: Record<string, true>
-
-  /** 冷启动/重连/事件触发时重拉台账，重建 dispatched 副本。 */
+  tasksById: Record<string, CollabTask>
+  activeProjectDir: string | null
+  activeProjectSessionId: string | null
+  isLoading: boolean
+  error: string | null
+  connectionState: WebSocketConnectionState
+  serverReady: boolean
   refreshDispatched: () => Promise<void>
-  /**
-   * 订阅全局事件通道（共享连接见 globalEventsChannel）：
-   * - collab_task_changed → 防抖重拉 dispatched；
-   * - 重连成功 → 清空副本后重拉（断线窗口内可能漏事件），防残留待接单。
-   * 返回退订函数。
-   */
+  refreshForSession: (sessionId: string, options?: { clear?: boolean }) => Promise<void>
+  refreshForProject: (projectDir: string, options?: { clear?: boolean }) => Promise<void>
+  clearProjectTasks: () => void
+  checkServerIdentity: (retryIfInFlight?: boolean) => Promise<void>
+  setConnectionState: (state: WebSocketConnectionState) => void
   subscribeTaskEvents: () => () => void
 }
 
-async function fetchDispatched(): Promise<Record<string, true>> {
-  const { tasks } = await collabTasksApi.listDispatched()
-  const next: Record<string, true> = {}
-  for (const task of tasks) next[task.toSessionId] = true
-  return next
-}
+let dispatchInFlight: Promise<void> | null = null
+let dispatchTrailing = false
+let dispatchGeneration = 0
+let taskGeneration = 0
+let identityCheckInFlight: Promise<void> | null = null
+let identityCheckTrailing = false
+let identityCheckGeneration = 0
 
-/**
- * 在途请求状态（模块级，非响应式）：同一时刻最多一个台账拉取在飞。
- * 竞态背景：L1 拉取在途时事件到来会发起 L2，两个请求的响应若乱序返回，
- * 旧快照可能后写覆盖新状态——已接单的任务会短暂回退成「待接单」。因此把并发
- * 收敛成「在途合并 + trailing」：在途期间到达的刷新只登记一次，等当前请求
- * 结束后最多再拉一次，保证最后一次写入对应最新事件之后。
- */
-let inFlight: Promise<void> | null = null
-let trailingRequested = false
-/**
- * 重连/清空的代数计数：重连会先清空副本，若在途的旧响应随后返回并写入，
- * 会把清空结果覆盖回旧快照（残留待接单）。代数变更即作废在途响应。
- * 单调递增，不回退——比较只用相等性，重置为旧值会让已作废的请求「复活」。
- */
-let generation = 0
-
-/**
- * 测试隔离：清空在途请求与 trailing 标记，并将代数 +1 作废所有在途请求。
- * 代数只增不减：若沿用 reset 前代数值，上一用例超时中断、迟到的响应会被
- * 误判为「当前代数」而写入新用例的状态。
- */
 export function resetCollabTaskRefreshForTests(): void {
-  generation += 1
-  inFlight = null
-  trailingRequested = false
+  dispatchGeneration += 1
+  taskGeneration += 1
+  identityCheckGeneration += 1
+  identityCheckInFlight = null
+  identityCheckTrailing = false
+  dispatchInFlight = null
+  dispatchTrailing = false
 }
 
-export const useCollabTaskStore = create<CollabTaskStore>((set) => ({
+function toTaskMap(tasks: CollabTask[]): Record<string, CollabTask> {
+  return Object.fromEntries(tasks.map((task) => [task.id, task]))
+}
+
+async function loadDispatched(): Promise<Record<string, true>> {
+  const { tasks } = await collabTasksApi.listDispatched()
+  return Object.fromEntries(tasks.map((task) => [task.toSessionId, true]))
+}
+
+export const useCollabTaskStore = create<CollabTaskStore>((set, get) => ({
   dispatchedBySessionId: {},
+  tasksById: {},
+  activeProjectDir: null,
+  activeProjectSessionId: null,
+  isLoading: false,
+  error: null,
+  connectionState: 'disconnected',
+  serverReady: false,
 
   refreshDispatched: () => {
-    // 在途合并：已有请求在飞时不再并发拉取，只登记一次 trailing。
-    if (inFlight) {
-      trailingRequested = true
-      return inFlight
-    }
-
-    const startedGeneration = generation
+    if (dispatchInFlight) { dispatchTrailing = true; return dispatchInFlight }
+    const startedAt = dispatchGeneration
     let request: Promise<void> | null = null
-    // 自身是否仍是在途请求：reset（测试隔离）或被重连清空后，迟到的响应不得再动共享状态
-    const isOwner = () => inFlight === request
+    const isOwner = () => dispatchInFlight === request
     request = (async () => {
       try {
-        const next = await fetchDispatched()
-        // 期间发生过重连清空 → 这份是旧快照，丢弃并由 trailing 重新对齐
-        if (startedGeneration === generation) {
-          set({ dispatchedBySessionId: next })
-        } else if (isOwner()) {
-          trailingRequested = true
-        }
-      } catch {
-        // 拉取失败：保留现状，等下次事件/重连/挂载兜底，不误清空（避免假「无待接单」）
-      } finally {
+        const next = await loadDispatched()
+        if (startedAt === dispatchGeneration) set({ dispatchedBySessionId: next })
+        else if (isOwner()) dispatchTrailing = true
+      } catch { /* keep last successful snapshot */ }
+      finally {
         if (isOwner()) {
-          inFlight = null
-          // trailing：请求期间有新事件到达，结束后最多再拉一次
-          if (trailingRequested) {
-            trailingRequested = false
-            void useCollabTaskStore.getState().refreshDispatched()
-          }
+          dispatchInFlight = null
+          if (dispatchTrailing) { dispatchTrailing = false; void get().refreshDispatched() }
         }
       }
     })()
-    inFlight = request
-    return inFlight
+    dispatchInFlight = request
+    return request
+  },
+
+  refreshForSession: async (sessionId, options) => {
+    const requestId = ++taskGeneration
+    set({ activeProjectSessionId: sessionId, activeProjectDir: null, error: null, isLoading: true, ...(options?.clear ? { tasksById: {} } : {}) })
+    try {
+      const { tasks, projectDir } = await collabTasksApi.listForSession(sessionId)
+      if (requestId !== taskGeneration) return
+      set({ tasksById: toTaskMap(tasks), activeProjectDir: typeof projectDir === 'string' ? projectDir : null, error: null })
+      void get().refreshDispatched()
+    } catch (error) {
+      if (requestId === taskGeneration) set({ error: error instanceof Error ? error.message : '任务列表加载失败' })
+    } finally { if (requestId === taskGeneration) set({ isLoading: false }) }
+  },
+
+  refreshForProject: async (projectDir, options) => {
+    const requestId = ++taskGeneration
+    set({ activeProjectSessionId: null, activeProjectDir: projectDir, error: null, isLoading: Object.keys(get().tasksById).length === 0 || Boolean(options?.clear), ...(options?.clear ? { tasksById: {} } : {}) })
+    try {
+      const { tasks } = await collabTasksApi.listForProject(projectDir)
+      if (requestId !== taskGeneration) return
+      set({ tasksById: toTaskMap(tasks), error: null })
+      void get().refreshDispatched()
+    } catch (error) {
+      if (requestId === taskGeneration) set({ error: error instanceof Error ? error.message : '任务列表加载失败' })
+    } finally { if (requestId === taskGeneration) set({ isLoading: false }) }
+  },
+
+  clearProjectTasks: () => {
+    taskGeneration += 1
+    set({ tasksById: {}, activeProjectSessionId: null, activeProjectDir: null, isLoading: false, error: null })
+  },
+
+  checkServerIdentity: (retryIfInFlight = false) => {
+    if (identityCheckInFlight) {
+      if (retryIfInFlight) identityCheckTrailing = true
+      return identityCheckInFlight
+    }
+    const requestId = ++identityCheckGeneration
+    const request = Promise.resolve().then(async () => {
+      try {
+        const identity = await collabTasksApi.whoami()
+        if (requestId === identityCheckGeneration) set({ serverReady: identity.app === 'cc-heihei' })
+      } catch {
+        if (requestId === identityCheckGeneration) set({ serverReady: false })
+      } finally {
+        if (identityCheckInFlight === request) {
+          identityCheckInFlight = null
+          if (identityCheckTrailing) {
+            identityCheckTrailing = false
+            void get().checkServerIdentity()
+          }
+        }
+      }
+    })
+    identityCheckInFlight = request
+    return request
+  },
+
+  setConnectionState: (connectionState) => {
+    const wasConnected = get().connectionState === 'connected'
+    set({ connectionState })
+    if (connectionState === 'connected' && !wasConnected) void get().checkServerIdentity(true)
   },
 
   subscribeTaskEvents: () => {
     let refreshTimer: ReturnType<typeof setTimeout> | null = null
     const scheduleRefresh = () => {
-      if (refreshTimer) return
+      if (refreshTimer) clearTimeout(refreshTimer)
       refreshTimer = setTimeout(() => {
         refreshTimer = null
-        void useCollabTaskStore.getState().refreshDispatched()
+        const { activeProjectSessionId, activeProjectDir } = get()
+        if (activeProjectSessionId) void get().refreshForSession(activeProjectSessionId)
+        else if (activeProjectDir) void get().refreshForProject(activeProjectDir)
+        void get().refreshDispatched()
       }, TASK_EVENT_DEBOUNCE_MS)
     }
-
-    const unsubscribe = subscribeGlobalEvents(
-      (msg: ServerMessage) => {
-        if (msg.type !== 'system_notification') return
-        if (msg.subtype !== COLLAB_TASK_CHANGED_SUBTYPE) return
-        scheduleRefresh()
-      },
-      () => {
-        // 重连：清空副本（断线窗口内漏事件会让已接单的任务残留为待接单）后重拉。
-        // 代数 +1：在途的旧响应随之作废，不会把清空结果覆盖回旧快照。
-        generation += 1
-        if (refreshTimer) {
-          clearTimeout(refreshTimer)
-          refreshTimer = null
-        }
-        set({ dispatchedBySessionId: {} })
-        void useCollabTaskStore.getState().refreshDispatched()
-      },
-    )
-
-    return () => {
-      unsubscribe()
-      if (refreshTimer) {
-        clearTimeout(refreshTimer)
-        refreshTimer = null
-      }
-    }
+    const unsubscribe = subscribeGlobalEvents((message: ServerMessage) => {
+      if (message.type !== 'system_notification' || message.subtype !== COLLAB_TASK_CHANGED_SUBTYPE) return
+      if (!message.data || typeof message.data !== 'object') return
+      const data = message.data as { taskId?: unknown; projectDir?: unknown; status?: unknown }
+      if (typeof data.taskId !== 'string' || typeof data.projectDir !== 'string') return
+      const state = get()
+      const existing = state.tasksById[data.taskId]
+      const belongsToActiveProject = !state.activeProjectDir || data.projectDir === state.activeProjectDir
+      if (belongsToActiveProject && existing && isTaskStatus(data.status)) set((current) => {
+        const task = current.tasksById[data.taskId as string]
+        return task ? { tasksById: { ...current.tasksById, [task.id]: { ...task, status: data.status as CollabTaskStatus } } } : current
+      })
+      scheduleRefresh()
+    }, () => {
+      dispatchGeneration += 1
+      taskGeneration += 1
+      if (refreshTimer) clearTimeout(refreshTimer)
+      refreshTimer = null
+      set({ tasksById: {}, dispatchedBySessionId: {} })
+      const { activeProjectSessionId, activeProjectDir } = get()
+      if (activeProjectSessionId) void get().refreshForSession(activeProjectSessionId, { clear: true })
+      else if (activeProjectDir) void get().refreshForProject(activeProjectDir, { clear: true })
+      void get().refreshDispatched()
+      void get().checkServerIdentity()
+    }, (state) => get().setConnectionState(state))
+    void get().checkServerIdentity()
+    return () => { unsubscribe(); if (refreshTimer) clearTimeout(refreshTimer) }
   },
 }))
+
+function isTaskStatus(value: unknown): value is CollabTaskStatus {
+  return value === 'dispatched' || value === 'accepted' || value === 'in_progress' || value === 'delivered' || value === 'verified' || value === 'rework' || value === 'failed' || value === 'cancelled'
+}

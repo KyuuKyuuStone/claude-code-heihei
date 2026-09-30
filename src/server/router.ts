@@ -27,6 +27,7 @@ import { handleDesktopUiApi } from './api/desktop-ui.js'
 import { handleTracesApi } from './api/traces.js'
 import { handleServantsApi, handleSessionMessagesApi } from './api/servants.js'
 import { handleCollabTasksApi } from './api/collabTasks.js'
+import { handleCollabContextApi } from './api/collabContext.js'
 import { getServerIdentity } from './services/serverIdentity.js'
 
 export async function handleApiRequest(req: Request, url: URL): Promise<Response> {
@@ -82,6 +83,10 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     // v1.6.0 协作任务台账（与上游 CLI 的 'tasks'（handleAgentsApi）分开路由）
     case 'collab-tasks':
       return handleCollabTasksApi(req, url, segments)
+
+    // v1.6.1 协作上下文快照（compact 后按调用者身份裁剪，只读）
+    case 'collab-context':
+      return handleCollabContextApi(req, url)
 
     case 'session-messages':
       return handleSessionMessagesApi(req, url, segments)
@@ -208,6 +213,11 @@ function buildApiCatalog() {
         method: 'GET',
         path: '/api/sessions/{sessionId}',
         description: '会话详情（含 modifiedAt 最后活动时间）',
+      },
+      {
+        method: 'GET',
+        path: '/api/collab-context?sessionId={sessionId}',
+        description: '协作上下文快照（compact 后续接用）：按调用者身份裁剪——主管得花名册与未结任务聚合，员工得自己的未结任务与当前任务正文。只读，不含回合态',
       },
       {
         method: 'GET',

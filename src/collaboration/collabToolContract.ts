@@ -161,8 +161,42 @@ export const COLLAB_WARNING_CODES = {
 export const SERVER_CAPABILITY_COLLAB_TASKS = 'collab-tasks'
 export const SERVER_CAPABILITY_REPORT_CALLER_CHECK = 'report-caller-check'
 export const SERVER_CAPABILITY_MAILBOX_REPORT = 'mailbox-report'
+/** v1.6.1：GET /api/collab-context——compact 后按调用者身份裁剪的上下文快照 */
+export const SERVER_CAPABILITY_COLLAB_CONTEXT = 'collab-context'
 /** whoami 必须声明的应用名（地址探活校验） */
 export const COLLAB_WHOAMI_APP = 'cc-heihei'
+
+// ── v1.6.1 员工会话免审批兜底（架构裁决：架构决策_员工会话不得等待用户审批.md） ──
+
+/**
+ * 员工会话无人可审批时的自动拒绝开关（默认开；置 '0' 关闭）。
+ * 服务端把它注入 CLI 子进程，同时自己也读它来决定要不要自动拒绝 can_use_tool。
+ * 只控「自动拒绝」，不控「强制 bypass」——后者是既定语义的收口，不设开关。
+ */
+export const COLLAB_SERVANT_NONINTERACTIVE_ENV = 'CC_HEIHEI_SERVANT_NONINTERACTIVE'
+
+/** 是否向协作会话暴露可能停在人工作答上的工具。 */
+export function isManualWaitToolEnabled(
+  toolName: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (env[COLLAB_SERVANT_NONINTERACTIVE_ENV] === '0') return true
+
+  const role = resolveCollabRole(env)
+  if (role === 'servant') {
+    return !['AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode', 'ReviewArtifact'].includes(toolName)
+  }
+  if (role === 'supervisor' && toolName === 'EnterPlanMode') return false
+  return true
+}
+
+/** 自动拒绝时回给模型的话（契约 §3.3 第 3 条原文） */
+export const COLLAB_SERVANT_PERMISSION_DENIED_MESSAGE =
+  '用户不在场，无法审批。请停止这一步，在汇报里写明需要什么权限、为什么需要、不做会有什么影响，按派活页脚汇报给主管，并如实说明任务受阻。'
+
+/** 员工会话试图切到非 bypass 权限模式时的拒绝话术（契约 §3.3 第 2 条） */
+export const COLLAB_SERVANT_PERMISSION_MODE_LOCKED_MESSAGE =
+  '员工会话固定为免审批，不能切换到其他权限模式。如需限制员工能做什么，请在协作设置里改用约束档位（只读 / 只读+白名单写目录）。'
 
 // ── HTTP 契约路径（契约 §六：只依赖这几个接口，绝不读回合/进程状态） ──
 export const COLLAB_API_PATHS = {
@@ -170,6 +204,7 @@ export const COLLAB_API_PATHS = {
   collabTasks: '/api/collab-tasks',
   sessionMessages: '/api/session-messages',
   servantSessions: '/api/servant-sessions',
+  collabContext: '/api/collab-context',
 } as const
 
 // ── 文件信箱（与服务端 dispatchMailboxService 共用格式） ──

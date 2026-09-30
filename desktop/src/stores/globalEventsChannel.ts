@@ -1,4 +1,4 @@
-import { wsManager } from '../api/websocket'
+import { wsManager, type WebSocketConnectionState } from '../api/websocket'
 import type { ServerMessage } from '../types/chat'
 
 /**
@@ -6,18 +6,17 @@ import type { ServerMessage } from '../types/chat'
  * 真实会话，只接收跨会话事件：servant_turn_changed / servant_roster_changed /
  * session_list_invalidated（事件契约 v1.5.0）。
  *
- * 本模块是通道的唯一 owner：多个订阅方（servantStore / sessionStore）共享同一
- * 条 WS，按订阅计数连接/断开——wsManager.disconnect 会直接关socket，不做引用
- * 计数，裸用会让先退订的一方把别人的通道也掐掉。
+ * 本模块是通道的唯一 owner：多个订阅方共享同一条 WS，按订阅计数连接/断开。
  */
 export const GLOBAL_EVENTS_SESSION_ID = '_events'
 
 type MessageHandler = (msg: ServerMessage) => void
-/** 重连成功回调：断线窗口内的事件可能丢失，订阅方应做一次全量刷新对齐。 */
 type ReconnectHandler = () => void
+type ConnectionStateHandler = (state: WebSocketConnectionState) => void
 
 const messageHandlers = new Set<MessageHandler>()
 const reconnectHandlers = new Set<ReconnectHandler>()
+const connectionStateHandlers = new Set<ConnectionStateHandler>()
 let subscriptionCount = 0
 let detachChannel: (() => void) | null = null
 
@@ -28,10 +27,9 @@ function attachChannel(): void {
     for (const handler of messageHandlers) handler(msg)
   })
 
-  // reconnecting → connected 的跃迁才算"断线后恢复"；首开 connecting→connected
-  // 不算（没有断线窗口要补）。
   let wasReconnecting = false
   const offState = wsManager.onConnectionState(GLOBAL_EVENTS_SESSION_ID, (state) => {
+    for (const handler of connectionStateHandlers) handler(state)
     if (state === 'reconnecting') {
       wasReconnecting = true
       return
@@ -50,21 +48,21 @@ function attachChannel(): void {
   }
 }
 
-/**
- * 订阅全局事件。返回退订函数；最后一个订阅方退订时断开通道。
- */
 export function subscribeGlobalEvents(
   onMessage: MessageHandler,
   onReconnect?: ReconnectHandler,
+  onConnectionState?: ConnectionStateHandler,
 ): () => void {
   messageHandlers.add(onMessage)
   if (onReconnect) reconnectHandlers.add(onReconnect)
+  if (onConnectionState) connectionStateHandlers.add(onConnectionState)
   subscriptionCount += 1
   if (subscriptionCount === 1) attachChannel()
 
   return () => {
     messageHandlers.delete(onMessage)
     if (onReconnect) reconnectHandlers.delete(onReconnect)
+    if (onConnectionState) connectionStateHandlers.delete(onConnectionState)
     subscriptionCount -= 1
     if (subscriptionCount <= 0) {
       subscriptionCount = 0
@@ -73,10 +71,10 @@ export function subscribeGlobalEvents(
   }
 }
 
-/** 测试用：清空全部订阅并断开通道。 */
 export function resetGlobalEventsChannelForTests(): void {
   messageHandlers.clear()
   reconnectHandlers.clear()
+  connectionStateHandlers.clear()
   subscriptionCount = 0
   detachChannel?.()
 }

@@ -1,4 +1,5 @@
 import { feature } from 'bun:bundle'
+import { isManualWaitToolEnabled } from '../../collaboration/collabToolContract.js'
 import { z } from 'zod/v4'
 import {
   getAllowedChannels,
@@ -54,6 +55,7 @@ export const EnterPlanModeTool: Tool<InputSchema, Output> = buildTool({
   },
   shouldDefer: true,
   isEnabled() {
+    if (!isManualWaitToolEnabled(ENTER_PLAN_MODE_TOOL_NAME)) return false
     // When --channels is active, ExitPlanMode is disabled (its approval
     // dialog needs the terminal). Disable entry too so plan mode isn't a
     // trap the model can enter but never leave.

@@ -253,6 +253,19 @@ export function AttachmentMessage({
         const skillNames = attachment.skills.map(s_0 => s_0.name).join(', ');
         return <Line>Skills restored ({skillNames})</Line>;
       }
+    case 'collab_context':
+      return <Box flexDirection="column" marginTop={addMargin ? 1 : 0} backgroundColor={bg}>
+          <Box flexDirection="row">
+            <Box minWidth={2} />
+            <Text dimColor>
+              已续接协作上下文（{attachment.openTaskCount} 个未结任务）
+              {!isTranscriptMode && <>{' '}<CtrlOToExpand /></>}
+            </Text>
+          </Box>
+          {(verbose || isTranscriptMode) && <Box paddingLeft={2}>
+              <MessageResponse><Text>{attachment.text}</Text></MessageResponse>
+            </Box>}
+        </Box>;
     case 'diagnostics':
       return <DiagnosticsDisplay attachment={attachment} verbose={verbose} />;
     case 'mcp_resource':

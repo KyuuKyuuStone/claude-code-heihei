@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 
 import { buildPostCompactMessages, type CompactionResult } from './compact.js'
+import { createCollabContextAttachmentIfNeeded } from '../../collaboration/collabContextAttachment.js'
+import { COLLAB_SESSION_ID_ENV } from '../../collaboration/collabToolContract.js'
 import { getCurrentUsage } from '../../utils/tokens.js'
 import type { Message } from '../../types/message.js'
 
@@ -69,6 +71,22 @@ function makeResult(messagesToKeep?: Message[]): CompactionResult {
     ...(messagesToKeep ? { messagesToKeep } : {}),
   }
 }
+
+describe('collab compact attachment isolation', () => {
+  test('ordinary session returns no attachment and does not call network', async () => {
+    const attachment = await createCollabContextAttachmentIfNeeded({})
+    expect(attachment).toBeNull()
+  })
+
+  test('continuation disabled returns no attachment for a collaborator', async () => {
+    const attachment = await createCollabContextAttachmentIfNeeded({
+      [COLLAB_SESSION_ID_ENV]: 'test-session',
+      CC_HEIHEI_COLLAB_ROLE: 'servant',
+      CC_HEIHEI_COLLAB_CONTINUATION: '0',
+    })
+    expect(attachment).toBeNull()
+  })
+})
 
 describe('buildPostCompactMessages stale-usage stripping (#743)', () => {
   test('zeroes provider usage on preserved assistant messages', () => {

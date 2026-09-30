@@ -30,6 +30,7 @@ This page is a map, not a manual. One line per feature — click through for the
 - [Subagents](./agents.md) — when to delegate, which agents ship built in, how to write your own.
 - [Skills and the Skills Market](./skills.md) — what a skill is, how it differs from an agent, what to check before installing one.
 - [Computer Use](./computer-use.md) — let it read the screen, move the mouse, and type into other apps.
+- [Session collaboration and task ledger](./collaboration.md) — set up supervisor and worker sessions and use native tools to dispatch, report, review, and rework tasks.
 
 ## Run it offline, no API key
 

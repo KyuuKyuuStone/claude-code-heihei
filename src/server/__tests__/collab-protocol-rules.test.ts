@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'bun:test'
-import { DISPATCH_PROTOCOL_MD } from '../../collaboration/dispatchProtocol.js'
+import {
+  DISPATCH_PROTOCOL_MD,
+  MANUAL_FALLBACK_MAX_CODEPOINTS,
+  PROTOCOL_BUDGET_BASELINE,
+  PROTOCOL_BUDGET_BASELINE_UTF8_BYTES,
+  manualFallbackSection,
+} from '../../collaboration/dispatchProtocol.js'
 import { renderRosterTable } from '../api/servants.js'
 
 /**
@@ -30,41 +36,14 @@ describe('CLI 协议：原生协作工具与预算边界', () => {
     expect(DISPATCH_PROTOCOL_MD).not.toContain('照抄主管给的地址')
   })
 
-  test('保留约 300 字手动安全兜底并锁定 UTF-8 字符预算', () => {
-    const start = DISPATCH_PROTOCOL_MD.indexOf('## 安全手动兜底')
-    const end = DISPATCH_PROTOCOL_MD.indexOf('## 失败处理与主管职责')
-    expect(start).toBeGreaterThanOrEqual(0)
-    expect(end).toBeGreaterThan(start)
-    expect(Array.from(DISPATCH_PROTOCOL_MD.slice(start, end)).length).toBeLessThanOrEqual(650)
-    expect(Array.from(DISPATCH_PROTOCOL_MD).length).toBeLessThanOrEqual(11439)
-    expect(Buffer.byteLength(DISPATCH_PROTOCOL_MD, 'utf8')).toBeLessThanOrEqual(24715)
-  })
-
-  test('总量（协议 + 四个 Collab 工具的 description/prompt）不超 v1.5.1 基线 11266', async () => {
-    // 预算口径（架构裁决 2026-09-30）：左 = 渲染后 DISPATCH_PROTOCOL_MD +
-    // 四个 Collab 工具注入模型的 description 与 prompt 之和；右 = v1.5.1
-    // DISPATCH_PROTOCOL_MD 全文 = 11266 码点（旧工具描述不存在，按 0 计）。
-    // 计量统一 Array.from(text).length，非精确 tokenizer。
-    // 复现：git show v1.5.1:src/collaboration/dispatchProtocol.ts，取出模板串后
-    //      Array.from(串).length === 11266。常量改动须再次架构裁决。
-    const V151_BASELINE_CHARS = 11266
-
-    const { CollabDispatchTool } = await import('../../tools/CollabTools/CollabDispatchTool.js')
-    const { CollabReviewTool } = await import('../../tools/CollabTools/CollabReviewTool.js')
-    const { CollabListTasksTool } = await import('../../tools/CollabTools/CollabListTasksTool.js')
-    const { CollabReportTool } = await import('../../tools/CollabTools/CollabReportTool.js')
-    const tools = [CollabDispatchTool, CollabReviewTool, CollabListTasksTool, CollabReportTool]
-    const toolChars = (
-      await Promise.all(
-        tools.map(async (tool) => {
-          const [description, prompt] = await Promise.all([tool.description(), tool.prompt()])
-          return Array.from(description).length + Array.from(prompt).length
-        }),
-      )
-    ).reduce((sum, n) => sum + n, 0)
-
-    const protocolChars = Array.from(DISPATCH_PROTOCOL_MD).length
-    expect(protocolChars + toolChars).toBeLessThanOrEqual(V151_BASELINE_CHARS)
+  test('手动兜底节不超 MANUAL_FALLBACK_MAX_CODEPOINTS 码点', () => {
+    // 兜底节的长度断言**只此一处**；其他需要这段文本的测试一律调用
+    // manualFallbackSection()，不得复制切片逻辑或另写门槛数字。
+    expect(Array.from(manualFallbackSection()).length).toBeLessThanOrEqual(
+      MANUAL_FALLBACK_MAX_CODEPOINTS,
+    )
+    // 协议全文的总量上界由「协议 + 四工具 ≤ PROTOCOL_BUDGET_BASELINE」那一处
+    // 统一守（单一门槛）；这里不再重复单协议上界——它被总量断言严格包含。
   })
 
   test('协议不引用回合态作为任务状态，也不承诺猜测性错误行为', () => {
@@ -205,16 +184,13 @@ describe('renderRosterTable（花名册 → 表格，减少便宜模型漏看）
 describe('净增预算：协议 + 4 工具（description + prompt）不超 v1.5.1 基线', () => {
   // 基线口径（架构裁决 2026-09-30，补充裁决 c8bc8164）：左 = 渲染后协议 +
   // 四个 Collab 工具注入模型的 description 与 prompt 之和；右 = v1.5.1 协议
-  // 全文 = 11266 码点（24084 UTF-8 字节）；v1.5.1 无工具，右侧不再加工具。
-  // 计量 Array.from(text).length，非精确 tokenizer。唯一门槛就是这个常量，
-  // 不得在测试里临时放宽；要扩容须再次架构裁决。
-  const V151_PROTOCOL_BASELINE_CHARS = 11266
-  const V151_PROTOCOL_BASELINE_BYTES = 24084
+  // 全文（v1.5.1 无工具，右侧不再加工具）。数值门槛一律引用真源常量，
+  // 不得在测试里写同义字面量或临时放宽；要扩容须再次架构裁决。
 
   test('协议全文不超 v1.5.1 基线（码点与 UTF-8 字节双口径）', () => {
-    expect(Array.from(DISPATCH_PROTOCOL_MD).length).toBeLessThanOrEqual(V151_PROTOCOL_BASELINE_CHARS)
+    expect(Array.from(DISPATCH_PROTOCOL_MD).length).toBeLessThanOrEqual(PROTOCOL_BUDGET_BASELINE)
     expect(Buffer.byteLength(DISPATCH_PROTOCOL_MD, 'utf8')).toBeLessThanOrEqual(
-      V151_PROTOCOL_BASELINE_BYTES,
+      PROTOCOL_BUDGET_BASELINE_UTF8_BYTES,
     )
   })
 
@@ -233,7 +209,7 @@ describe('净增预算：协议 + 4 工具（description + prompt）不超 v1.5.
       )
     ).reduce((sum, n) => sum + n, 0)
     expect(Array.from(DISPATCH_PROTOCOL_MD).length + toolChars).toBeLessThanOrEqual(
-      V151_PROTOCOL_BASELINE_CHARS,
+      PROTOCOL_BUDGET_BASELINE,
     )
   })
 })

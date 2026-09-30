@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -23,6 +23,7 @@ import { resetTerminalShellEnvironmentCacheForTests } from '../../utils/terminal
 // index.ts 启动装配（经 servantService 读真实花名册文件，与生产装配一致）
 import { registerServantInfoSource } from '../services/servantInfoSource.js'
 import { servantService } from '../services/servantService.js'
+import { COLLAB_SERVANT_NONINTERACTIVE_ENV } from '../../collaboration/collabToolContract.js'
 registerServantInfoSource((sessionId) => servantService.getServant(sessionId))
 
 describe('ConversationService', () => {
@@ -1688,6 +1689,213 @@ describe('ConversationService', () => {
     expect(env.CC_HEIHEI_SUPERVISOR).toBeUndefined()
     expect(env.CC_HEIHEI_SERVANT_CONSTRAINT).toBeUndefined()
     expect(env.CC_HEIHEI_SERVANT_WRITE_DIRS).toBeUndefined()
+  })
+
+  // ── v1.6.1：员工会话不得停在「等用户点击」（架构决策_员工会话不得等待用户审批.md）──
+
+  test('buildChildEnv injects the servant non-interactive switch for servants only', async () => {
+    const original = process.env[COLLAB_SERVANT_NONINTERACTIVE_ENV]
+    delete process.env[COLLAB_SERVANT_NONINTERACTIVE_ENV]
+    try {
+      const service = new ConversationService() as any
+      registerServantInfoSource(async (sessionId) =>
+        sessionId === 'sv-ni'
+          ? { sessionId, supervisor: false, enabled: true }
+          : sessionId === 'sup-ni'
+            ? { sessionId, supervisor: true, enabled: true }
+            : null,
+      )
+      const servantEnv = (await service.buildChildEnv(
+        '/tmp', undefined, undefined, undefined, undefined, 'sv-ni',
+      )) as Record<string, string>
+      expect(servantEnv[COLLAB_SERVANT_NONINTERACTIVE_ENV]).toBe('1')
+
+      // 主管不是员工：其 AskUserQuestion 是唯一升级出口，不注入此开关
+      const supervisorEnv = (await service.buildChildEnv(
+        '/tmp', undefined, undefined, undefined, undefined, 'sup-ni',
+      )) as Record<string, string>
+      expect(supervisorEnv[COLLAB_SERVANT_NONINTERACTIVE_ENV]).toBeUndefined()
+
+      // 非协作会话行为不变
+      const plainEnv = (await service.buildChildEnv(
+        '/tmp', undefined, undefined, undefined, undefined, 'plain-ni',
+      )) as Record<string, string>
+      expect(plainEnv[COLLAB_SERVANT_NONINTERACTIVE_ENV]).toBeUndefined()
+
+      // 置 '0' 时对员工注入 '0'（契约 §3.6：可关闭，重启会话生效）
+      process.env[COLLAB_SERVANT_NONINTERACTIVE_ENV] = '0'
+      const offEnv = (await service.buildChildEnv(
+        '/tmp', undefined, undefined, undefined, undefined, 'sv-ni',
+      )) as Record<string, string>
+      expect(offEnv[COLLAB_SERVANT_NONINTERACTIVE_ENV]).toBe('0')
+    } finally {
+      if (original === undefined) delete process.env[COLLAB_SERVANT_NONINTERACTIVE_ENV]
+      else process.env[COLLAB_SERVANT_NONINTERACTIVE_ENV] = original
+      registerServantInfoSource((sessionId) => servantService.getServant(sessionId))
+    }
+  })
+
+  test('getPermissionArgs forces bypass for servant sessions regardless of the requested mode', () => {
+    // 契约 §3.3 第 1 条：员工本来就是 bypass，此处只是不让「权限模式漂移」
+    // （登记后未重启 / 界面上切换）把员工改回会等人的模式。
+    const service = new ConversationService() as any
+
+    // 员工 → 一律 bypass，即便元数据里是 default
+    expect(service.getPermissionArgs('default', false, true)).toEqual([
+      '--dangerously-skip-permissions',
+    ])
+    expect(service.getPermissionArgs(undefined, false, true)).toEqual([
+      '--dangerously-skip-permissions',
+    ])
+    expect(service.getPermissionArgs('acceptEdits', false, true)).toEqual([
+      '--dangerously-skip-permissions',
+    ])
+
+    // 非员工行为不变：按请求的模式走
+    expect(service.getPermissionArgs('default', false, false)).toEqual([
+      '--allow-dangerously-skip-permissions',
+      '--permission-mode',
+      'default',
+    ])
+    expect(service.getPermissionArgs('bypassPermissions', false, false)).toEqual([
+      '--dangerously-skip-permissions',
+    ])
+  })
+
+  /** 直插 session（handleSdkPayload 会走 retainSdkMessage / notifyOutputCallbacks） */
+  function makePermissionSession(sent: any[], servantNonInteractive: boolean, forwarded: any[]) {
+    return {
+      sdkSocket: {
+        send(data: string) {
+          sent.push(JSON.parse(data))
+        },
+      },
+      pendingOutbound: [],
+      outputCallbacks: [(msg: any) => forwarded.push(msg)],
+      pendingPermissionRequests: new Map(),
+      servantNonInteractive,
+      sdkMessages: [],
+      seenSdkMessageUuids: new Set<string>(),
+    }
+  }
+
+  function canUseToolPayload(requestId: string, toolName: string) {
+    return JSON.stringify({
+      type: 'control_request',
+      request_id: requestId,
+      request: { subtype: 'can_use_tool', tool_name: toolName, input: {} },
+    }) + '\n'
+  }
+
+  test('servant can_use_tool is auto-denied, never forwarded to the client, and recorded', async () => {
+    const original = process.env[COLLAB_SERVANT_NONINTERACTIVE_ENV]
+    delete process.env[COLLAB_SERVANT_NONINTERACTIVE_ENV]
+    const { diagnosticsService } = await import('../services/diagnosticsService.js')
+    const recordSpy = spyOn(diagnosticsService, 'recordEvent')
+    try {
+      const service = new ConversationService() as any
+      const sent: any[] = []
+      const forwarded: any[] = []
+      const sessionId = 'sv-auto-deny'
+      service.sessions.set(sessionId, makePermissionSession(sent, true, forwarded))
+
+      const startedAt = Date.now()
+      service.handleSdkPayload(sessionId, canUseToolPayload('req-deny', 'Bash'))
+      // 契约 §3.5 第 3 条：1 秒内 deny
+      expect(Date.now() - startedAt).toBeLessThan(1000)
+
+      // 回给 CLI 的是 deny，并附汇报指引
+      const controlResponse = sent.find((m) => m.type === 'control_response')
+      expect(controlResponse).toBeTruthy()
+      expect(controlResponse.response.response.behavior).toBe('deny')
+      expect(controlResponse.response.response.message).toContain('用户不在场')
+
+      // 客户端收不到：outputCallbacks 收到的就是会转发给客户端的原始 cliMsg，
+      // 员工这条被 continue 掉了，回调根本不该被调用
+      expect(forwarded).toHaveLength(0)
+      // 也不登记为等待审批（否则 registry 会一直显示「等审批」）
+      expect(service.sessions.get(sessionId).pendingPermissionRequests.size).toBe(0)
+
+      // 诊断留痕：下次能判定事故走的是哪条路径
+      const event = recordSpy.mock.calls
+        .map((call) => call[0] as any)
+        .find((e) => e?.type === 'collab_servant_permission_auto_denied')
+      expect(event).toBeTruthy()
+      expect(event.sessionId).toBe(sessionId)
+      expect(event.details.toolName).toBe('Bash')
+      expect(typeof event.details.at).toBe('number')
+    } finally {
+      recordSpy.mockRestore()
+      if (original === undefined) delete process.env[COLLAB_SERVANT_NONINTERACTIVE_ENV]
+      else process.env[COLLAB_SERVANT_NONINTERACTIVE_ENV] = original
+    }
+  })
+
+  test('supervisor can_use_tool still reaches the client (AskUserQuestion is its escalation path)', () => {
+    const original = process.env[COLLAB_SERVANT_NONINTERACTIVE_ENV]
+    delete process.env[COLLAB_SERVANT_NONINTERACTIVE_ENV]
+    try {
+      const service = new ConversationService() as any
+      const sent: any[] = []
+      const forwarded: any[] = []
+      const sessionId = 'sup-can-use-tool'
+      service.sessions.set(sessionId, makePermissionSession(sent, false, forwarded))
+
+      service.handleSdkPayload(sessionId, canUseToolPayload('req-sup', 'AskUserQuestion'))
+
+      // 登记为等待审批 + 转发给客户端（等用户点，这是允许的升级路径）
+      expect(service.sessions.get(sessionId).pendingPermissionRequests.size).toBe(1)
+      expect(forwarded.some((m) => m?.type === 'control_request')).toBe(true)
+      expect(sent.some((m) => m.type === 'control_response')).toBe(false)
+    } finally {
+      if (original === undefined) delete process.env[COLLAB_SERVANT_NONINTERACTIVE_ENV]
+      else process.env[COLLAB_SERVANT_NONINTERACTIVE_ENV] = original
+    }
+  })
+
+  test('CC_HEIHEI_SERVANT_NONINTERACTIVE=0 turns the auto-deny off for servants', () => {
+    const original = process.env[COLLAB_SERVANT_NONINTERACTIVE_ENV]
+    process.env[COLLAB_SERVANT_NONINTERACTIVE_ENV] = '0'
+    try {
+      const service = new ConversationService() as any
+      const sent: any[] = []
+      const forwarded: any[] = []
+      const sessionId = 'sv-switch-off'
+      service.sessions.set(sessionId, makePermissionSession(sent, true, forwarded))
+
+      service.handleSdkPayload(sessionId, canUseToolPayload('req-off', 'Bash'))
+
+      // 关闭后回到改动前的状态：登记等待审批并转发给客户端
+      expect(service.sessions.get(sessionId).pendingPermissionRequests.size).toBe(1)
+      expect(forwarded.some((m) => m?.type === 'control_request')).toBe(true)
+      expect(sent.some((m) => m.type === 'control_response')).toBe(false)
+    } finally {
+      if (original === undefined) delete process.env[COLLAB_SERVANT_NONINTERACTIVE_ENV]
+      else process.env[COLLAB_SERVANT_NONINTERACTIVE_ENV] = original
+    }
+  })
+
+  test('isServantSession reports roster membership (enabled && !supervisor)', async () => {
+    const service = new ConversationService() as any
+    try {
+      registerServantInfoSource(async (sessionId) =>
+        sessionId === 'rostered-servant'
+          ? { sessionId, supervisor: false, enabled: true }
+          : sessionId === 'disabled-servant'
+            ? { sessionId, supervisor: false, enabled: false }
+            : sessionId === 'rostered-supervisor'
+              ? { sessionId, supervisor: true, enabled: true }
+              : null,
+      )
+      expect(await service.isServantSession('rostered-servant')).toBe(true)
+      // 停用的员工不算员工（不再享有免审批兜底，也就不会被强制 bypass）
+      expect(await service.isServantSession('disabled-servant')).toBe(false)
+      // 主管不是员工
+      expect(await service.isServantSession('rostered-supervisor')).toBe(false)
+      expect(await service.isServantSession('not-rostered')).toBe(false)
+    } finally {
+      registerServantInfoSource((sessionId) => servantService.getServant(sessionId))
+    }
   })
 })
 

@@ -84,7 +84,10 @@ export async function handleCollabTasksApi(
         ...(projectDir ? { projectDir } : {}),
         ...(statusParam ? { status: statusParam } : {}),
       })
-      return Response.json({ tasks })
+      // 裁决五第 3 条：响应回显服务端**实际用于过滤**的目录，前端标题只显示它，
+      // 不自己算路径——否则会出现「标题写 A、列表其实是 B」。只增字段，
+      // 既有 tasks 形状与过滤语义不变；无有效入参（不带过滤）时为 null。
+      return Response.json({ tasks, projectDir: projectDir ?? null })
     }
 
     // ── GET /api/collab-tasks/:id ───────────────────────────────────────

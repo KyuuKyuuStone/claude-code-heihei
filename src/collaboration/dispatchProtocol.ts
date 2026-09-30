@@ -141,6 +141,10 @@ export const DISPATCH_PROTOCOL_MD = `## 原生协作工具优先
 - 向用户汇总时区分三类：**已证实的结论 / 未决事项 / 风险**；未执行的验证不得写成已通过，推测须标明推测。
 - 不要替员工干活；你的职责是分解、派遣、验收、继续安排。
 
+## 静默输出（Windows）
+
+git bash 写 > /dev/null（勿写 > nul，会落成真实文件），PowerShell 用 2>$null；构建产物勿重定向到仓库根。
+
 ## 安全手动兜底（原生工具缺失或信箱不可写）
 
 仅未注入工具或传输失败且信箱不可写时使用。业务拒绝（not_on_roster、not_reviewable、task_closed、ledger_unsupported、invalid_target、cross_project、403、409）不可绕过；queued 不补发。读 desktop-server.json 先验 pid 存活，GET /api/whoami 核 startedAt，否则验 CC_HEIHEI_DESKTOP_SERVER_URL。Write 写 UTF-8 JSON + curl --data-binary @文件；禁内联中文、heredoc、curl 与 rm 不得 && 串联。派活 POST /api/session-messages；响应含 messageId 才算派活送达，否则留 payload；无 Bash 写信箱。汇报目标唯一取该条派活页脚；页脚缺失/不可读即停止并报告派活方。旧服务端只回退同项目唯一主管，否则拒绝；信箱 report 附 taskId/summary/deliverables。payload 写工作目录外，信箱例外。
@@ -150,3 +154,82 @@ export const DISPATCH_PROTOCOL_MD = `## 原生协作工具优先
 工具返回 queued 仅表示已写信箱，尚未确认送达；按工具返回的错误/告警如实处理，不伪造台账状态。台账长时间停在 dispatched，就催促员工或告知用户。收到汇报后用 CollabReview 验收，通过后汇总，不通过则 rework 并写明 note。
 
 主管只负责拆解、按花名册派活、验收和汇总。技术方案交架构师，界面与交互交设计师，代码质量交代码审查，功能验证交测试；仅花名册没有对应角色时才可补位，并在汇报里说明缺员与判断依据。未满足验收条件则返工；汇总区分已证实结论、未决事项和风险。`
+
+/**
+ * 主管规则摘要（v1.6.1 compact 续接卡片用），≤600 码点。
+ *
+ * **不另行撰写**：以下每一句都必须逐字出现在 DISPATCH_PROTOCOL_MD 中，
+ * 由测试断言（见 collab-context-api.test.ts 的「digest 每句都是真源子串」）。
+ * 改协议即改摘要，不会出现两套说法。它刻意不并入协议正文——协议是每个
+ * 协作会话常驻注入，这张卡只在 compact 之后出现一次，补的是已被压掉的上岗消息。
+ */
+const COLLAB_RULES_DIGEST_SENTENCES = [
+  '主管只负责拆解、按花名册派活、验收和汇总。',
+  '- **花名册里有能做的员工时，禁止自己做**——哪怕你觉得几分钟就能写完。你是编排者，不是执行者。只向花名册里 `enabled` 的会话派活。',
+  '- 技术方案、架构取舍、**员工结论冲突的裁决** → **架构师**',
+  '- 界面 / 交互 / 视觉方案 → **设计师**',
+  '- 代码质量、代码审查 → **代码审查**',
+  '- 功能验收、回归、边界与异常路径 → **测试**',
+  '- 安装、配置、接口说明、运维手册等文档 → **技术文档**',
+  '**仅当花名册中不存在该角色时**，主管才可以自己出方案，并且**必须在给用户的汇报里写明**：花名册缺哪个角色、为何必须由你补位、判断依据是什么（例：「花名册无架构师，本方案由主管自拟」）——不许默默自拟。',
+  '- **不深读代码、不跑大段排查**：需要翻代码、跑命令、取一手证据的事，派给对应员工去做，你只要结论。',
+  '- **中断员工只能用 POST /api/sessions/<id>/interrupt**（让员工停下来）。**严禁 `DELETE /api/sessions/<id>`**——那会不可逆地删掉整个会话及其历史，任何情况下都不得使用。',
+  '汇报目标唯一取该条派活页脚；页脚缺失/不可读即停止并报告派活方。',
+]
+
+/** 见 COLLAB_RULES_DIGEST_SENTENCES 的说明：真源子串拼装，≤600 码点。 */
+export const COLLAB_RULES_DIGEST: string = COLLAB_RULES_DIGEST_SENTENCES.join('\n')
+
+// ── 协议预算门槛（唯一真源） ────────────────────────────────────────────
+//
+// 依据《架构决策_协议瘦身与D项保留.md》的补充裁决 c8bc8164（比较口径）与
+// e0bf0ad3（550/650 冲突）。**唯一架构门槛是总量 11266**；兜底节与摘要的
+// 上限是实现余量，不是架构门槛。测试只能引用这里的常量，不得再写同义字面量。
+
+/**
+ * 「协议 + 四个 Collab 工具的 description/prompt」码点上限。
+ *
+ * 基线取 v1.5.1 的 `DISPATCH_PROTOCOL_MD` 全文（v1.5.1 无 Collab 工具，工具侧
+ * 按 0 计；新工具的描述算在**新**的一侧）。复现：
+ * `git show v1.5.1:src/collaboration/dispatchProtocol.ts`，导入后
+ * `Array.from(DISPATCH_PROTOCOL_MD).length === 11266`（UTF-8 24084 字节）。
+ * 计量一律 `Array.from(text).length`（码点），非精确 tokenizer。改这个数须再次架构裁决。
+ */
+export const PROTOCOL_BUDGET_BASELINE = 11266
+
+/** 同上的 UTF-8 字节口径（双重校验用）。 */
+export const PROTOCOL_BUDGET_BASELINE_UTF8_BYTES = 24084
+
+/** 兜底节的起止标题（切片与断言共用的唯一真源）。 */
+export const MANUAL_FALLBACK_HEADING = '## 安全手动兜底'
+export const FAILURE_HANDLING_HEADING = '## 失败处理与主管职责'
+
+/**
+ * 「## 安全手动兜底」到「## 失败处理与主管职责」之间整段的码点上限。
+ *
+ * 裁决 e0bf0ad3 统一取 650：原 550 与 650 都是实施者自留余量，550 只留 28 码点，
+ * 任何一句必要的补充都放不进去，只会逼人把内容挪出兜底节。全文本节只放
+ * 「原生工具不可用时怎么手动投递」的内容；像 Windows 静默输出这种通用规则
+ * 不属于本节的独立小节，不计入此上限（见 `## 静默输出（Windows）`）。
+ */
+export const MANUAL_FALLBACK_MAX_CODEPOINTS = 650
+
+/** `COLLAB_RULES_DIGEST` 的码点上限（compact 续接卡片，独立于协议正文门槛）。 */
+export const COLLAB_RULES_DIGEST_MAX_CODEPOINTS = 600
+
+/**
+ * 兜底节切片（**唯一实现**，测试共用）。
+ *
+ * 两个协议测试都要这段文本做内容/长度断言；裁决 e0bf0ad3 第 3 条要求切片逻辑
+ * 只有一份、长度断言只有一处。切片边界不成立时抛错，调用方不必自己校验下标。
+ */
+export function manualFallbackSection(text: string = DISPATCH_PROTOCOL_MD): string {
+  const start = text.indexOf(MANUAL_FALLBACK_HEADING)
+  const end = text.indexOf(FAILURE_HANDLING_HEADING)
+  if (start < 0 || end <= start) {
+    throw new Error(
+      `手动兜底节切片失败：找不到「${MANUAL_FALLBACK_HEADING}」或「${FAILURE_HANDLING_HEADING}」`,
+    )
+  }
+  return text.slice(start, end)
+}

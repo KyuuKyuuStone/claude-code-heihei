@@ -103,6 +103,7 @@ describe('stage4 · 7a servantInfoSource injection contract', () => {
         isRegisteredSupervisor: (id: string) => Promise<{
           supervisor: boolean
           registered: boolean
+          servant: boolean
           constraint?: 'readonly' | 'whitelist'
           writeDirs?: string[]
         }>
@@ -111,7 +112,8 @@ describe('stage4 · 7a servantInfoSource injection contract', () => {
 
     // 未注入：非主管、非在册（原 catch 行为等价）
     // v1.5.0 A7：返回值新增 registered（花名册在册即协作会话，据此禁 computer-use）
-    expect(await call()).toEqual({ supervisor: false, registered: false })
+    // v1.6.1：新增 servant（在册且非主管）——员工会话免审批兜底的判定依据
+    expect(await call()).toEqual({ supervisor: false, registered: false, servant: false })
 
     // 注入主管：收权生效（constraint/writeDirs 透传）+ 在册标记
     registerServantInfoSource(async () => ({
@@ -123,6 +125,7 @@ describe('stage4 · 7a servantInfoSource injection contract', () => {
     expect(await call()).toEqual({
       supervisor: true,
       registered: true,
+      servant: false,
       constraint: 'whitelist',
       writeDirs: ['C:/proj/src'],
     })
@@ -133,7 +136,12 @@ describe('stage4 · 7a servantInfoSource injection contract', () => {
       supervisor: false,
       constraint: 'readonly',
     }))
-    expect(await call()).toEqual({ supervisor: false, registered: true, constraint: 'readonly' })
+    expect(await call()).toEqual({
+      supervisor: false,
+      registered: true,
+      servant: true,
+      constraint: 'readonly',
+    })
   })
 })
 

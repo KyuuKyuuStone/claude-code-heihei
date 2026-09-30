@@ -594,6 +594,12 @@ export type Attachment =
       planContent: string
     }
   | {
+      /** Compact 后从权威台账/花名册恢复的协作上下文；只存白名单渲染文本。 */
+      type: 'collab_context'
+      text: string
+      openTaskCount: number
+    }
+  | {
       type: 'mcp_resource'
       server: string
       uri: string

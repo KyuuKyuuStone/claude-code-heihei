@@ -1,9 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const apiListDispatchedMock = vi.hoisted(() => vi.fn())
+const apiListForSessionMock = vi.hoisted(() => vi.fn())
+const apiListForProjectMock = vi.hoisted(() => vi.fn())
+const apiWhoamiMock = vi.hoisted(() => vi.fn())
 
 vi.mock('../api/collabTasks', () => ({
-  collabTasksApi: { listDispatched: apiListDispatchedMock },
+  collabTasksApi: {
+    listDispatched: apiListDispatchedMock,
+    listForSession: apiListForSessionMock,
+    listForProject: apiListForProjectMock,
+    whoami: apiWhoamiMock,
+  },
 }))
 
 const wsManagerMock = vi.hoisted(() => {
@@ -70,7 +78,27 @@ describe('collabTaskStore', () => {
     wsManagerMock.reset()
     resetGlobalEventsChannelForTests()
     resetCollabTaskRefreshForTests()
-    useCollabTaskStore.setState({ dispatchedBySessionId: {} })
+    useCollabTaskStore.setState({ dispatchedBySessionId: {}, tasksById: {}, activeProjectDir: null, activeProjectSessionId: null, isLoading: false, error: null, connectionState: 'disconnected', serverReady: false })
+    apiWhoamiMock.mockResolvedValue({ app: 'cc-heihei' })
+    apiListForSessionMock.mockResolvedValue({ tasks: [], projectDir: '/workspace/alpha' })
+    apiListForProjectMock.mockResolvedValue({ tasks: [] })
+    apiListDispatchedMock.mockResolvedValue({ tasks: [] })
+  })
+
+  it('discards stale session responses when a newer session request finishes first', async () => {
+    const oldResponse = deferred<{ tasks: CollabTask[]; projectDir: string }>()
+    const newResponse = deferred<{ tasks: CollabTask[]; projectDir: string }>()
+    apiListForSessionMock.mockReturnValueOnce(oldResponse.promise).mockReturnValueOnce(newResponse.promise)
+
+    const oldRequest = useCollabTaskStore.getState().refreshForSession('session-old')
+    const newRequest = useCollabTaskStore.getState().refreshForSession('session-new')
+    newResponse.resolve({ tasks: [makeTask({ id: 'new-task' })], projectDir: '/workspace/new' })
+    await newRequest
+    oldResponse.resolve({ tasks: [makeTask({ id: 'old-task' })], projectDir: '/workspace/old' })
+    await oldRequest
+
+    expect(useCollabTaskStore.getState().tasksById).toEqual({ 'new-task': expect.objectContaining({ id: 'new-task' }) })
+    expect(useCollabTaskStore.getState().activeProjectDir).toBe('/workspace/new')
   })
 
   it('aggregates dispatched tasks by target session', async () => {
@@ -118,23 +146,82 @@ describe('collabTaskStore', () => {
     unsubscribe()
   })
 
-  it('clears the copy and refetches on reconnect (no stale pending)', async () => {
+  it('reloads the active session when a task event arrives', async () => {
+    useCollabTaskStore.setState({ activeProjectSessionId: 'session-alpha', activeProjectDir: '/workspace/alpha' })
+    const unsubscribe = useCollabTaskStore.getState().subscribeTaskEvents()
+
+    wsManagerMock.emitMessage({
+      type: 'system_notification',
+      subtype: 'collab_task_changed',
+      data: { taskId: 'new-task', projectDir: '/workspace/alpha', change: 'created', status: 'dispatched' },
+    })
+
+    await vi.waitFor(() => expect(apiListForSessionMock).toHaveBeenCalledWith('session-alpha'))
+    expect(apiListForSessionMock).toHaveBeenCalledTimes(1)
+    unsubscribe()
+  })
+
+  it('does not patch another project event locally but still reloads the active session', async () => {
+    const activeTask = makeTask({ status: 'dispatched' })
+    useCollabTaskStore.setState({
+      activeProjectSessionId: 'session-alpha',
+      activeProjectDir: '/workspace/alpha',
+      tasksById: { 'task-1': activeTask },
+    })
+    const unsubscribe = useCollabTaskStore.getState().subscribeTaskEvents()
+
+    wsManagerMock.emitMessage({
+      type: 'system_notification',
+      subtype: 'collab_task_changed',
+      data: { taskId: 'task-1', projectDir: '/workspace/beta', change: 'status', status: 'verified' },
+    })
+    expect(useCollabTaskStore.getState().tasksById['task-1']).toBe(activeTask)
+
+    await vi.waitFor(() => expect(apiListForSessionMock).toHaveBeenCalledWith('session-alpha'))
+    expect(apiListForSessionMock).toHaveBeenCalledTimes(1)
+    unsubscribe()
+  })
+
+  it('rechecks server identity after initial failure when the first connection arrives', async () => {
+    apiWhoamiMock.mockRejectedValueOnce(new Error('server restarting')).mockResolvedValueOnce({ app: 'cc-heihei' })
+    const unsubscribe = useCollabTaskStore.getState().subscribeTaskEvents()
+    await vi.waitFor(() => expect(apiWhoamiMock).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(useCollabTaskStore.getState().serverReady).toBe(false))
+
+    useCollabTaskStore.getState().setConnectionState('connected')
+    useCollabTaskStore.getState().setConnectionState('connected')
+    await vi.waitFor(() => expect(useCollabTaskStore.getState().serverReady).toBe(true))
+    expect(apiWhoamiMock).toHaveBeenCalledTimes(2)
+    unsubscribe()
+  })
+
+  it('clears dispatched state and refreshes on reconnect', async () => {
     useCollabTaskStore.setState({ dispatchedBySessionId: { stale: true } })
     apiListDispatchedMock.mockResolvedValue({ tasks: [] })
     const unsubscribe = useCollabTaskStore.getState().subscribeTaskEvents()
 
-    wsManagerMock.emitState('connected')
-    expect(apiListDispatchedMock).not.toHaveBeenCalled()
-
     wsManagerMock.emitState('reconnecting')
     wsManagerMock.emitState('connected')
 
-    await vi.waitFor(() => {
-      expect(useCollabTaskStore.getState().dispatchedBySessionId).toEqual({})
-    })
+    await vi.waitFor(() => expect(useCollabTaskStore.getState().dispatchedBySessionId).toEqual({}))
     expect(apiListDispatchedMock).toHaveBeenCalledTimes(1)
     unsubscribe()
   })
+
+  it('coalesces a connection probe that overlaps the initial identity check', async () => {
+    const firstProbe = deferred<{ app: string }>()
+    apiWhoamiMock.mockReturnValueOnce(firstProbe.promise).mockResolvedValueOnce({ app: 'cc-heihei' })
+    const unsubscribe = useCollabTaskStore.getState().subscribeTaskEvents()
+    await vi.waitFor(() => expect(apiWhoamiMock).toHaveBeenCalledTimes(1))
+
+    useCollabTaskStore.getState().setConnectionState('connected')
+    expect(apiWhoamiMock).toHaveBeenCalledTimes(1)
+    firstProbe.resolve({ app: 'wrong-app' })
+    await vi.waitFor(() => expect(useCollabTaskStore.getState().serverReady).toBe(true))
+    expect(apiWhoamiMock).toHaveBeenCalledTimes(2)
+    unsubscribe()
+  })
+
 
   describe('in-flight race (裁决：并发旧快照不得覆盖新状态)', () => {
     it('coalesces concurrent refreshes into a single trailing refresh', async () => {

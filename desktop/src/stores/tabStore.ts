@@ -10,13 +10,14 @@ export const SETTINGS_TAB_ID = '__settings__'
 export const SCHEDULED_TAB_ID = '__scheduled__'
 export const MARKET_TAB_ID = '__market__'
 export const TRACE_LIST_TAB_ID = '__traces__'
+export const COLLAB_TASKS_TAB_ID = '__collab-tasks__'
 export const TERMINAL_TAB_PREFIX = '__terminal__'
 export const TRACE_TAB_PREFIX = '__trace__'
 export const WORKBENCH_TAB_PREFIX = '__workbench__'
 export const SUBAGENT_TAB_PREFIX = '__subagent__'
 
-export type TabType = 'session' | 'settings' | 'scheduled' | 'market' | 'terminal' | 'trace' | 'traces' | 'workbench' | 'subagent'
-type PersistentSpecialTabType = 'settings' | 'scheduled' | 'market' | 'traces'
+export type TabType = 'session' | 'settings' | 'scheduled' | 'market' | 'terminal' | 'trace' | 'traces' | 'collab-tasks' | 'workbench' | 'subagent'
+type PersistentSpecialTabType = 'settings' | 'scheduled' | 'market' | 'traces' | 'collab-tasks'
 
 export type Tab = {
   sessionId: string
@@ -34,23 +35,15 @@ export type Tab = {
   subagentTaskId?: string
 }
 
-export type WorkbenchTabOrigin = {
-  sourceSessionId?: string
-  sourceTurnKey?: string
-  sourceElementId?: string
-}
-
-type TabPersistence = {
-  openTabs: Array<{ sessionId: string; title: string; type?: TabType; traceSessionId?: string }>
-  activeTabId: string | null
-}
+export type WorkbenchTabOrigin = { sourceSessionId?: string; sourceTurnKey?: string; sourceElementId?: string }
+type TabPersistence = { openTabs: Array<{ sessionId: string; title: string; type?: TabType; traceSessionId?: string }>; activeTabId: string | null }
 
 type TabStore = {
   tabs: Tab[]
   activeTabId: string | null
-
   openTab: (sessionId: string, title: string, type?: TabType) => void
   openTracesTab: (title?: string) => string
+  openCollabTasksTab: (title?: string) => string
   openTraceTab: (sessionId: string, title?: string) => string
   openTerminalTab: (cwd?: string, terminalRuntimeId?: string) => string
   openWorkbenchTab: (sessionId: string, title?: string, origin?: WorkbenchTabOrigin) => string
@@ -62,7 +55,6 @@ type TabStore = {
   updateTabStatus: (sessionId: string, status: Tab['status']) => void
   replaceTabSession: (oldSessionId: string, newSessionId: string) => void
   moveTab: (fromIndex: number, toIndex: number) => void
-
   saveTabs: () => void
   restoreTabs: () => Promise<void>
 }
@@ -72,6 +64,7 @@ const PERSISTENT_SPECIAL_TAB_IDS: Record<PersistentSpecialTabType, string> = {
   scheduled: SCHEDULED_TAB_ID,
   market: MARKET_TAB_ID,
   traces: TRACE_LIST_TAB_ID,
+  'collab-tasks': COLLAB_TASKS_TAB_ID,
 }
 
 function getPersistentSpecialTabType(tab: Pick<Tab, 'sessionId'> & { type?: TabType }): PersistentSpecialTabType | null {
@@ -79,329 +72,121 @@ function getPersistentSpecialTabType(tab: Pick<Tab, 'sessionId'> & { type?: TabT
   if (tab.sessionId === SCHEDULED_TAB_ID) return 'scheduled'
   if (tab.sessionId === MARKET_TAB_ID) return 'market'
   if (tab.sessionId === TRACE_LIST_TAB_ID) return 'traces'
-  if (tab.type === 'settings' || tab.type === 'scheduled' || tab.type === 'market' || tab.type === 'traces') {
-    return tab.type
-  }
+  if (tab.sessionId === COLLAB_TASKS_TAB_ID || tab.type === 'collab-tasks') return 'collab-tasks'
+  if (tab.type === 'settings' || tab.type === 'scheduled' || tab.type === 'market' || tab.type === 'traces') return tab.type
   return null
 }
 
 export const useTabStore = create<TabStore>((set, get) => ({
   tabs: [],
   activeTabId: null,
-
   openTab: (sessionId, title, type) => {
-    const { tabs } = get()
-    const existing = tabs.find((t) => t.sessionId === sessionId)
-    if (existing) {
-      set({
-        tabs: tabs.map((tab) =>
-          tab.sessionId === sessionId
-            ? {
-                ...tab,
-                title,
-                type: type ?? tab.type ?? 'session',
-              }
-            : tab,
-        ),
-        activeTabId: sessionId,
-      })
-    } else {
-      set({
-        tabs: [...tabs, { sessionId, title, type: type ?? 'session', status: 'idle' }],
-        activeTabId: sessionId,
-      })
-    }
+    const tabs = get().tabs
+    set({ tabs: tabs.some((tab) => tab.sessionId === sessionId) ? tabs.map((tab) => tab.sessionId === sessionId ? { ...tab, title, type: type ?? tab.type ?? 'session' } : tab) : [...tabs, { sessionId, title, type: type ?? 'session', status: 'idle' }], activeTabId: sessionId })
     get().saveTabs()
   },
-
   openTracesTab: (title = 'Traces') => {
-    const { tabs } = get()
-    const existing = tabs.find((tab) => tab.sessionId === TRACE_LIST_TAB_ID)
-    if (existing) {
-      set({
-        tabs: tabs.map((tab) => (
-          tab.sessionId === TRACE_LIST_TAB_ID
-            ? { ...tab, title, type: 'traces' }
-            : tab
-        )),
-        activeTabId: TRACE_LIST_TAB_ID,
-      })
-    } else {
-      set({
-        tabs: [...tabs, { sessionId: TRACE_LIST_TAB_ID, title, type: 'traces', status: 'idle' }],
-        activeTabId: TRACE_LIST_TAB_ID,
-      })
-    }
+    const id = TRACE_LIST_TAB_ID
+    const tabs = get().tabs
+    set({ tabs: tabs.some((tab) => tab.sessionId === id) ? tabs.map((tab) => tab.sessionId === id ? { ...tab, title, type: 'traces' } : tab) : [...tabs, { sessionId: id, title, type: 'traces', status: 'idle' }], activeTabId: id })
     get().saveTabs()
-    return TRACE_LIST_TAB_ID
+    return id
   },
-
+  openCollabTasksTab: (title = '协作任务台账') => {
+    const id = COLLAB_TASKS_TAB_ID
+    const tabs = get().tabs
+    set({ tabs: tabs.some((tab) => tab.sessionId === id) ? tabs.map((tab) => tab.sessionId === id ? { ...tab, title, type: 'collab-tasks' } : tab) : [...tabs, { sessionId: id, title, type: 'collab-tasks', status: 'idle' }], activeTabId: id })
+    get().saveTabs()
+    return id
+  },
   openTraceTab: (sessionId, title = 'Trace') => {
-    const traceTabId = `${TRACE_TAB_PREFIX}${sessionId}`
-    const { tabs } = get()
-    const existing = tabs.find((tab) => tab.sessionId === traceTabId)
-    if (existing) {
-      set({
-        tabs: tabs.map((tab) => (
-          tab.sessionId === traceTabId
-            ? { ...tab, title, type: 'trace', traceSessionId: sessionId }
-            : tab
-        )),
-        activeTabId: traceTabId,
-      })
-    } else {
-      set({
-        tabs: [...tabs, { sessionId: traceTabId, title, type: 'trace', status: 'idle', traceSessionId: sessionId }],
-        activeTabId: traceTabId,
-      })
-    }
+    const id = `${TRACE_TAB_PREFIX}${sessionId}`
+    const tabs = get().tabs
+    set({ tabs: tabs.some((tab) => tab.sessionId === id) ? tabs.map((tab) => tab.sessionId === id ? { ...tab, title, type: 'trace', traceSessionId: sessionId } : tab) : [...tabs, { sessionId: id, title, type: 'trace', status: 'idle', traceSessionId: sessionId }], activeTabId: id })
     get().saveTabs()
-    return traceTabId
+    return id
   },
-
   openTerminalTab: (cwd, terminalRuntimeId) => {
-    const { tabs } = get()
-    const nextIndex = Math.max(
-      0,
-      ...tabs
-        .filter((tab) => tab.type === 'terminal')
-        .map((tab) => {
-          const match = /^Terminal (\d+)$/.exec(tab.title)
-          return match ? Number(match[1]) : 0
-        }),
-    ) + 1
-    const sessionId = `${TERMINAL_TAB_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    set({
-      tabs: [...tabs, { sessionId, title: `Terminal ${nextIndex}`, type: 'terminal', status: 'idle', terminalCwd: cwd, terminalRuntimeId }],
-      activeTabId: sessionId,
-    })
+    const nextIndex = Math.max(0, ...get().tabs.filter((tab) => tab.type === 'terminal').map((tab) => Number(/^Terminal (\d+)$/.exec(tab.title)?.[1] ?? 0))) + 1
+    const id = `${TERMINAL_TAB_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    set({ tabs: [...get().tabs, { sessionId: id, title: `Terminal ${nextIndex}`, type: 'terminal', status: 'idle', terminalCwd: cwd, terminalRuntimeId }], activeTabId: id })
     get().saveTabs()
-    return sessionId
+    return id
   },
-
   openWorkbenchTab: (sessionId, title = 'Workbench', origin) => {
-    const tabId = `${WORKBENCH_TAB_PREFIX}${sessionId}`
-    const { tabs } = get()
-    const existing = tabs.find((tab) => tab.sessionId === tabId)
-    const tab: Tab = {
-      sessionId: tabId,
-      title,
-      type: 'workbench',
-      status: 'idle',
-      workbenchSessionId: sessionId,
-      sourceSessionId: origin?.sourceSessionId ?? sessionId,
-      ...(origin?.sourceTurnKey ? { sourceTurnKey: origin.sourceTurnKey } : {}),
-      ...(origin?.sourceElementId ? { sourceElementId: origin.sourceElementId } : {}),
-    }
-
-    if (existing) {
-      set({
-        tabs: tabs.map((current) => current.sessionId === tabId ? tab : current),
-        activeTabId: tabId,
-      })
-    } else {
-      set({
-        tabs: [...tabs, tab],
-        activeTabId: tabId,
-      })
-    }
+    const id = `${WORKBENCH_TAB_PREFIX}${sessionId}`
+    const tab: Tab = { sessionId: id, title, type: 'workbench', status: 'idle', workbenchSessionId: sessionId, sourceSessionId: origin?.sourceSessionId ?? sessionId, ...(origin?.sourceTurnKey ? { sourceTurnKey: origin.sourceTurnKey } : {}), ...(origin?.sourceElementId ? { sourceElementId: origin.sourceElementId } : {}) }
+    const tabs = get().tabs
+    set({ tabs: tabs.some((item) => item.sessionId === id) ? tabs.map((item) => item.sessionId === id ? tab : item) : [...tabs, tab], activeTabId: id })
     get().saveTabs()
-    return tabId
+    return id
   },
-
-  returnFromWorkbench: (tabId) => {
-    const tab = get().tabs.find((current) => current.sessionId === tabId)
+  returnFromWorkbench: (id) => {
+    const tab = get().tabs.find((item) => item.sessionId === id)
     if (tab?.type !== 'workbench') return
-
-    if (tab.sourceSessionId && get().tabs.some((current) => current.sessionId === tab.sourceSessionId)) {
-      get().setActiveTab(tab.sourceSessionId)
-    }
-    get().closeTab(tabId)
+    if (tab.sourceSessionId && get().tabs.some((item) => item.sessionId === tab.sourceSessionId)) get().setActiveTab(tab.sourceSessionId)
+    get().closeTab(id)
   },
-
   openSubagentTab: (sourceSessionId, toolUseId, title = 'SubAgent', taskId) => {
-    const tabId = `${SUBAGENT_TAB_PREFIX}${sourceSessionId}__${toolUseId}`
-    const { tabs } = get()
-    const existing = tabs.find((tab) => tab.sessionId === tabId)
-    const tab: Tab = {
-      sessionId: tabId,
-      title,
-      type: 'subagent',
-      status: 'idle',
-      sourceSessionId,
-      subagentToolUseId: toolUseId,
-      ...(taskId ? { subagentTaskId: taskId } : {}),
-    }
-
-    set({
-      tabs: existing
-        ? tabs.map((current) => current.sessionId === tabId ? tab : current)
-        : [...tabs, tab],
-      activeTabId: tabId,
-    })
+    const id = `${SUBAGENT_TAB_PREFIX}${sourceSessionId}__${toolUseId}`
+    const tab: Tab = { sessionId: id, title, type: 'subagent', status: 'idle', sourceSessionId, subagentToolUseId: toolUseId, ...(taskId ? { subagentTaskId: taskId } : {}) }
+    const tabs = get().tabs
+    set({ tabs: tabs.some((item) => item.sessionId === id) ? tabs.map((item) => item.sessionId === id ? tab : item) : [...tabs, tab], activeTabId: id })
     get().saveTabs()
-    return tabId
+    return id
   },
-
   closeTab: (sessionId) => {
     const { tabs, activeTabId } = get()
-    const index = tabs.findIndex((t) => t.sessionId === sessionId)
+    const index = tabs.findIndex((tab) => tab.sessionId === sessionId)
     if (index < 0) return
-
-    const newTabs = tabs.filter((t) => t.sessionId !== sessionId)
-    let newActiveId = activeTabId
-
-    if (activeTabId === sessionId) {
-      if (newTabs.length === 0) {
-        newActiveId = null
-      } else if (index >= newTabs.length) {
-        newActiveId = newTabs[newTabs.length - 1]!.sessionId
-      } else {
-        newActiveId = newTabs[index]!.sessionId
-      }
-    }
-
-    set({ tabs: newTabs, activeTabId: newActiveId })
+    const nextTabs = tabs.filter((tab) => tab.sessionId !== sessionId)
+    const nextActive = activeTabId === sessionId ? nextTabs[Math.min(index, nextTabs.length - 1)]?.sessionId ?? null : activeTabId
+    set({ tabs: nextTabs, activeTabId: nextActive })
     get().saveTabs()
-    const closedTab = tabs[index]
-    if (closedTab?.type === 'terminal') {
-      destroyTerminalRuntime(closedTab.terminalRuntimeId ?? closedTab.sessionId)
-    }
+    const closed = tabs[index]
+    if (closed?.type === 'terminal') destroyTerminalRuntime(closed.terminalRuntimeId ?? closed.sessionId)
     dropVirtualHeightSession(sessionId)
   },
-
-  setActiveTab: (sessionId) => {
-    set({ activeTabId: sessionId })
+  setActiveTab: (id) => { set({ activeTabId: id }); get().saveTabs() },
+  updateTabTitle: (id, title) => { set((state) => ({ tabs: state.tabs.map((tab) => tab.sessionId === id ? { ...tab, title } : tab) })); get().saveTabs() },
+  updateTabStatus: (id, status) => set((state) => ({ tabs: state.tabs.map((tab) => tab.sessionId === id ? { ...tab, status } : tab) })),
+  replaceTabSession: (oldId, newId) => { set((state) => ({ tabs: state.tabs.map((tab) => tab.sessionId === oldId ? { ...tab, sessionId: newId } : tab), activeTabId: state.activeTabId === oldId ? newId : state.activeTabId })); get().saveTabs() },
+  moveTab: (from, to) => {
+    if (from === to) return
+    const tabs = [...get().tabs]
+    if (from < 0 || from >= tabs.length || to < 0 || to >= tabs.length) return
+    const [moved] = tabs.splice(from, 1)
+    tabs.splice(to, 0, moved!)
+    set({ tabs })
     get().saveTabs()
   },
-
-  updateTabTitle: (sessionId, title) => {
-    set((s) => ({
-      tabs: s.tabs.map((t) => (t.sessionId === sessionId ? { ...t, title } : t)),
-    }))
-    get().saveTabs()
-  },
-
-  updateTabStatus: (sessionId, status) => {
-    set((s) => ({
-      tabs: s.tabs.map((t) => (t.sessionId === sessionId ? { ...t, status } : t)),
-    }))
-  },
-
-  replaceTabSession: (oldSessionId, newSessionId) => {
-    const { activeTabId } = get()
-    set((s) => ({
-      tabs: s.tabs.map((t) =>
-        t.sessionId === oldSessionId ? { ...t, sessionId: newSessionId } : t,
-      ),
-      activeTabId: activeTabId === oldSessionId ? newSessionId : activeTabId,
-    }))
-    get().saveTabs()
-  },
-
-  moveTab: (fromIndex, toIndex) => {
-    if (fromIndex === toIndex) return
-    const { tabs } = get()
-    if (fromIndex < 0 || fromIndex >= tabs.length || toIndex < 0 || toIndex >= tabs.length) return
-    const newTabs = [...tabs]
-    const [moved] = newTabs.splice(fromIndex, 1)
-    newTabs.splice(toIndex, 0, moved!)
-    set({ tabs: newTabs })
-    get().saveTabs()
-  },
-
   saveTabs: () => {
     const { tabs, activeTabId } = get()
-    const persistableTabs = tabs.filter((tab) => tab.type !== 'terminal' && tab.type !== 'workbench' && tab.type !== 'subagent')
-    const activeTab = tabs.find((tab) => tab.sessionId === activeTabId)
-    const persistedActiveTabId = activeTabId && persistableTabs.some((tab) => tab.sessionId === activeTabId)
-      ? activeTabId
-      : activeTab?.type === 'workbench' && activeTab.sourceSessionId && persistableTabs.some((tab) => tab.sessionId === activeTab.sourceSessionId)
-        ? activeTab.sourceSessionId
-        : (persistableTabs[0]?.sessionId ?? null)
-    const data: TabPersistence = {
-      openTabs: persistableTabs.map((t) => ({
-        sessionId: t.sessionId,
-        title: t.title,
-        type: t.type,
-        ...(t.traceSessionId ? { traceSessionId: t.traceSessionId } : {}),
-      })),
-      activeTabId: persistedActiveTabId,
-    }
-    try {
-      localStorage.setItem(TAB_STORAGE_KEY, JSON.stringify(data))
-    } catch { /* noop */ }
+    const persistable = tabs.filter((tab) => tab.type !== 'terminal' && tab.type !== 'workbench' && tab.type !== 'subagent')
+    const active = tabs.find((tab) => tab.sessionId === activeTabId)
+    const persistedActiveTabId = activeTabId && persistable.some((tab) => tab.sessionId === activeTabId) ? activeTabId : active?.type === 'workbench' && active.sourceSessionId && persistable.some((tab) => tab.sessionId === active.sourceSessionId) ? active.sourceSessionId : persistable[0]?.sessionId ?? null
+    try { localStorage.setItem(TAB_STORAGE_KEY, JSON.stringify({ openTabs: persistable.map((tab) => ({ sessionId: tab.sessionId, title: tab.title, type: tab.type, ...(tab.traceSessionId ? { traceSessionId: tab.traceSessionId } : {}) })), activeTabId: persistedActiveTabId })) } catch { /* noop */ }
   },
-
   restoreTabs: async () => {
     try {
-      const restoreStartedWith = get()
+      const started = get()
       const raw = localStorage.getItem(TAB_STORAGE_KEY)
       if (!raw) return
-
       const data = JSON.parse(raw) as TabPersistence
-      if (!data.openTabs || data.openTabs.length === 0) {
-        set({ tabs: [], activeTabId: null })
-        localStorage.removeItem(TAB_STORAGE_KEY)
-        return
-      }
-
+      if (!data.openTabs?.length) { set({ tabs: [], activeTabId: null }); localStorage.removeItem(TAB_STORAGE_KEY); return }
       const { sessions } = await sessionsApi.list({ limit: 200 })
-      const current = get()
-      if (
-        current.tabs !== restoreStartedWith.tabs ||
-        current.activeTabId !== restoreStartedWith.activeTabId
-      ) {
-        return
-      }
+      if (get().tabs !== started.tabs || get().activeTabId !== started.activeTabId) return
       useSessionRuntimeStore.getState().syncFromSessions(sessions)
-      const existingIds = new Set(sessions.map((s) => s.id))
-
-      const validTabs: Tab[] = data.openTabs
-        .filter((t) => {
-          // Special tabs are always valid
-          if (getPersistentSpecialTabType(t)) return true
-          if (t.type === 'trace') return !!t.traceSessionId && existingIds.has(t.traceSessionId)
-          if (t.type === 'terminal') return false
-          // Session tabs must exist on server
-          return existingIds.has(t.sessionId)
-        })
-        .map((t) => {
-          const specialType = getPersistentSpecialTabType(t)
-          if (specialType) {
-            return { sessionId: PERSISTENT_SPECIAL_TAB_IDS[specialType], title: t.title, type: specialType, status: 'idle' as const }
-          }
-          if (t.type === 'trace' && t.traceSessionId) {
-            // Titled with the traced session, same as a freshly opened trace
-            // tab — the tab bar's glyph is what marks it as a trace.
-            const sourceTitle = sessions.find((s) => s.id === t.traceSessionId)?.title || t.title
-            return {
-              sessionId: `${TRACE_TAB_PREFIX}${t.traceSessionId}`,
-              title: sourceTitle,
-              type: 'trace' as const,
-              status: 'idle' as const,
-              traceSessionId: t.traceSessionId,
-            }
-          }
-          return {
-            sessionId: t.sessionId,
-            title: sessions.find((s) => s.id === t.sessionId)?.title || t.title,
-            type: 'session' as const,
-            status: 'idle' as const,
-          }
-        })
-
-      if (validTabs.length === 0) {
-        set({ tabs: [], activeTabId: null })
-        localStorage.removeItem(TAB_STORAGE_KEY)
-        return
-      }
-
-      const activeId = data.activeTabId && validTabs.some((t) => t.sessionId === data.activeTabId)
-        ? data.activeTabId
-        : validTabs[0]!.sessionId
-
-      set({ tabs: validTabs, activeTabId: activeId })
+      const ids = new Set(sessions.map((session) => session.id))
+      const tabs: Tab[] = data.openTabs.filter((tab) => getPersistentSpecialTabType(tab) || (tab.type === 'trace' ? Boolean(tab.traceSessionId && ids.has(tab.traceSessionId)) : tab.type !== 'terminal' && ids.has(tab.sessionId))).map((tab) => {
+        const special = getPersistentSpecialTabType(tab)
+        if (special) return { sessionId: PERSISTENT_SPECIAL_TAB_IDS[special], title: tab.title, type: special, status: 'idle' as const }
+        if (tab.type === 'trace' && tab.traceSessionId) return { sessionId: `${TRACE_TAB_PREFIX}${tab.traceSessionId}`, title: sessions.find((session) => session.id === tab.traceSessionId)?.title || tab.title, type: 'trace' as const, status: 'idle' as const, traceSessionId: tab.traceSessionId }
+        return { sessionId: tab.sessionId, title: sessions.find((session) => session.id === tab.sessionId)?.title || tab.title, type: 'session' as const, status: 'idle' as const }
+      })
+      if (!tabs.length) { set({ tabs: [], activeTabId: null }); localStorage.removeItem(TAB_STORAGE_KEY); return }
+      const activeTabId = data.activeTabId && tabs.some((tab) => tab.sessionId === data.activeTabId) ? data.activeTabId : tabs[0]!.sessionId
+      set({ tabs, activeTabId })
     } catch { /* noop */ }
   },
 }))

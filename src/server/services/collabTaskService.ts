@@ -27,6 +27,7 @@ import { getCcHeiheiDir } from '../../utils/envUtils.js'
 import { renameWithRetry } from '../../utils/atomicFs.js'
 import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 import { emitCollabPush } from '../../collaboration/collabPushSignals.js'
+import { normalizeProjectPath, sameProject } from '../../collaboration/projectPath.js'
 import { onSessionEvent } from './sessionEvents.js'
 import { sessionService } from './sessionService.js'
 import { servantService } from './servantService.js'
@@ -48,6 +49,12 @@ export type TaskHistoryEntry = {
   from: TaskStatus | null
   to: TaskStatus
   note?: string
+  /**
+   * 流转发起者。缺省 = 正常业务流转（派活/回合推进/员工汇报）。
+   * 目前只有 'system'：reportTask 对停在 dispatched 的任务做补推进（裁决四）。
+   * 有了它，审计上能区分「正常推进」和「补推进」，不必靠猜 history 的 note。
+   */
+  by?: 'system'
 }
 
 /**
@@ -110,6 +117,12 @@ const ALLOWED_TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]>> =
 /** 追加行数超过该值时压实为快照（每任务一行 created） */
 const COMPACT_THRESHOLD = 400
 
+/**
+ * 补推进前两条 history 的固定 note（裁决四第 1 条，措辞固定便于检索）。
+ * 见 `reportTask`：员工忙碌期间入队的任务拿不到开工信号，汇报时补齐中间态。
+ */
+export const REPORT_CATCHUP_NOTE = '汇报时补推进：回合中途入队未收到开工信号'
+
 type CreatedEvent = { type: 'created'; task: Task }
 type StatusEvent = {
   type: 'status'
@@ -121,6 +134,8 @@ type StatusEvent = {
   report?: string
   deliverables?: string[]
   verdict?: string
+  /** 见 TaskHistoryEntry.by */
+  by?: 'system'
 }
 type TaskEvent = CreatedEvent | StatusEvent
 
@@ -144,8 +159,7 @@ export function isTaskStatus(value: unknown): value is TaskStatus {
 
 /** 项目目录 → 文件名 hash（分隔符/大小写归一后哈希；Windows 路径大小写不敏感） */
 function projectHash(projectDir: string): string {
-  const normalized = path.resolve(projectDir).replace(/\\/g, '/').toLowerCase()
-  return crypto.createHash('sha1').update(normalized).digest('hex').slice(0, 16)
+  return crypto.createHash('sha1').update(normalizeProjectPath(projectDir)).digest('hex').slice(0, 16)
 }
 
 function tasksDir(): string {
@@ -172,11 +186,10 @@ function cloneTask(task: Task): Task {
  * 以 `D:\X` 与 `d:/x` 两种写法创建任务时，projectHash 归一到同一个账本文件，
  * 但压实快照筛选把不匹配的那组判为异项目丢弃，其 created 行随压实消失，
  * 重启 replay 后任务永久丢失。
+ *
+ * 现已提为共享实现（`src/collaboration/projectPath.ts`），台账、花名册、派活
+ * 三处统一引用同一个口径，避免再次分叉。本文件的 `projectHash` 也复用它。
  */
-function sameProject(a: string, b: string): boolean {
-  return projectHash(a) === projectHash(b)
-}
-
 export class CollabTaskService {
   /** taskId → Task（全部已加载项目） */
   private tasks = new Map<string, Task>()
@@ -276,6 +289,7 @@ export class CollabTaskService {
           from: event.from,
           to: event.to,
           ...(event.note ? { note: event.note } : {}),
+          ...(event.by ? { by: event.by } : {}),
         })
         if (event.report !== undefined) task.report = event.report
         if (event.deliverables !== undefined) task.deliverables = event.deliverables
@@ -398,47 +412,173 @@ export class CollabTaskService {
     return this.enqueueWrite(async () => {
       const task = this.tasks.get(id)
       if (!task) throw ApiError.notFound(`Task not found: ${id}`)
-      const from = task.status
-      if (from === to) return cloneTask(task)
-      if (!ALLOWED_TRANSITIONS[from].includes(to)) {
-        throw ApiError.conflict(`Illegal task transition: ${from} -> ${to} (task ${id})`)
-      }
-
       const at = Date.now()
-      await this.appendEvent(task.projectDir, {
-        type: 'status',
-        id,
-        from,
-        to,
-        at,
-        ...(patch.note ? { note: patch.note } : {}),
-        ...(patch.report !== undefined ? { report: patch.report } : {}),
-        ...(patch.deliverables !== undefined ? { deliverables: patch.deliverables } : {}),
-        ...(patch.verdict !== undefined ? { verdict: patch.verdict } : {}),
-      })
-
-      task.status = to
-      task.updatedAt = at
-      task.history.push({ at, from, to, ...(patch.note ? { note: patch.note } : {}) })
-      if (patch.report !== undefined) task.report = patch.report
-      if (patch.deliverables !== undefined) task.deliverables = patch.deliverables
-      if (patch.verdict !== undefined) task.verdict = patch.verdict
+      const moved = await this.applyTransitionLocked(task, to, patch, at)
+      if (!moved) return cloneTask(task)
 
       emitCollabPush({ kind: 'task', taskId: id, projectDir: task.projectDir, change: 'status', status: to })
       return cloneTask(task)
     })
   }
 
-  /** 员工交付：→ delivered（带 summary / deliverables） */
+  /**
+   * 单步流转原语——**必须在 enqueueWrite 临界区内调用**（不再自己入队，
+   * 否则嵌套入队会死锁）。
+   *
+   * 校验沿用 ALLOWED_TRANSITIONS（本版未新增任何边）。返回是否真的发生了流转
+   * （from === to 时幂等返回 false，与旧行为一致）。
+   */
+  private async applyTransitionLocked(
+    task: Task,
+    to: TaskStatus,
+    patch: { note?: string; report?: string; deliverables?: string[]; verdict?: string; by?: 'system' },
+    at: number,
+  ): Promise<boolean> {
+    const from = task.status
+    if (from === to) return false
+    if (!ALLOWED_TRANSITIONS[from].includes(to)) {
+      throw ApiError.conflict(`Illegal task transition: ${from} -> ${to} (task ${task.id})`)
+    }
+
+    await this.appendEvent(task.projectDir, {
+      type: 'status',
+      id: task.id,
+      from,
+      to,
+      at,
+      ...(patch.note ? { note: patch.note } : {}),
+      ...(patch.report !== undefined ? { report: patch.report } : {}),
+      ...(patch.deliverables !== undefined ? { deliverables: patch.deliverables } : {}),
+      ...(patch.verdict !== undefined ? { verdict: patch.verdict } : {}),
+      ...(patch.by ? { by: patch.by } : {}),
+    })
+
+    task.status = to
+    task.updatedAt = at
+    task.history.push({
+      at,
+      from,
+      to,
+      ...(patch.note ? { note: patch.note } : {}),
+      ...(patch.by ? { by: patch.by } : {}),
+    })
+    if (patch.report !== undefined) task.report = patch.report
+    if (patch.deliverables !== undefined) task.deliverables = patch.deliverables
+    if (patch.verdict !== undefined) task.verdict = patch.verdict
+    return true
+  }
+
+  /**
+   * 员工交付：→ delivered（带 summary / deliverables）。
+   *
+   * 裁决四（采纳方案 A）：任务仍停在 `dispatched` 时，说明它是在员工忙碌期间
+   * 入队、且从未收到开工信号（`beginTurn` 幂等短路不发 turn_changed）。此时
+   * 员工带着正文汇报本身就是「已接手并完成」的最强证据，故在同一临界区内补写
+   * `dispatched→accepted→in_progress→delivered`：
+   * - 三条共用同一个 `at`（汇报时刻），不伪造更早时间；
+   * - 前两条 note 固定、`by` 记 'system'，审计上与正常推进可区分；
+   * - **不给 ALLOWED_TRANSITIONS 加边**：补链只走已有的合法转移，其他路径上的
+   *   `dispatched→delivered` 仍然非法；
+   * - 三次写入合成一次 appendFile（要么全写要么不写），失败不留下半截状态；
+   * - 推送只发最终态 delivered 一次。
+   */
   async reportTask(id: string, input: { summary: string; deliverables?: string[] }): Promise<Task> {
     if (!input.summary || !input.summary.trim()) {
       throw ApiError.badRequest('Field "summary" is required')
     }
-    return this.transitionTask(id, 'delivered', {
-      report: input.summary,
-      note: input.summary,
-      ...(input.deliverables ? { deliverables: input.deliverables } : {}),
+    await this.ensureLoaded()
+
+    return this.enqueueWrite(async () => {
+      const task = this.tasks.get(id)
+      if (!task) throw ApiError.notFound(`Task not found: ${id}`)
+
+      const at = Date.now()
+      const reportPatch = {
+        report: input.summary,
+        note: input.summary,
+        ...(input.deliverables ? { deliverables: input.deliverables } : {}),
+      }
+
+      if (task.status === 'dispatched') {
+        await this.catchUpToDeliveredLocked(task, reportPatch, at)
+      } else {
+        const moved = await this.applyTransitionLocked(task, 'delivered', reportPatch, at)
+        if (!moved) return cloneTask(task)
+      }
+
+      // 推送只发最终态一次（补链的中间态不推送，避免面板闪烁）
+      emitCollabPush({
+        kind: 'task',
+        taskId: id,
+        projectDir: task.projectDir,
+        change: 'status',
+        status: 'delivered',
+      })
+      return cloneTask(task)
     })
+  }
+
+  /**
+   * 补链落盘（**临界区内**，原子）。
+   *
+   * 先在内存里校验三步全部合法，再一次性写三行事件；任一步不合法就整体抛错，
+   * 不写任何一行、也不改内存态。
+   */
+  private async catchUpToDeliveredLocked(
+    task: Task,
+    reportPatch: { report: string; note: string; deliverables?: string[] },
+    at: number,
+  ): Promise<void> {
+    const chain: TaskStatus[] = ['accepted', 'in_progress', 'delivered']
+    // 校验：三步都必须沿已有合法边推进（不新增状态机边）
+    let cursor = task.status
+    for (const step of chain) {
+      if (!ALLOWED_TRANSITIONS[cursor].includes(step)) {
+        throw ApiError.conflict(`Illegal task transition: ${cursor} -> ${step} (task ${task.id})`)
+      }
+      cursor = step
+    }
+
+    const events: StatusEvent[] = []
+    let from = task.status
+    for (const step of chain) {
+      const isFinal = step === 'delivered'
+      events.push({
+        type: 'status',
+        id: task.id,
+        from,
+        to: step,
+        at,
+        // 前两步是补推进；最后一步是员工真正的汇报，note 用 summary
+        ...(isFinal
+          ? { note: reportPatch.note, report: reportPatch.report }
+          : { note: REPORT_CATCHUP_NOTE, by: 'system' }),
+        ...(isFinal && reportPatch.deliverables ? { deliverables: reportPatch.deliverables } : {}),
+      })
+      from = step
+    }
+
+    // 一次写盘：要么三行都落，要么一行都不落
+    await this.appendEvents(task.projectDir, events)
+
+    // 写盘成功后才改内存态
+    let prev = task.status
+    for (const step of chain) {
+      const isFinal = step === 'delivered'
+      task.history.push({
+        at,
+        from: prev,
+        to: step,
+        ...(isFinal
+          ? { note: reportPatch.note }
+          : { note: REPORT_CATCHUP_NOTE, by: 'system' as const }),
+      })
+      prev = step
+    }
+    task.status = 'delivered'
+    task.updatedAt = at
+    task.report = reportPatch.report
+    if (reportPatch.deliverables !== undefined) task.deliverables = reportPatch.deliverables
   }
 
   /** 主管验收：pass → verified；rework → rework */
@@ -554,10 +694,22 @@ export class CollabTaskService {
   }
 
   private async appendEvent(projectDir: string, event: TaskEvent): Promise<void> {
+    await this.appendEvents(projectDir, [event])
+  }
+
+  /**
+   * 批量追加（**一次 appendFile 写全部行**）。
+   *
+   * 补推进（reportTask 的 dispatched→accepted→in_progress→delivered）要求
+   * 「要么全部写入、要么一条都不写」：逐条 append 会在中途失败时留下半截状态。
+   * 单次 appendFile 让这三行成为一个写操作，失败则一行都没落盘，内存态也不推进。
+   */
+  private async appendEvents(projectDir: string, events: TaskEvent[]): Promise<void> {
+    if (events.length === 0) return
     const filePath = tasksFileFor(projectDir)
     await fs.mkdir(path.dirname(filePath), { recursive: true })
-    await fs.appendFile(filePath, `${JSON.stringify(event)}\n`, 'utf-8')
-    this.lineCount.set(projectDir, (this.lineCount.get(projectDir) ?? 0) + 1)
+    await fs.appendFile(filePath, `${events.map((e) => JSON.stringify(e)).join('\n')}\n`, 'utf-8')
+    this.lineCount.set(projectDir, (this.lineCount.get(projectDir) ?? 0) + events.length)
     await this.compactIfNeeded(projectDir)
   }
 

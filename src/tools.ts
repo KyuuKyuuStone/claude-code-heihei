@@ -149,6 +149,7 @@ import { hasEmbeddedSearchTools } from './utils/embeddedTools.js'
 import { isEnvTruthy } from './utils/envUtils.js'
 import { isPowerShellToolEnabled } from './utils/shell/shellToolUtils.js'
 import { isAgentSwarmsEnabled } from './utils/agentSwarmsEnabled.js'
+import { isManualWaitToolEnabled } from './collaboration/collabToolContract.js'
 import { isWorktreeModeEnabled } from './utils/worktreeModeEnabled.js'
 import {
   REPL_TOOL_NAME,
@@ -188,7 +189,9 @@ export function parseToolPreset(preset: string): ToolPreset | null {
  */
 export function getToolsForDefaultPreset(): string[] {
   const tools = getAllBaseTools()
-  const isEnabled = tools.map(tool => tool.isEnabled())
+  const isEnabled = tools.map(
+    tool => tool.isEnabled() && isManualWaitToolEnabled(tool.name),
+  )
   return tools.filter((_, i) => isEnabled[i]).map(tool => tool.name)
 }
 
@@ -334,7 +337,9 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
     }
   }
 
-  const isEnabled = allowedTools.map(_ => _.isEnabled())
+  const isEnabled = allowedTools.map(
+    tool => tool.isEnabled() && isManualWaitToolEnabled(tool.name),
+  )
   return allowedTools.filter((_, i) => isEnabled[i])
 }
 

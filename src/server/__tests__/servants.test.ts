@@ -1567,6 +1567,47 @@ describe('Session Messages API', () => {
     expect(deliverMock).not.toHaveBeenCalled()
   })
 
+  it('should treat case/slash variants of one directory as the same project（归一后不再误拒）', async () => {
+    // 架构裁决四：派活侧原先是原始串比较，同一目录写成 `D:\X` 与 `d:/x` 会被
+    // 误判成跨项目而拒绝。这里把派活方的 workDir 注入成同一个目录的另一种写法，
+    // 派活必须成功——归一化只收紧不了隔离，也**不该**误伤同项目。
+    const { sessionService: realSessionService } = await import(
+      '../services/sessionService.js'
+    )
+    const worker = await realSessionService.createSession(tmpDir)
+    const boss = await realSessionService.createSession(tmpDir)
+    registerSession(worker.sessionId)
+    const { ServantService } = await import('../services/servantService.js')
+    await new ServantService().setServant(worker.sessionId, {
+      role: '后端',
+      enabled: true,
+    })
+
+    const variant = `${tmpDir.toUpperCase().replace(/\//g, '\\')}\\`
+    const spy = spyOn(sessionService, 'getSessionWorkDir').mockImplementation(async (id) =>
+      id === worker.sessionId ? tmpDir : variant,
+    )
+    try {
+      const req = new Request('http://localhost/api/session-messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targetSessionId: worker.sessionId,
+          content: '任务',
+          fromSessionId: boss.sessionId,
+        }),
+      })
+      const resp = await handleSessionMessagesApi(req, new URL(req.url), [
+        'api',
+        'session-messages',
+      ])
+      expect(resp.status).toBe(201)
+      expect(deliverMock).toHaveBeenCalledTimes(1)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('should allow same-project dispatch to a servant', async () => {
     const { sessionService: realSessionService } = await import(
       '../services/sessionService.js'

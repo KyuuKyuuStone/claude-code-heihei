@@ -1,8 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { CollabTaskService, codePointSlice } from '../services/collabTaskService.js'
+import {
+  CollabTaskService,
+  REPORT_CATCHUP_NOTE,
+  codePointSlice,
+} from '../services/collabTaskService.js'
+import { onCollabPush } from '../../collaboration/collabPushSignals.js'
 import { beginTurn, clearSession, registerSession } from '../services/sessionRegistry.js'
 
 /**
@@ -307,6 +312,220 @@ describe('协作任务台账 CollabTaskService', () => {
     expect(last >= 0xd800 && last <= 0xdbff).toBe(false)
     // 短文本原样返回
     expect(codePointSlice('短文本', 40)).toBe('短文本')
+  })
+})
+
+/**
+ * 裁决四（任务 5374d7f8）：忙碌期间入队的任务停在 dispatched。
+ *
+ * 目标忙碌时 beginTurn 幂等短路、不发 turn_changed，消息却已进 CLI 队列，
+ * 于是该任务拿不到任何开工信号。采纳方案 A：员工带着正文汇报本身就是「已接手
+ * 并完成」的最强证据，reportTask 对仍处 dispatched 的任务显式补链。
+ *
+ * 本组锁死决策第 5 条列出的每一条约束。
+ */
+describe('reportTask 补推进（裁决四方案 A）', () => {
+  let tmpDir: string
+  let originalConfigDir: string | undefined
+  let service: CollabTaskService
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-heihei-catchup-'))
+    originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = tmpDir
+    service = new CollabTaskService()
+  })
+
+  afterEach(async () => {
+    service.resetForTests()
+    if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+    await fs.rm(tmpDir, { recursive: true, force: true })
+  })
+
+  const input = (id: string) => ({
+    id,
+    projectDir: PROJECT,
+    fromSessionId: 'supervisor-1',
+    toSessionId: 'worker-1',
+    title: '任务',
+    content: '正文',
+  })
+
+  it('dispatched 任务汇报 → 补链三步，同一时刻、前两条 note 固定且 by=system，第三条是真实汇报', async () => {
+    await service.createTask(input('catchup-1'))
+
+    const done = await service.reportTask('catchup-1', {
+      summary: '做完了',
+      deliverables: ['D:/out/x.ts'],
+    })
+
+    expect(done.status).toBe('delivered')
+    expect(done.report).toBe('做完了')
+    expect(done.deliverables).toEqual(['D:/out/x.ts'])
+    expect(done.history.map((h) => h.to)).toEqual([
+      'dispatched',
+      'accepted',
+      'in_progress',
+      'delivered',
+    ])
+
+    const [created, ...toDelivered] = done.history
+    expect(created!.from).toBeNull()
+    // 前两条是补推进：固定 note + by 系统 + 正确的 from
+    expect(toDelivered.slice(0, 2).map((h) => h.note)).toEqual([
+      REPORT_CATCHUP_NOTE,
+      REPORT_CATCHUP_NOTE,
+    ])
+    expect(toDelivered.slice(0, 2).map((h) => h.by)).toEqual(['system', 'system'])
+    expect(toDelivered.slice(0, 2).map((h) => h.from)).toEqual(['dispatched', 'accepted'])
+    // 第三条是员工真正的汇报，不带系统标记
+    expect(toDelivered[2]!.note).toBe('做完了')
+    expect(toDelivered[2]!.by).toBeUndefined()
+    // 补链三步共用同一个 at（汇报时刻，不伪造更早时间）
+    expect(new Set(toDelivered.map((h) => h.at)).size).toBe(1)
+  })
+
+  it('补链推送只发最终态 delivered 一次（中间态不推，避免面板闪烁）', async () => {
+    await service.createTask(input('catchup-push'))
+
+    const pushed: string[] = []
+    const off = onCollabPush((signal) => {
+      if (signal.kind === 'task') pushed.push(signal.status)
+    })
+    try {
+      await service.reportTask('catchup-push', { summary: '完成' })
+    } finally {
+      off()
+    }
+    expect(pushed).toEqual(['delivered'])
+  })
+
+  it('原子性：补链三次写入合成一次 appendFile（要么全写要么不写）', async () => {
+    await service.createTask(input('catchup-atomic'))
+
+    const fsPromises = await import('node:fs/promises')
+    const spy = spyOn(fsPromises, 'appendFile')
+    try {
+      await service.reportTask('catchup-atomic', { summary: '完成' })
+      expect(spy).toHaveBeenCalledTimes(1)
+      const written = String(spy.mock.calls[0]![1])
+      expect(written.trim().split('\n')).toHaveLength(3)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('落盘失败时不留半截补推进：状态与 history 都不动', async () => {
+    await service.createTask(input('catchup-fail'))
+
+    const fsPromises = await import('node:fs/promises')
+    const spy = spyOn(fsPromises, 'appendFile').mockImplementation(() => {
+      throw new Error('disk full')
+    })
+    try {
+      await expect(service.reportTask('catchup-fail', { summary: '完成' })).rejects.toThrow(
+        /disk full/,
+      )
+    } finally {
+      spy.mockRestore()
+    }
+
+    const task = await service.getTask('catchup-fail')
+    expect(task?.status).toBe('dispatched')
+    expect(task?.history.map((h) => h.to)).toEqual(['dispatched'])
+    expect(task?.report).toBeUndefined()
+  })
+
+  it('补链只在 dispatched 起步时触发：accepted / in_progress 仍走单步', async () => {
+    await service.createTask(input('step-accepted'))
+    await service.transitionTask('step-accepted', 'accepted')
+    await service.reportTask('step-accepted', { summary: '完成' })
+    const a = await service.getTask('step-accepted')
+    expect(a?.status).toBe('delivered')
+    expect(a?.history.map((h) => h.by)).toEqual([undefined, undefined, undefined])
+    expect(a?.history.map((h) => h.to)).toEqual(['dispatched', 'accepted', 'delivered'])
+
+    await service.createTask(input('step-inprogress'))
+    await service.transitionTask('step-inprogress', 'accepted')
+    await service.transitionTask('step-inprogress', 'in_progress')
+    await service.reportTask('step-inprogress', { summary: '完成' })
+    const b = await service.getTask('step-inprogress')
+    expect(b?.status).toBe('delivered')
+    expect(b?.history.map((h) => h.by)).toEqual([undefined, undefined, undefined, undefined])
+  })
+
+  it('rework → delivered 保持原样，不触发补链', async () => {
+    await service.createTask(input('rework-path'))
+    await service.transitionTask('rework-path', 'accepted')
+    await service.transitionTask('rework-path', 'in_progress')
+    await service.reportTask('rework-path', { summary: '第一版' })
+    await service.reviewTask('rework-path', { verdict: 'rework', note: '改一下' })
+
+    const redone = await service.reportTask('rework-path', { summary: '第二版' })
+    expect(redone.status).toBe('delivered')
+    expect(redone.history.filter((h) => h.by === 'system')).toHaveLength(0)
+    expect(redone.history.at(-1)).toMatchObject({ from: 'rework', to: 'delivered' })
+  })
+
+  it('summary 为空 → 400，且不写任何补链', async () => {
+    await service.createTask(input('catchup-empty'))
+    await expect(service.reportTask('catchup-empty', { summary: '   ' })).rejects.toThrow(
+      /summary/,
+    )
+    const task = await service.getTask('catchup-empty')
+    expect(task?.status).toBe('dispatched')
+    expect(task?.history).toHaveLength(1)
+  })
+
+  it('状态机表未被放宽：dispatched → verified 仍 409，终态无出边', async () => {
+    await service.createTask(input('sm-1'))
+    await expect(service.transitionTask('sm-1', 'verified')).rejects.toThrow(
+      /Illegal task transition/,
+    )
+    const done = await service.reportTask('sm-1', { summary: '完成' })
+    expect(done.status).toBe('delivered')
+    // delivered 不能回 dispatched
+    await expect(service.transitionTask('sm-1', 'dispatched')).rejects.toThrow(
+      /Illegal task transition/,
+    )
+
+    await service.createTask(input('sm-2'))
+    await service.transitionTask('sm-2', 'accepted')
+    await service.transitionTask('sm-2', 'in_progress')
+    await service.reportTask('sm-2', { summary: '完成' })
+    await service.reviewTask('sm-2', { verdict: 'pass' })
+    // verified 是终态：无任何出边
+    for (const to of [
+      'accepted',
+      'in_progress',
+      'delivered',
+      'rework',
+      'failed',
+      'cancelled',
+    ] as const) {
+      await expect(service.transitionTask('sm-2', to)).rejects.toThrow(/Illegal task transition/)
+    }
+  })
+
+  it('补推进结果可被重放（重启后 history 与 by 标记不丢）', async () => {
+    await service.createTask(input('catchup-replay'))
+    await service.reportTask('catchup-replay', { summary: '完成' })
+
+    const fresh = new CollabTaskService()
+    try {
+      const replayed = await fresh.getTask('catchup-replay')
+      expect(replayed?.status).toBe('delivered')
+      expect(replayed?.history.map((h) => h.to)).toEqual([
+        'dispatched',
+        'accepted',
+        'in_progress',
+        'delivered',
+      ])
+      expect(replayed?.history.filter((h) => h.by === 'system')).toHaveLength(2)
+    } finally {
+      fresh.resetForTests()
+    }
   })
 })
 

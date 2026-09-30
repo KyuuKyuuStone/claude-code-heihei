@@ -3,6 +3,7 @@
  */
 
 import type { AgentId } from '../../types/ids.js'
+import { createCollabContextAttachmentIfNeeded } from '../../collaboration/collabContextAttachment.js'
 import type { HookResultMessage, Message } from '../../types/message.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
@@ -434,14 +435,14 @@ export function shouldUseSessionMemoryCompaction(): boolean {
 /**
  * Create a CompactionResult from session memory
  */
-function createCompactionResultFromSessionMemory(
+async function createCompactionResultFromSessionMemory(
   messages: Message[],
   sessionMemory: string,
   messagesToKeep: Message[],
   hookResults: HookResultMessage[],
   transcriptPath: string,
   agentId?: AgentId,
-): CompactionResult {
+): Promise<CompactionResult> {
   const preCompactTokenCount = tokenCountFromLastAPIResponse(messages)
 
   const boundaryMarker = createCompactBoundaryMessage(
@@ -481,8 +482,14 @@ function createCompactionResultFromSessionMemory(
     }),
   ]
 
-  const planAttachment = createPlanAttachmentIfNeeded(agentId)
-  const attachments = planAttachment ? [planAttachment] : []
+  const [planAttachment, collabContextAttachment] = await Promise.all([
+    Promise.resolve(createPlanAttachmentIfNeeded(agentId)),
+    createCollabContextAttachmentIfNeeded(),
+  ])
+  const attachments = [
+    ...(planAttachment ? [planAttachment] : []),
+    ...(collabContextAttachment ? [collabContextAttachment] : []),
+  ]
 
   return {
     boundaryMarker: annotateBoundaryWithPreservedSegment(
@@ -588,7 +595,7 @@ export async function trySessionMemoryCompaction(
     // Get transcript path for the summary message
     const transcriptPath = getTranscriptPath()
 
-    const compactionResult = createCompactionResultFromSessionMemory(
+    const compactionResult = await createCompactionResultFromSessionMemory(
       messages,
       sessionMemory,
       messagesToKeep,

@@ -1,5 +1,6 @@
 import { c as _c } from "react/compiler-runtime";
 import { feature } from 'bun:bundle';
+import { isManualWaitToolEnabled } from '../../collaboration/collabToolContract.js';
 import * as React from 'react';
 import { getAllowedChannels, getQuestionPreviewFormat } from 'src/bootstrap/state.js';
 import { MessageResponse } from 'src/components/MessageResponse.js';
@@ -133,6 +134,7 @@ export const AskUserQuestionTool: Tool<InputSchema, Output> = buildTool({
     return '';
   },
   isEnabled() {
+    if (!isManualWaitToolEnabled(ASK_USER_QUESTION_TOOL_NAME)) return false;
     // When --channels is active the user is likely on Telegram/Discord, not
     // watching the TUI. The multiple-choice dialog would hang with nobody at
     // the keyboard. Channel permission relay already skips

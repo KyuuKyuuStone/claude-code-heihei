@@ -20,6 +20,7 @@ import {
   TASK_STATUSES,
   collectForbiddenTurnStateFields,
   collabToolNamesForRole,
+  isManualWaitToolEnabled,
   resolveCollabRole,
 } from '../../collaboration/collabToolContract.js'
 import {
@@ -35,7 +36,8 @@ import {
   getCollabTools,
 } from '../../tools/CollabTools/index.js'
 import { resolveDispatchTarget } from '../../tools/CollabTools/shared.js'
-import { getAllBaseTools } from '../../tools.js'
+import { getAllBaseTools, getTools } from '../../tools.js'
+import { getEmptyToolPermissionContext } from '../../Tool.js'
 import { TASK_STATUSES as SERVER_TASK_STATUSES } from '../services/collabTaskService.js'
 
 const SUPERVISOR = '11111111-1111-4111-8111-111111111111'
@@ -272,6 +274,59 @@ describe('契约：注入条件与目标解析', () => {
         CC_HEIHEI_COLLAB_ROLE: 'supervisor',
       }).map((tool) => tool.name),
     ).toEqual([COLLAB_TOOL_NAMES.dispatch, COLLAB_TOOL_NAMES.review, COLLAB_TOOL_NAMES.listTasks])
+  })
+
+  it('人工等待工具按角色矩阵裁剪并尊重开关', () => {
+    const env = (sessionId: string, role: string, noninteractive?: string) => ({
+      CC_HEIHEI_SESSION_ID: sessionId,
+      CC_HEIHEI_COLLAB_ROLE: role,
+      ...(noninteractive ? { CC_HEIHEI_SERVANT_NONINTERACTIVE: noninteractive } : {}),
+    })
+    const servant = env(WORKER, 'servant')
+    const supervisor = env(SUPERVISOR, 'supervisor')
+
+    for (const toolName of ['AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode', 'ReviewArtifact']) {
+      expect(isManualWaitToolEnabled(toolName, servant)).toBe(false)
+      expect(isManualWaitToolEnabled(toolName, { ...servant, CC_HEIHEI_SERVANT_NONINTERACTIVE: '0' })).toBe(true)
+    }
+    expect(isManualWaitToolEnabled('AskUserQuestion', supervisor)).toBe(true)
+    expect(isManualWaitToolEnabled('EnterPlanMode', supervisor)).toBe(false)
+    expect(isManualWaitToolEnabled('ExitPlanMode', supervisor)).toBe(true)
+    expect(isManualWaitToolEnabled('ReviewArtifact', supervisor)).toBe(true)
+    expect(isManualWaitToolEnabled('EnterPlanMode', { ...supervisor, CC_HEIHEI_SERVANT_NONINTERACTIVE: '0' })).toBe(true)
+    expect(isManualWaitToolEnabled('AskUserQuestion', {})).toBe(true)
+    expect(isManualWaitToolEnabled('EnterPlanMode', {})).toBe(true)
+    expect(isManualWaitToolEnabled('ExitPlanMode', {})).toBe(true)
+    expect(isManualWaitToolEnabled('ReviewArtifact', {})).toBe(true)
+
+    const saved = {
+      session: process.env.CC_HEIHEI_SESSION_ID,
+      role: process.env.CC_HEIHEI_COLLAB_ROLE,
+      noninteractive: process.env.CC_HEIHEI_SERVANT_NONINTERACTIVE,
+    }
+    try {
+      process.env.CC_HEIHEI_SESSION_ID = WORKER
+      process.env.CC_HEIHEI_COLLAB_ROLE = 'servant'
+      process.env.CC_HEIHEI_SERVANT_NONINTERACTIVE = '1'
+      const permissionContext = getEmptyToolPermissionContext()
+      const servantToolNames = getTools(permissionContext).map((tool) => tool.name)
+      for (const toolName of ['AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode', 'ReviewArtifact']) {
+        expect(servantToolNames).not.toContain(toolName)
+      }
+
+      process.env.CC_HEIHEI_SERVANT_NONINTERACTIVE = '0'
+      const interactiveToolNames = getTools(getEmptyToolPermissionContext()).map((tool) => tool.name)
+      expect(interactiveToolNames).toContain('AskUserQuestion')
+      expect(interactiveToolNames).toContain('EnterPlanMode')
+      expect(interactiveToolNames).toContain('ExitPlanMode')
+    } finally {
+      if (saved.session === undefined) delete process.env.CC_HEIHEI_SESSION_ID
+      else process.env.CC_HEIHEI_SESSION_ID = saved.session
+      if (saved.role === undefined) delete process.env.CC_HEIHEI_COLLAB_ROLE
+      else process.env.CC_HEIHEI_COLLAB_ROLE = saved.role
+      if (saved.noninteractive === undefined) delete process.env.CC_HEIHEI_SERVANT_NONINTERACTIVE
+      else process.env.CC_HEIHEI_SERVANT_NONINTERACTIVE = saved.noninteractive
+    }
   })
 
   it('角色判定兼容旧服务端（只有主管标记时仍识别为主管）', () => {
