@@ -202,13 +202,14 @@ describe('renderRosterTable（花名册 → 表格，减少便宜模型漏看）
   })
 })
 
-describe('净增预算：协议 + 4 个工具描述不超 v1.5.1 基线', () => {
-  // 基线口径来自架构决策（架构决策_协议瘦身与D项保留.md）：比较对象是
-  // 「v1.5.1 协议全文」再加 4 个工具的描述，净增 ≤ 0。计量用仓库可复现的
-  // 码点（Array.from）与 UTF-8 字节数，非精确 tokenizer。
-  const V151_PROTOCOL_BASELINE_CHARS = 11439
-  const V151_PROTOCOL_BASELINE_BYTES = 24715
-  const TOOL_PROMPTS_BUDGET_CHARS = 764
+describe('净增预算：协议 + 4 工具（description + prompt）不超 v1.5.1 基线', () => {
+  // 基线口径（架构裁决 2026-09-30，补充裁决 c8bc8164）：左 = 渲染后协议 +
+  // 四个 Collab 工具注入模型的 description 与 prompt 之和；右 = v1.5.1 协议
+  // 全文 = 11266 码点（24084 UTF-8 字节）；v1.5.1 无工具，右侧不再加工具。
+  // 计量 Array.from(text).length，非精确 tokenizer。唯一门槛就是这个常量，
+  // 不得在测试里临时放宽；要扩容须再次架构裁决。
+  const V151_PROTOCOL_BASELINE_CHARS = 11266
+  const V151_PROTOCOL_BASELINE_BYTES = 24084
 
   test('协议全文不超 v1.5.1 基线（码点与 UTF-8 字节双口径）', () => {
     expect(Array.from(DISPATCH_PROTOCOL_MD).length).toBeLessThanOrEqual(V151_PROTOCOL_BASELINE_CHARS)
@@ -217,21 +218,22 @@ describe('净增预算：协议 + 4 个工具描述不超 v1.5.1 基线', () => 
     )
   })
 
-  test('协议 + 4 工具描述合计仍不超基线', async () => {
+  test('协议 + 4 工具的 description/prompt 合计仍不超基线', async () => {
     const { CollabDispatchTool } = await import('../../tools/CollabTools/CollabDispatchTool.js')
     const { CollabReviewTool } = await import('../../tools/CollabTools/CollabReviewTool.js')
     const { CollabListTasksTool } = await import('../../tools/CollabTools/CollabListTasksTool.js')
     const { CollabReportTool } = await import('../../tools/CollabTools/CollabReportTool.js')
-    const toolPrompts = await Promise.all(
-      [CollabDispatchTool, CollabReviewTool, CollabListTasksTool, CollabReportTool].map((tool) =>
-        tool.prompt(),
-      ),
-    )
-    const toolPromptChars = toolPrompts.reduce((sum, p) => sum + Array.from(p).length, 0)
-    // 4 个工具描述自身也要在预留预算内，否则「净增 ≤ 0」是靠超支换来的
-    expect(toolPromptChars).toBeLessThanOrEqual(TOOL_PROMPTS_BUDGET_CHARS)
-    expect(Array.from(DISPATCH_PROTOCOL_MD).length + toolPromptChars).toBeLessThanOrEqual(
-      V151_PROTOCOL_BASELINE_CHARS + TOOL_PROMPTS_BUDGET_CHARS,
+    const tools = [CollabDispatchTool, CollabReviewTool, CollabListTasksTool, CollabReportTool]
+    const toolChars = (
+      await Promise.all(
+        tools.map(async (tool) => {
+          const [description, prompt] = await Promise.all([tool.description(), tool.prompt()])
+          return Array.from(description).length + Array.from(prompt).length
+        }),
+      )
+    ).reduce((sum, n) => sum + n, 0)
+    expect(Array.from(DISPATCH_PROTOCOL_MD).length + toolChars).toBeLessThanOrEqual(
+      V151_PROTOCOL_BASELINE_CHARS,
     )
   })
 })

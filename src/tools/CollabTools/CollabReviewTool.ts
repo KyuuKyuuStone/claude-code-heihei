@@ -38,7 +38,8 @@ const DESCRIPTION = '验收任务（pass 结单 / rework 返工，返工自动�
 const PROMPT = `主管验收用。taskId 取 CollabDispatch 返回的那个。
 verdict=pass 结单；verdict=rework 必须写 note，工具会自动把【返工】消息发给原员工（同一 taskId，台账不新增任务）。
 状态以任务台账为准：还没汇报（未 delivered）时返回 not_reviewable，等员工汇报后再验收。
-对已结单任务重复验收会返回 already_final 告警，不算失败。`
+对已通过（verified）的任务重复提交 pass：返回成功并附 already_final 告警，不重复记录。
+对已结单任务（verified/failed/cancelled）提交其他验收结果（如对已通过的任务要求返工）返回 409；需要返工请重新派活。`
 
 const inputSchema = lazySchema(() =>
   z.strictObject({
