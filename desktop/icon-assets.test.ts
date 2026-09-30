@@ -40,6 +40,26 @@ describe('icon assets', () => {
     }
   })
 
+  it('embeds the taskbar-critical sizes inside icon.ico', () => {
+    // The Windows taskbar asks the shell for 16/32/48px icons and the large
+    // (Alt-Tab / superbar) size is 256. If a size is missing, Explorer scales
+    // whatever is nearest — or falls back to the generic blank-window icon
+    // once its cache holds an entry it cannot resolve. Parse the ICO directory
+    // (ICONDIR + ICONDIRENTRY, 16 bytes each) instead of trusting file size.
+    const buf = readFileSync(path.join(icons, 'icon.ico'))
+    expect(buf.readUInt16LE(0)).toBe(0) // reserved
+    expect(buf.readUInt16LE(2)).toBe(1) // type: icon
+    const count = buf.readUInt16LE(4)
+    const sizes = new Set<number>()
+    for (let i = 0; i < count; i++) {
+      const o = 6 + i * 16
+      sizes.add(buf[o] === 0 ? 256 : buf[o]) // 0 encodes the 256px entry
+    }
+    for (const required of [16, 32, 48, 256]) {
+      expect(sizes.has(required)).toBe(true)
+    }
+  })
+
   it('serves a favicon to the H5 client', () => {
     // The same index.html the Electron window loads is what a phone browser
     // gets over H5 remote access, where a missing icon means a blank tab.
