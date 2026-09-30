@@ -25,6 +25,8 @@ import { servantService, type ServantInfo } from './servantService.js'
 import { sessionService } from './sessionService.js'
 import { sessionMessenger } from './sessionMessenger.js'
 import { collabTaskService } from './collabTaskService.js'
+import { appendReportFooter, resolveReportTarget } from './reportTargetResolver.js'
+import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 
 export type DispatchPayload = {
   targetSessionId: string
@@ -33,6 +35,18 @@ export type DispatchPayload = {
   /** v1.6.0：派活可选带标题与幂等键（不带给自动建任务） */
   title?: string
   taskId?: string
+  /** 广播请求标记（裁决二第 7 条）：信箱本版不支持广播，收到即明确拒绝 */
+  broadcast?: boolean
+  /**
+   * CLI 契约 §五：员工汇报的降级通道。文件里带这段时，信箱服务先调 reportTask
+   * 把台账推到 delivered，再投递消息（顺序与 HTTP 两步一致）。旧服务端不认识
+   * 这个字段会直接忽略，只投递消息——向后兼容。
+   */
+  report?: {
+    taskId: string
+    summary: string
+    deliverables?: string[]
+  }
 }
 
 export type MailboxDeliveryResult =
@@ -76,7 +90,26 @@ function parsePayload(raw: string): DispatchPayload {  const parsed = JSON.parse
   if (content.length > MAX_CONTENT_LENGTH) {
     throw new Error(`Field "content" exceeds ${MAX_CONTENT_LENGTH} characters`)
   }
-  return fromSessionId ? { targetSessionId, content, fromSessionId } : { targetSessionId, content }
+  const report = parseReportField(parsed.report)
+  return {
+    targetSessionId,
+    content,
+    ...(fromSessionId ? { fromSessionId } : {}),
+    ...(report ? { report } : {}),
+  }
+}
+
+/** 解析可选 report 字段（契约 §五）；结构不完整时按「没带」处理，不影响投递 */
+function parseReportField(raw: unknown): DispatchPayload['report'] | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const obj = raw as Record<string, unknown>
+  const taskId = typeof obj.taskId === 'string' ? obj.taskId.trim() : ''
+  if (!taskId) return undefined
+  const summary = typeof obj.summary === 'string' ? obj.summary : ''
+  const deliverables = Array.isArray(obj.deliverables)
+    ? obj.deliverables.filter((item): item is string => typeof item === 'string')
+    : undefined
+  return { taskId, summary, ...(deliverables ? { deliverables } : {}) }
 }
 
 export class DispatchMailboxService {
@@ -304,6 +337,20 @@ export class DispatchMailboxService {
         return { ok: true }
       }
 
+      // 裁决二第 7 条：信箱本版不支持广播。检查放在 parsePayload **之前**——广播
+      // payload 通常不带 targetSessionId，若先进 parsePayload 会被报成「Invalid
+      // payload: targetSessionId is required」，掩盖真实原因。明确写 .error.txt
+      // 拒绝，不能静默丢弃（静默会让发起方以为广播已送达）。
+      try {
+        if ((JSON.parse(raw) as Record<string, unknown>).broadcast === true) {
+          const reason = '信箱不支持广播，请用 HTTP 或逐个投递'
+          await this.markFailed(dir, name, reason)
+          return { ok: false, reason }
+        }
+      } catch {
+        // JSON 本身解析失败交给下面的 parsePayload 统一报错，这里不抢报
+      }
+
       let payload: DispatchPayload
       try {
         payload = parsePayload(raw)
@@ -320,17 +367,88 @@ export class DispatchMailboxService {
       }
 
       const host = `127.0.0.1:${this.serverPort}`
+
+      // CLI 契约 §五：信箱 report 字段。这是员工 CLI 在服务不可用时的降级路径：
+      // 先把台账推到 delivered，**再**投递消息——顺序与 HTTP 两步完全一致，否则
+      // 主管一收到汇报就 review 会撞上 409。
+      const reportPayload = payload.report
+      const reportTaskId =
+        reportPayload && typeof reportPayload.taskId === 'string' ? reportPayload.taskId.trim() : ''
+      if (reportTaskId) {
+        try {
+          await collabTaskService.reportTask(reportTaskId, {
+            summary: typeof reportPayload?.summary === 'string' ? reportPayload.summary : '',
+            ...(Array.isArray(reportPayload?.deliverables)
+              ? {
+                  deliverables: reportPayload.deliverables.filter(
+                    (item): item is string => typeof item === 'string',
+                  ),
+                }
+              : {}),
+          })
+        } catch (error) {
+          // 记账失败（任务不存在 / 状态非法）**不阻断投递**：汇报正文仍要送达主管。
+          // 与 CLI 侧「照样投递消息 + warnings:['ledger_not_updated']」的降级一致，
+          // 不伪造状态、也不吞掉原因——留一条 warn 供排查。
+          logForDiagnosticsNoPII('warn', 'mailbox_report_task_failed', {
+            taskId: reportTaskId,
+            reason: error instanceof Error ? error.message : String(error),
+          })
+        }
+      }
+
+      // v1.6.0（决策 D）：信箱通道与 HTTP 通道共用同一套汇报目标解析，行为必须
+      // 一致——否则走信箱的员工汇报仍会投错人。解析在登记回执之前完成，保证
+      // 回执记的是真实收件人。
+      // taskId 取顶层的（与旧 dispatch payload 一致）；report 字段里的作为兜底，
+      // 两者本就应当是同一个值（CLI 写入时同源）。
+      const resolutionTaskId = payload.taskId?.trim() || reportTaskId
+      const resolution = await resolveReportTarget({
+        targetSessionId: payload.targetSessionId,
+        ...(payload.fromSessionId ? { fromSessionId: payload.fromSessionId } : {}),
+        ...(resolutionTaskId ? { taskId: resolutionTaskId } : {}),
+      })
+      const targetSessionId = resolution.targetSessionId
+      if (resolution.redirectedFrom) {
+        logForDiagnosticsNoPII('info', 'collab_report_redirected', {
+          requestedTarget: resolution.redirectedFrom,
+          resolvedTarget: targetSessionId,
+          resolvedBy: resolution.resolvedBy ?? 'unknown',
+          workerSessionId: payload.fromSessionId ?? 'unknown',
+          channel: 'mailbox',
+        })
+      } else if (resolution.warning) {
+        logForDiagnosticsNoPII('warn', 'collab_report_target_ambiguous', {
+          requestedTarget: payload.targetSessionId,
+          warning: resolution.warning,
+          channel: 'mailbox',
+        })
+      }
+
       // 消费回执：信箱是"主管 Bash 不可用"时的降级派活通道，同样要能判定
       // "这条活有没有被接住"。否则经信箱投递的派活对假死告警判定不可见
       // （A4 只覆盖了 HTTP 派活）。与 api/servants.ts 同款：先登记，失败撤回。
       const messageId = crypto.randomUUID()
       recordDelivery({
         messageId,
-        targetSessionId: payload.targetSessionId,
+        targetSessionId,
         ...(payload.fromSessionId ? { fromSessionId: payload.fromSessionId } : {}),
       })
+      // 派活判定与 HTTP 通道一致：目标是 enabled 员工、不是主管、且不是汇报。
+      const targetServant = await servantService
+        .getServant(targetSessionId)
+        .catch(() => null)
+      const isDispatch =
+        Boolean(targetServant?.enabled) && !targetServant?.supervisor && !resolution.isReport
+      const dispatchTaskId = isDispatch ? payload.taskId?.trim() || crypto.randomUUID() : ''
       try {
-        const delivered = await this.deps.deliver(payload.targetSessionId, payload.content, host)
+        const delivered = await this.deps.deliver(
+          targetSessionId,
+          isDispatch
+            ? appendReportFooter(payload.content, dispatchTaskId, payload.fromSessionId ?? '')
+            : payload.content,
+          host,
+        )
         if (!delivered) {
           forgetReceipt(messageId)
           const reason = 'Message could not be delivered to the target session'
@@ -344,18 +462,14 @@ export class DispatchMailboxService {
         return { ok: false, reason }
       }
 
-      // v1.6.0：派活投递成功 → 任务台账 dispatched。与 HTTP 派活同一实现、
-      // 同一幂等键（taskId）；只对 enabled 员工记账（员工→主管的汇报不入台账）。
-      const targetServant = await servantService
-        .getServant(payload.targetSessionId)
-        .catch(() => null)
-      if (targetServant?.enabled) {
+      // 派活投递成功 → 任务台账 dispatched。与 HTTP 派活同一实现、同一幂等键。
+      if (isDispatch) {
         await collabTaskService.recordDispatch({
-          toSessionId: payload.targetSessionId,
+          toSessionId: targetSessionId,
           ...(payload.fromSessionId ? { fromSessionId: payload.fromSessionId } : {}),
           content: payload.content,
+          taskId: dispatchTaskId,
           ...(payload.title ? { title: payload.title } : {}),
-          ...(payload.taskId ? { taskId: payload.taskId } : {}),
         })
       }
 

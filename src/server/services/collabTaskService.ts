@@ -29,6 +29,7 @@ import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 import { emitCollabPush } from '../../collaboration/collabPushSignals.js'
 import { onSessionEvent } from './sessionEvents.js'
 import { sessionService } from './sessionService.js'
+import { servantService } from './servantService.js'
 import { ApiError } from '../middleware/errorHandler.js'
 
 export type TaskStatus =
@@ -49,10 +50,25 @@ export type TaskHistoryEntry = {
   note?: string
 }
 
+/**
+ * 派活人当时的身份快照（v1.6.0 汇报改投用）。
+ * - supervisor：派活人是主管，如果它后来卸任，汇报要改投同项目现任主管；
+ * - servant：派活人是员工；
+ * - other：用户会话等，或旧台账缺该字段的记录（不触发交接修正）。
+ */
+export type DispatcherRole = 'supervisor' | 'servant' | 'other'
+
 export type Task = {
   id: string
   projectDir: string
   fromSessionId: string
+  /** 派活人当时的身份快照；旧台账无此字段，读取时按 'other' 处理 */
+  fromRole?: DispatcherRole
+  /**
+   * 广播关联键（裁决二）：一次广播 = N 条独立单播任务，同值 broadcastId 把它们
+   * 串起来，只用于展示与幂等查询，**不参与状态流转**。单播任务无此字段。
+   */
+  broadcastId?: string
   toSessionId: string
   title: string
   content: string
@@ -113,6 +129,10 @@ export type CreateTaskInput = {
   id?: string
   projectDir: string
   fromSessionId: string
+  /** 派活人身份快照；缺省按 'other'（见 DispatcherRole） */
+  fromRole?: DispatcherRole
+  /** 广播关联键（裁决二）；单播不传 */
+  broadcastId?: string
   toSessionId: string
   title: string
   content: string
@@ -283,6 +303,8 @@ export class CollabTaskService {
         id,
         projectDir,
         fromSessionId: input.fromSessionId,
+        fromRole: input.fromRole ?? 'other',
+        ...(input.broadcastId ? { broadcastId: input.broadcastId } : {}),
         toSessionId: input.toSessionId,
         title: input.title,
         content: input.content,
@@ -312,16 +334,42 @@ export class CollabTaskService {
     content: string
     title?: string
     taskId?: string
+    /** 广播关联键（裁决二）；单播不传。只作关联，不参与状态流转。 */
+    broadcastId?: string
+    /** 经 resolveReportTarget 判定为「员工汇报」的消息——不记账 */
+    isReport?: boolean
   }): Promise<string | null> {
     try {
+      // v1.6.0（决策 D）：不再让「员工给主管的汇报」凭空造出一条 dispatched 任务。
+      // 原先调用方只判了 target.enabled，而主管条目本身也是 enabled:true，于是员工
+      // 发给主管的每条汇报都会生成一个假任务，污染「待接单」显示与台账统计。
+      // 现在三个条件任一成立就不记账：① 已被判定为汇报；② 目标是主管。
+      if (input.isReport) return null
+      const target = await servantService.getServant(input.toSessionId)
+      if (!target?.enabled || target.supervisor) return null
+
       const workDir = await sessionService.getSessionWorkDir(input.toSessionId)
       if (!workDir) return null
       const explicitTitle = input.title?.trim() ?? ''
       const explicitId = input.taskId?.trim() ?? ''
+      const broadcastId = input.broadcastId?.trim() ?? ''
+      // 派活人身份快照：只有快照是 supervisor 的旧任务才需要在主管卸任后改投
+      const dispatcher = input.fromSessionId
+        ? await servantService.getServant(input.fromSessionId.trim())
+        : null
+      const fromRole: DispatcherRole = !input.fromSessionId?.trim()
+        ? 'other'
+        : dispatcher?.supervisor
+          ? 'supervisor'
+          : dispatcher
+            ? 'servant'
+            : 'other'
       const task = await this.createTask({
         ...(explicitId ? { id: explicitId } : {}),
         projectDir: workDir,
         fromSessionId: input.fromSessionId?.trim() || 'unknown',
+        fromRole,
+        ...(broadcastId ? { broadcastId } : {}),
         toSessionId: input.toSessionId,
         title: explicitTitle || codePointSlice(input.content, 40),
         content: input.content,
@@ -402,6 +450,39 @@ export class CollabTaskService {
       verdict: input.verdict,
       ...(input.note ? { note: input.note } : {}),
     })
+  }
+
+  /**
+   * 广播幂等（裁决二第 5 条）：同一 broadcastId 下、派给某目标的已存在任务。
+   * 命中即说明该目标上一轮已成功投递并记账，本轮跳过投递与记账。
+   */
+  async findBroadcastTask(broadcastId: string, toSessionId: string): Promise<Task | null> {
+    await this.ensureLoaded()
+    for (const task of this.tasks.values()) {
+      if (task.broadcastId === broadcastId && task.toSessionId === toSessionId) {
+        return cloneTask(task)
+      }
+    }
+    return null
+  }
+
+  /**
+   * 发送方名下**未结**的派活任务（决策 D 解析顺序第 2 步用）。
+   * 未结 = dispatched / accepted / in_progress；按 updatedAt 倒序，
+   * 取第一条即「最近一条未结任务」。
+   */
+  async findOpenTasksForWorker(
+    workerSessionId: string,
+    filter: { projectDir?: string } = {},
+  ): Promise<Task[]> {
+    await this.ensureLoaded()
+    const OPEN: readonly TaskStatus[] = ['dispatched', 'accepted', 'in_progress']
+    return [...this.tasks.values()]
+      .filter((task) => task.toSessionId === workerSessionId)
+      .filter((task) => OPEN.includes(task.status))
+      .filter((task) => (filter.projectDir ? sameProject(task.projectDir, filter.projectDir) : true))
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .map(cloneTask)
   }
 
   async getTask(id: string): Promise<Task | null> {

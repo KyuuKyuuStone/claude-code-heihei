@@ -158,6 +158,24 @@ export class ServantService {
     return run
   }
 
+  /**
+   * 同项目（workDir）的现任主管（v1.6.0 汇报改投解析第 3、4 步用）。
+   * 判据与 setServant 的「每项目最多一名主管」一致：按会话 workDir 比较；
+   * workDir 归一化（win32 大小写不敏感 + 分隔符归一），避免 `D:\X` 与 `d:/x`
+   * 被判成两个项目（与 collabTaskService.projectHash 的归一标准对齐）。
+   */
+  async findSupervisorForProject(workDir: string): Promise<ServantEntry | null> {
+    const norm = (p: string): string => path.resolve(p).replace(/\\/g, '/').toLowerCase()
+    const want = norm(workDir)
+    const data = await this.readFile()
+    for (const entry of data.servants) {
+      if (!entry.supervisor) continue
+      const summary = await sessionService.getSessionListSummaryForSession(entry.sessionId)
+      if (summary?.workDir && norm(summary.workDir) === want) return entry
+    }
+    return null
+  }
+
   /** 列出员工会话（默认仅 enabled 的花名册；includeAll 时含未启用条目） */
   async listServants(options?: {
     includeAll?: boolean

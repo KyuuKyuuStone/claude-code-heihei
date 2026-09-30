@@ -68,9 +68,13 @@ vi.mock('../../i18n', () => ({
       'sidebar.collapseProject': 'Collapse {project}',
       'sidebar.worktree': 'worktree',
       'sidebar.sessionRunning': 'Session running',
-      'sidebar.servantStatusBusy': 'Servant busy',
+      'sidebar.servantStatusExecuting': 'Servant executing',
+      'sidebar.servantStatusExecutingHint': 'Servant is running a task',
       'sidebar.servantStatusWaiting': 'Servant waiting',
       'sidebar.servantStatusIdle': 'Servant idle',
+      'sidebar.servantStatusPending': 'Awaiting pickup',
+      'sidebar.servantStatusPendingHint': 'Task dispatched; not started yet',
+      'sidebar.servantStatusPendingNotRunning': 'Awaiting pickup; session not running',
       'common.retry': 'Retry',
       'common.loading': 'Loading...',
       'common.cancel': 'Cancel',
@@ -112,10 +116,11 @@ vi.mock('../../i18n', () => ({
   },
 }))
 
-import { Sidebar, servantStatus } from './Sidebar'
+import { Sidebar, sessionRunState } from './Sidebar'
 import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useServantStore } from '../../stores/servantStore'
+import { useCollabTaskStore } from '../../stores/collabTaskStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
 import type { SessionListItem } from '../../types/session'
@@ -259,13 +264,15 @@ describe('Sidebar', () => {
       sidebarOpen: true,
       addToast,
     } as Partial<ReturnType<typeof useUIStore.getState>>)
+    useCollabTaskStore.setState({ dispatchedBySessionId: {} })
   })
 
   afterEach(() => {
     vi.useRealTimers()
     cleanup()
     useTabStore.setState({ tabs: [], activeTabId: null })
-    useServantStore.setState({ bySessionId: {} })
+    useServantStore.setState({ bySessionId: {}, turnInProgressBySessionId: {} })
+    useCollabTaskStore.setState({ dispatchedBySessionId: {} })
     window.localStorage.removeItem(PROJECT_ORDER_STORAGE_KEY)
     window.localStorage.removeItem(PROJECT_PINNED_STORAGE_KEY)
     window.localStorage.removeItem(PROJECT_HIDDEN_STORAGE_KEY)
@@ -988,19 +995,23 @@ describe('Sidebar', () => {
         }),
       },
     })
+    // 行内运行指示改由全局回合态映射驱动（本地 tab/后台任务的独立转圈已移除）
+    useServantStore.setState({
+      turnInProgressBySessionId: { 'running-worktree': true, 'background-running': true },
+    })
 
     render(<Sidebar />)
 
     const runningRow = screen.getByRole('button', { name: /Running Worktree/ })
-    expect(within(runningRow).getByLabelText('Session running')).toBeInTheDocument()
+    expect(within(runningRow).getByLabelText('Servant executing')).toBeInTheDocument()
     expect(within(runningRow).getByText('worktree')).toHaveClass('sr-only')
     expect(within(runningRow).getByText('5h ago')).toBeInTheDocument()
 
     const backgroundRunningRow = screen.getByRole('button', { name: /Background Running/ })
-    expect(within(backgroundRunningRow).getByLabelText('Session running')).toBeInTheDocument()
+    expect(within(backgroundRunningRow).getByLabelText('Servant executing')).toBeInTheDocument()
 
     const idleRow = screen.getByRole('button', { name: /Idle Source/ })
-    expect(within(idleRow).queryByLabelText('Session running')).not.toBeInTheDocument()
+    expect(within(idleRow).queryByLabelText('Servant executing')).not.toBeInTheDocument()
     expect(within(idleRow).getByText('20m ago')).toBeInTheDocument()
   })
 
@@ -1788,62 +1799,75 @@ describe('Sidebar', () => {
             turnInProgress,
           },
         },
+        // 状态灯的数据源已改为全局回合态映射（架构决策：一件事实一个权威源）
+        turnInProgressBySessionId: { 'servant-1': turnInProgress },
       })
     }
 
-    it('marks a busy servant with the shared brand pulse dot', () => {
+    it('marks an executing servant with the shared brand pulse dot and the 执行中 label', () => {
       seedSessionWithServant(true)
 
       render(<Sidebar />)
 
-      // P0-1/§3.1：忙碌 = StatusDot brand + pulse，不再自绘绿环
-      const marker = screen.getByTitle('Servant busy')
-      const dot = marker.querySelector('[role="status"]')
+      // 执行中 = StatusDot brand + pulse（不再自绘绿环）+ 常显文案
+      const marker = screen.getByTitle('Servant is running a task')
+      expect(marker).toHaveTextContent('Servant executing')
+      const dot = marker.querySelector('.animate-pulse-dot')
       expect(dot).toHaveClass('bg-[var(--color-brand)]', 'animate-pulse-dot')
     })
 
-    it('keeps a non-busy servant as a static muted dot without the ring', () => {
+    it('keeps a non-executing servant as a static muted dot without the ring', () => {
       seedSessionWithServant(false)
 
       render(<Sidebar />)
 
       // 待命：实心灰点（StatusDot neutral），无脉冲
       const marker = screen.getByTitle('Servant waiting')
-      const dot = marker.querySelector('[role="status"]')
+      const dot = marker.firstElementChild
       expect(dot).toHaveClass('h-2', 'w-2', 'rounded-full', 'bg-[var(--color-text-tertiary)]')
       expect(dot).not.toHaveClass('animate-pulse-dot')
     })
+
+    it('shows a static 待接单 marker for a dispatched task, without any animation', () => {
+      seedSessionWithServant(false)
+      useCollabTaskStore.setState({ dispatchedBySessionId: { 'servant-1': true } })
+
+      render(<Sidebar />)
+
+      // 投递阶段只有静态线框图标 + 文字，绝不脉冲（投递成功 ≠ 执行中）
+      const marker = screen.getByTitle('Task dispatched; not started yet')
+      expect(marker).toHaveTextContent('Awaiting pickup')
+      expect(marker.querySelector('.animate-pulse-dot')).toBeNull()
+    })
   })
 
-  describe('servantStatus (pure)', () => {
-    const base = {
-      sessionId: 's1',
-      enabled: true,
-      updatedAt: 0,
-      title: 'Servant',
-    }
-
-    it('returns idle when the servant CLI is not running', () => {
-      // 未运行时不看回合信号：turnInProgress 残留 true（CLI 中途退出）也应是 idle
-      expect(servantStatus({ ...base, running: false, turnInProgress: false })).toBe('idle')
-      expect(servantStatus({ ...base, running: false, turnInProgress: true })).toBe('idle')
-    })
-
-    it('returns busy only when a turn is actually in progress', () => {
-      expect(servantStatus({ ...base, running: true, turnInProgress: true })).toBe('busy')
-    })
-
-    it('returns waiting when running but between turns (no 3-minute window guessing)', () => {
-      // 旧逻辑靠 lastActivityAt 滑动窗口猜：回合刚结束但窗口未过期会错误保持 busy。
-      // 新逻辑直接读真实回合信号，lastActivityAt 再"新鲜"也不影响判定。
+  describe('sessionRunState (pure)', () => {
+    it('prefers executing whenever a turn is in progress', () => {
       expect(
-        servantStatus({
-          ...base,
-          running: true,
-          turnInProgress: false,
-          lastActivityAt: new Date().toISOString(),
-        }),
+        sessionRunState({ turnInProgress: true, hasDispatchedTask: true, servantRunning: false }),
+      ).toBe('executing')
+      expect(
+        sessionRunState({ turnInProgress: true, hasDispatchedTask: false, servantRunning: true }),
+      ).toBe('executing')
+    })
+
+    it('shows pending when a dispatched task exists and no turn is running', () => {
+      expect(
+        sessionRunState({ turnInProgress: false, hasDispatchedTask: true, servantRunning: true }),
+      ).toBe('pending')
+      // 未运行但仍有待接单任务：仍是待接单（悬停说明会话尚未运行）
+      expect(
+        sessionRunState({ turnInProgress: false, hasDispatchedTask: true, servantRunning: false }),
+      ).toBe('pending')
+    })
+
+    it('falls back to waiting/idle by process state when there is no turn or task', () => {
+      expect(
+        sessionRunState({ turnInProgress: false, hasDispatchedTask: false, servantRunning: true }),
       ).toBe('waiting')
+      expect(
+        sessionRunState({ turnInProgress: false, hasDispatchedTask: false, servantRunning: false }),
+      ).toBe('idle')
     })
   })
 })

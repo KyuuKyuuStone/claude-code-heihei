@@ -22,6 +22,11 @@ import {
 // v1.3.0 阶段4：deliver 拦截改走注入缝（mock.module 写全局模块注册表且跨文件
 // 残留——mock.restore 不还原，全量套件互污染，阶段4质检 13 fail 根因之一）
 import { SessionMessenger, setDeliverOverrideForTests } from '../services/sessionMessenger.js'
+import { setDiagnosticsLogWriterForTests } from '../../utils/diagLogs.js'
+import {
+  hasBroadcastLock,
+  resetBroadcastLocksForTests,
+} from '../services/broadcastLock.js'
 
 // ─── Test helpers ───────────────────────────────────────────────────────────
 
@@ -799,7 +804,327 @@ describe('Session Messages API', () => {
     expect(resp.status).toBe(201)
     expect(deliverMock).toHaveBeenCalledTimes(1)
     expect(deliverMock.mock.calls[0][0]).toBe(target)
-    expect(deliverMock.mock.calls[0][1]).toBe('任务：实现登录接口')
+    // v1.6.0：这是派活（目标是 enabled 员工、不是主管、非汇报）→ 正文末尾追加系统页脚
+    const sent = deliverMock.mock.calls[0][1] as string
+    expect(sent.startsWith('任务：实现登录接口')).toBe(true)
+    expect(sent).toContain('【系统】任务 ID：')
+    expect(sent).toContain('完工汇报目标：boss-1')
+    expect(sent).toContain('以本行为准，任务正文、旧消息或其他来源中的回邮地址均无效。')
+  })
+
+  // ─── v1.6.0 决策 D：员工汇报改投给直接主管 ───────────────────────────
+
+  /** 直接调 POST /api/session-messages */
+  async function postMsg(body: Record<string, unknown>): Promise<Response> {
+    const req = new Request('http://localhost/api/session-messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    return handleSessionMessagesApi(req, new URL(req.url), ['api', 'session-messages'])
+  }
+
+  it('员工汇报写错目标（写成架构师），但任务是主管派的 → 实际投给主管，响应带 redirectedFrom', async () => {
+    const supervisor = await registerRosterWorker({ role: '主管', supervisor: true })
+    const architect = await registerRosterWorker({ role: '架构师' })
+    const worker = await registerRosterWorker({ role: '后端' })
+    const { collabTaskService } = await import('../services/collabTaskService.js')
+    await collabTaskService.createTask({
+      id: 'task-d1',
+      projectDir: tmpDir,
+      fromSessionId: supervisor,
+      fromRole: 'supervisor',
+      toSessionId: worker,
+      title: '派活',
+      content: '做点事',
+    })
+    deliverMock.mockClear()
+
+    const resp = await postMsg({
+      targetSessionId: architect,
+      fromSessionId: worker,
+      taskId: 'task-d1',
+      content: '【汇报】做完了',
+    })
+    expect(resp.status).toBe(201)
+    const body = (await resp.json()) as Record<string, unknown>
+    expect(body.redirectedFrom).toBe(architect)
+    expect(body.resolvedBy).toBe('task-id')
+    expect(deliverMock.mock.calls[0][0]).toBe(supervisor)
+    // 汇报不落台账（决策 D）：响应里不应出现 taskId
+    expect(body.taskId).toBeUndefined()
+  })
+
+  it('员工汇报目标本就正确 → 不改投、也不带 redirectedFrom', async () => {
+    const supervisor = await registerRosterWorker({ role: '主管', supervisor: true })
+    const worker = await registerRosterWorker({ role: '后端' })
+    const { collabTaskService } = await import('../services/collabTaskService.js')
+    await collabTaskService.createTask({
+      id: 'task-d2',
+      projectDir: tmpDir,
+      fromSessionId: supervisor,
+      fromRole: 'supervisor',
+      toSessionId: worker,
+      title: '派活',
+      content: '做点事',
+    })
+    deliverMock.mockClear()
+
+    const resp = await postMsg({
+      targetSessionId: supervisor,
+      fromSessionId: worker,
+      taskId: 'task-d2',
+      content: '【汇报】做完了',
+    })
+    expect(resp.status).toBe(201)
+    const body = (await resp.json()) as Record<string, unknown>
+    expect(body.redirectedFrom).toBeUndefined()
+    expect(deliverMock.mock.calls[0][0]).toBe(supervisor)
+    expect(body.taskId).toBeUndefined()
+  })
+
+  it('汇报不新建任务：台账条数不变', async () => {
+    const supervisor = await registerRosterWorker({ role: '主管', supervisor: true })
+    const worker = await registerRosterWorker({ role: '后端' })
+    const { collabTaskService } = await import('../services/collabTaskService.js')
+    await collabTaskService.createTask({
+      id: 'task-d3',
+      projectDir: tmpDir,
+      fromSessionId: supervisor,
+      fromRole: 'supervisor',
+      toSessionId: worker,
+      title: '派活',
+      content: '做点事',
+    })
+    const before = (await collabTaskService.listTasks({})).length
+
+    await postMsg({
+      targetSessionId: supervisor,
+      fromSessionId: worker,
+      taskId: 'task-d3',
+      content: '【汇报】做完了',
+    })
+
+    expect((await collabTaskService.listTasks({})).length).toBe(before)
+  })
+
+  it('旧主管派的任务，旧主管卸任（不再是主管）、新主管上任后 → 汇报投给新主管', async () => {
+    const oldSupervisor = await registerRosterWorker({ role: '主管', supervisor: true })
+    const worker = await registerRosterWorker({ role: '后端' })
+    const { collabTaskService } = await import('../services/collabTaskService.js')
+    await collabTaskService.createTask({
+      id: 'task-d4',
+      projectDir: tmpDir,
+      fromSessionId: oldSupervisor,
+      fromRole: 'supervisor',
+      toSessionId: worker,
+      title: '派活',
+      content: '做点事',
+    })
+
+    // 旧主管卸任 + 新主管上任（同项目）
+    const { ServantService } = await import('../services/servantService.js')
+    const svc = new ServantService()
+    await svc.setServant(oldSupervisor, { enabled: true, supervisor: false })
+    const newSupervisor = await registerRosterWorker({ role: '主管', supervisor: true })
+    deliverMock.mockClear()
+
+    const resp = await postMsg({
+      targetSessionId: oldSupervisor,
+      fromSessionId: worker,
+      taskId: 'task-d4',
+      content: '【汇报】做完了',
+    })
+    expect(resp.status).toBe(201)
+    const body = (await resp.json()) as Record<string, unknown>
+    expect(body.resolvedBy).toBe('successor-supervisor')
+    expect(body.redirectedFrom).toBe(oldSupervisor)
+    expect(deliverMock.mock.calls[0][0]).toBe(newSupervisor)
+  })
+
+  it('员工带的 taskId 在台账查不到 → 记可审计告警，且仍按 fallback 投递', async () => {
+    const supervisor = await registerRosterWorker({ role: '主管', supervisor: true })
+    const worker = await registerRosterWorker({ role: '后端' })
+    const logs: Array<{ level: string; event: string; data?: Record<string, unknown> }> = []
+    setDiagnosticsLogWriterForTests((level, event, data) => {
+      logs.push({ level, event, data: data as Record<string, unknown> | undefined })
+    })
+    try {
+      deliverMock.mockClear()
+      const resp = await postMsg({
+        targetSessionId: worker, // 错的目标，台账也查不到这个 taskId
+        fromSessionId: worker,
+        taskId: 'no-such-task',
+        content: '【汇报】做完了',
+      })
+      expect(resp.status).toBe(201)
+      const warn = logs.find((entry) => entry.event === 'collab_report_task_not_found')
+      expect(warn).toBeDefined()
+      expect(warn?.level).toBe('warn')
+      expect(warn?.data).toMatchObject({
+        requestedTaskId: 'no-such-task',
+        workerSessionId: worker,
+        requestedTarget: worker,
+      })
+      // fallback 结果不变：台账无果 → 同项目现任主管
+      expect(deliverMock.mock.calls[0][0]).toBe(supervisor)
+    } finally {
+      setDiagnosticsLogWriterForTests(null)
+    }
+  })
+
+  it('taskId 正常存在时，不产生 task-not-found 告警', async () => {
+    const supervisor = await registerRosterWorker({ role: '主管', supervisor: true })
+    const worker = await registerRosterWorker({ role: '后端' })
+    const { collabTaskService } = await import('../services/collabTaskService.js')
+    await collabTaskService.createTask({
+      id: 'task-ok',
+      projectDir: tmpDir,
+      fromSessionId: supervisor,
+      fromRole: 'supervisor',
+      toSessionId: worker,
+      title: '派活',
+      content: '做点事',
+    })
+    const events: string[] = []
+    setDiagnosticsLogWriterForTests((_level, event) => {
+      events.push(event)
+    })
+    try {
+      const resp = await postMsg({
+        targetSessionId: supervisor,
+        fromSessionId: worker,
+        taskId: 'task-ok',
+        content: '【汇报】做完了',
+      })
+      expect(resp.status).toBe(201)
+      expect(events).not.toContain('collab_report_task_not_found')
+    } finally {
+      setDiagnosticsLogWriterForTests(null)
+    }
+  })
+
+  it('旧主管卸任、员工汇报已正确写现任主管 → 保持该目标，不被逆改回旧主管', async () => {
+    const oldSupervisor = await registerRosterWorker({ role: '主管', supervisor: true })
+    const worker = await registerRosterWorker({ role: '后端' })
+    const { collabTaskService } = await import('../services/collabTaskService.js')
+    await collabTaskService.createTask({
+      id: 'task-d6',
+      projectDir: tmpDir,
+      fromSessionId: oldSupervisor,
+      fromRole: 'supervisor',
+      toSessionId: worker,
+      title: '派活',
+      content: '做点事',
+    })
+    const { ServantService } = await import('../services/servantService.js')
+    await new ServantService().setServant(oldSupervisor, { enabled: true, supervisor: false })
+    const newSupervisor = await registerRosterWorker({ role: '主管', supervisor: true })
+    deliverMock.mockClear()
+
+    const resp = await postMsg({
+      // 员工按系统页脚写对了现任主管——交接分支不得把它逆改回旧派活人
+      targetSessionId: newSupervisor,
+      fromSessionId: worker,
+      taskId: 'task-d6',
+      content: '【汇报】做完了',
+    })
+    expect(resp.status).toBe(201)
+    const body = (await resp.json()) as Record<string, unknown>
+    expect(body.redirectedFrom).toBeUndefined()
+    expect(body.resolvedBy).toBeUndefined()
+    expect(deliverMock.mock.calls[0][0]).toBe(newSupervisor)
+  })
+
+  it('员工名下两条未结任务、派活人不同、汇报不带 taskId → 不改投，只告警', async () => {
+    const bossA = await registerRosterWorker({ role: '主管', supervisor: true })
+    const bossB = await registerRosterWorker({ role: '用户' })
+    const worker = await registerRosterWorker({ role: '后端' })
+    const { collabTaskService } = await import('../services/collabTaskService.js')
+    await collabTaskService.createTask({
+      id: 'task-d5a',
+      projectDir: tmpDir,
+      fromSessionId: bossA,
+      fromRole: 'supervisor',
+      toSessionId: worker,
+      title: 'a',
+      content: 'a',
+    })
+    await collabTaskService.createTask({
+      id: 'task-d5b',
+      projectDir: tmpDir,
+      fromSessionId: bossB,
+      fromRole: 'other',
+      toSessionId: worker,
+      title: 'b',
+      content: 'b',
+    })
+    deliverMock.mockClear()
+
+    const resp = await postMsg({
+      targetSessionId: bossA,
+      fromSessionId: worker,
+      content: '【汇报】做完了',
+    })
+    expect(resp.status).toBe(201)
+    const body = (await resp.json()) as Record<string, unknown>
+    expect(body.redirectedFrom).toBeUndefined()
+    expect(deliverMock.mock.calls[0][0]).toBe(bossA)
+  })
+
+  it('同项目无主管、台账也查不到 → 按原目标投递', async () => {
+    const worker = await registerRosterWorker({ role: '后端' })
+    const other = await registerRosterWorker({ role: '前端' })
+    deliverMock.mockClear()
+    const resp = await postMsg({
+      targetSessionId: other,
+      fromSessionId: worker,
+      content: '【汇报】做完了',
+    })
+    expect(resp.status).toBe(201)
+    expect(deliverMock.mock.calls[0][0]).toBe(other)
+  })
+
+  it('原目标不在册且解析不出更好人选 → 保留可行动 404', async () => {
+    const worker = await registerRosterWorker({ role: '后端' })
+    const resp = await postMsg({
+      targetSessionId: '11111111-2222-4333-8444-555555555555',
+      fromSessionId: worker,
+      content: '【汇报】做完了',
+    })
+    expect(resp.status).toBe(404)
+  })
+
+  it('主管派活永远是派活：不改投、记台账、带页脚', async () => {
+    const supervisor = await registerRosterWorker({ role: '主管', supervisor: true })
+    const worker = await registerRosterWorker({ role: '后端' })
+    deliverMock.mockClear()
+    const resp = await postMsg({
+      targetSessionId: worker,
+      fromSessionId: supervisor,
+      content: '派活：做个功能',
+    })
+    expect(resp.status).toBe(201)
+    const body = (await resp.json()) as Record<string, unknown>
+    expect(body.redirectedFrom).toBeUndefined()
+    expect(typeof body.taskId).toBe('string') // 派活才记台账
+    const sent = deliverMock.mock.calls[0][1] as string
+    expect(sent).toContain(`完工汇报目标：${supervisor}`)
+  })
+
+  it('用户会话（发送方不在花名册）派活给员工 → 永不改投，正常记台账', async () => {
+    const worker = await registerRosterWorker({ role: '后端' })
+    deliverMock.mockClear()
+    const resp = await postMsg({
+      targetSessionId: worker,
+      fromSessionId: '99999999-8888-4777-8666-555555555555',
+      content: '用户发的消息',
+    })
+    expect(resp.status).toBe(201)
+    const body = (await resp.json()) as Record<string, unknown>
+    // 不在花名册的发送方不参与汇报解析，但目标仍是 enabled 员工 → 这是派活，照旧记账
+    expect(body.redirectedFrom).toBeUndefined()
+    expect(typeof body.taskId).toBe('string')
   })
 
   it('recovers GBK-encoded Chinese from legacy inline curl bodies', async () => {
@@ -821,7 +1146,9 @@ describe('Session Messages API', () => {
       ['api', 'session-messages'],
     )
     expect(res.status).toBe(201)
-    expect(deliverMock.mock.calls[0][1]).toBe('测试')
+    // v1.6.0：这是派活 → 正文末尾追加了系统页脚，用 contains 而非全等
+    expect(deliverMock.mock.calls[0][1]).toContain('测试')
+    expect(deliverMock.mock.calls[0][1]).toContain('【系统】任务 ID：')
   })
 
   it('should reject invalid payloads', async () => {
@@ -837,6 +1164,318 @@ describe('Session Messages API', () => {
     // targetSessionId 缺失 → 前置校验 400（原先落到 deliver 层，mock 下会假成功 201；
     // 生命周期改造后由 API 层先行拒绝；空 content 的校验仍在 SessionMessenger 层）
     expect(missingTarget.status).toBe(400)
+  })
+
+  // ─── v1.6.0 裁决二：广播 = N 条独立单播派活（各自独立 taskId 与台账） ──
+
+  it('主管向 3 名员工广播：3 个独立 taskId、台账 broadcastId 相同、页脚逐一对齐', async () => {
+    const supervisor = await registerRosterWorker({ role: '主管', supervisor: true })
+    const a = await registerRosterWorker({ role: '前端' })
+    const b = await registerRosterWorker({ role: '后端' })
+    const c = await registerRosterWorker({ role: '测试' })
+    deliverMock.mockClear()
+
+    const resp = await postMsg({ broadcast: true, fromSessionId: supervisor, content: '做功能' })
+    expect(resp.status).toBe(201)
+    const body = (await resp.json()) as {
+      broadcastId: string
+      delivered: number
+      targets: Array<{ sessionId: string; taskId?: string; delivered: boolean }>
+    }
+    expect(body.broadcastId).toBeTruthy()
+    expect(body.delivered).toBe(3)
+    expect(body.targets).toHaveLength(3)
+
+    const taskIds = body.targets.map((t) => t.taskId)
+    expect(taskIds.every((id) => typeof id === 'string')).toBe(true)
+    expect(new Set(taskIds).size).toBe(3) // 各自独立，不是同一个
+
+    // 每个员工收到的页脚里 taskId 与本人在响应中的 taskId 一致，回邮目标都是发起者
+    for (const target of body.targets) {
+      const call = deliverMock.mock.calls.find((args) => args[0] === target.sessionId)
+      expect(call).toBeDefined()
+      const sent = call![1] as string
+      expect(sent).toContain(`任务 ID：${target.taskId}`)
+      expect(sent).toContain(`完工汇报目标：${supervisor}`)
+    }
+    expect(deliverMock.mock.calls.map((args) => args[0]).sort()).toEqual([a, b, c].sort())
+
+    const { collabTaskService } = await import('../services/collabTaskService.js')
+    const tasks = await collabTaskService.listTasks({})
+    const broadcastTasks = tasks.filter((task) => task.broadcastId === body.broadcastId)
+    expect(broadcastTasks).toHaveLength(3)
+    expect(broadcastTasks.every((task) => task.fromSessionId === supervisor)).toBe(true)
+    expect(broadcastTasks.every((task) => task.status === 'dispatched')).toBe(true)
+  })
+
+  // ─── v1.6.0 裁决三：broadcastId 单进程并发保护 ────────────────────────
+
+  it('同 broadcastId 并发两请求 → 每目标仅一次投递、台账恰 3 条、taskId 一致、后响应 deduplicated', async () => {
+    resetBroadcastLocksForTests()
+    const supervisor = await registerRosterWorker({ role: '主管', supervisor: true })
+    await registerRosterWorker({ role: '前端' })
+    await registerRosterWorker({ role: '后端' })
+    await registerRosterWorker({ role: '测试' })
+    const broadcastId = 'bc-concurrent-1'
+
+    // 确定性 barrier：让**第一次**投递挂在 gate 上，从而第一个请求确实已进入临界区
+    // 且尚未记账；第二个请求此时发起，应因同 key 串行而排队。不依赖 sleep。
+    let firstDeliverStarted!: () => void
+    const firstDeliverStartedP = new Promise<void>((resolve) => {
+      firstDeliverStarted = resolve
+    })
+    let openGate!: () => void
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve
+    })
+    let blockOnce = true
+    deliverMock.mockClear()
+    deliverMock.mockImplementation(async () => {
+      if (blockOnce) {
+        blockOnce = false
+        firstDeliverStarted()
+        await gate
+      }
+      return true
+    })
+
+    const req1 = postMsg({ broadcast: true, fromSessionId: supervisor, content: '做', broadcastId })
+    await firstDeliverStartedP // 此刻 req1 已在临界区内的投递中（持锁）
+    const req2 = postMsg({ broadcast: true, fromSessionId: supervisor, content: '做', broadcastId })
+    openGate() // 放行 req1
+
+    const [res1, res2] = await Promise.all([req1, req2])
+    expect(res1.status).toBe(201)
+    expect(res2.status).toBe(201)
+    const body1 = (await res1.json()) as {
+      targets: Array<{ sessionId: string; taskId?: string }>
+      deduplicated?: boolean
+    }
+    const body2 = (await res2.json()) as {
+      targets: Array<{ sessionId: string; taskId?: string }>
+      deduplicated?: boolean
+    }
+
+    // 每个目标恰好投递一次（并发没有放大投递）
+    expect(deliverMock).toHaveBeenCalledTimes(3)
+    // 台账恰好 3 条
+    const { collabTaskService } = await import('../services/collabTaskService.js')
+    const tasks = (await collabTaskService.listTasks({})).filter(
+      (task) => task.broadcastId === broadcastId,
+    )
+    expect(tasks).toHaveLength(3)
+    // 两个响应给出**相同**的 taskId
+    const ids1 = new Map(body1.targets.map((t) => [t.sessionId, t.taskId]))
+    for (const target of body2.targets) {
+      expect(target.taskId).toBe(ids1.get(target.sessionId))
+    }
+    // 后到的请求被幂等放行，带可区分标记；先到的正常投递不带
+    expect(body2.deduplicated).toBe(true)
+    expect(body1.deduplicated).toBeUndefined()
+    // 结束后无残留锁
+    expect(hasBroadcastLock(`broadcast:${broadcastId}`)).toBe(false)
+  })
+
+  it('不同 broadcastId 并行互不阻塞', async () => {
+    resetBroadcastLocksForTests()
+    const supervisor = await registerRosterWorker({ role: '主管', supervisor: true })
+    await registerRosterWorker({ role: '前端' })
+    await registerRosterWorker({ role: '后端' })
+    await registerRosterWorker({ role: '测试' })
+
+    let firstDeliverStarted!: () => void
+    const firstDeliverStartedP = new Promise<void>((resolve) => {
+      firstDeliverStarted = resolve
+    })
+    let openGate!: () => void
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve
+    })
+    let blockOnce = true
+    deliverMock.mockClear()
+    deliverMock.mockImplementation(async () => {
+      if (blockOnce) {
+        blockOnce = false
+        firstDeliverStarted()
+        await gate
+      }
+      return true
+    })
+
+    const slow = postMsg({ broadcast: true, fromSessionId: supervisor, content: '做', broadcastId: 'bc-x' })
+    await firstDeliverStartedP // bc-x 卡在投递中
+    // bc-y 使用不同键，不应等 bc-x 的锁
+    const fast = await postMsg({ broadcast: true, fromSessionId: supervisor, content: '做', broadcastId: 'bc-y' })
+    expect(fast.status).toBe(201)
+    const fastBody = (await fast.json()) as { delivered: number }
+    expect(fastBody.delivered).toBe(3) // 在 bc-x 未完成时就跑完了
+
+    openGate()
+    expect((await slow).status).toBe(201)
+  })
+
+  it('临界区异常后释放锁，后续同 broadcastId 请求正常成功', async () => {
+    resetBroadcastLocksForTests()
+    const supervisor = await registerRosterWorker({ role: '主管', supervisor: true })
+    await registerRosterWorker({ role: '前端' })
+    await registerRosterWorker({ role: '后端' })
+    await registerRosterWorker({ role: '测试' })
+    const broadcastId = 'bc-recover'
+
+    // 第一轮：所有投递都抛错 → 全失败 → 500（临界区以异常结束）
+    deliverMock.mockClear()
+    deliverMock.mockImplementation(async () => {
+      throw new Error('boom')
+    })
+    const bad = await postMsg({ broadcast: true, fromSessionId: supervisor, content: '做', broadcastId })
+    expect(bad.status).toBe(500)
+    // 异常没有把锁卡死：键已释放
+    expect(hasBroadcastLock(`broadcast:${broadcastId}`)).toBe(false)
+
+    // 后续同 ID 请求正常成功
+    deliverMock.mockImplementation(async () => true)
+    const good = await postMsg({ broadcast: true, fromSessionId: supervisor, content: '做', broadcastId })
+    expect(good.status).toBe(201)
+    const goodBody = (await good.json()) as { delivered: number }
+    expect(goodBody.delivered).toBe(3)
+    expect(hasBroadcastLock(`broadcast:${broadcastId}`)).toBe(false)
+  })
+
+  it('不带 broadcastId 的广播不进锁，请求后锁表为空', async () => {
+    resetBroadcastLocksForTests()
+    const supervisor = await registerRosterWorker({ role: '主管', supervisor: true })
+    await registerRosterWorker({ role: '后端' })
+    deliverMock.mockClear()
+    const resp = await postMsg({ broadcast: true, fromSessionId: supervisor, content: '做' })
+    expect(resp.status).toBe(201)
+    const body = (await resp.json()) as { broadcastId: string; deduplicated?: boolean }
+    expect(body.broadcastId).toBeTruthy() // 自动生成
+    expect(body.deduplicated).toBeUndefined()
+    expect(hasBroadcastLock(`broadcast:${body.broadcastId}`)).toBe(false)
+  })
+
+  it('主管永远不作为广播目标（用户会话发起时也排除主管）', async () => {
+    const supervisor = await registerRosterWorker({ role: '主管', supervisor: true })
+    const worker = await registerRosterWorker({ role: '后端' })
+    deliverMock.mockClear()
+    // 用**用户会话**发起：主管此时是「enabled 且非发起者」，只有 !supervisor 这一条
+    // 能把它排除。若换成主管自己发起，「非发起者」会顺带排除，测不出主管过滤。
+    const resp = await postMsg({
+      broadcast: true,
+      fromSessionId: '99999999-8888-4777-8666-555555555555',
+      content: '做功能',
+    })
+    expect(resp.status).toBe(201)
+    const targets = deliverMock.mock.calls.map((args) => args[0])
+    expect(targets).toContain(worker)
+    expect(targets).not.toContain(supervisor)
+  })
+
+  it('在册非主管员工发起广播 → 403，且不投递、不记账', async () => {
+    await registerRosterWorker({ role: '主管', supervisor: true })
+    const worker = await registerRosterWorker({ role: '后端' })
+    const peer = await registerRosterWorker({ role: '前端' })
+    const { collabTaskService } = await import('../services/collabTaskService.js')
+    const before = (await collabTaskService.listTasks({})).length
+    deliverMock.mockClear()
+
+    const resp = await postMsg({ broadcast: true, fromSessionId: worker, content: '都去做' })
+    expect(resp.status).toBe(403)
+    expect(deliverMock).not.toHaveBeenCalled()
+    expect((await collabTaskService.listTasks({})).length).toBe(before)
+    void peer
+  })
+
+  it('广播中有一个目标投递失败 → 只记成功目标的账，失败项无 taskId', async () => {
+    const supervisor = await registerRosterWorker({ role: '主管', supervisor: true })
+    const a = await registerRosterWorker({ role: '前端' })
+    const b = await registerRosterWorker({ role: '后端' })
+    const failing = await registerRosterWorker({ role: '测试' })
+    deliverMock.mockClear()
+    deliverMock.mockImplementation(async (targetId: string) => targetId !== failing)
+
+    const resp = await postMsg({ broadcast: true, fromSessionId: supervisor, content: '做功能' })
+    expect(resp.status).toBe(201)
+    const body = (await resp.json()) as {
+      broadcastId: string
+      delivered: number
+      failed?: string[]
+      targets: Array<{ sessionId: string; taskId?: string; delivered: boolean }>
+    }
+    expect(body.delivered).toBe(2)
+    expect(body.failed).toEqual([failing])
+
+    const failedItem = body.targets.find((t) => t.sessionId === failing)
+    expect(failedItem?.delivered).toBe(false)
+    expect(failedItem?.taskId).toBeUndefined()
+
+    const { collabTaskService } = await import('../services/collabTaskService.js')
+    const tasks = (await collabTaskService.listTasks({})).filter(
+      (task) => task.broadcastId === body.broadcastId,
+    )
+    expect(tasks).toHaveLength(2) // 失败目标不记账
+    expect(tasks.map((task) => task.toSessionId).sort()).toEqual([a, b].sort())
+  })
+
+  it('同一 broadcastId 重复提交 → 已成功目标不重复投递与记账', async () => {
+    const supervisor = await registerRosterWorker({ role: '主管', supervisor: true })
+    const a = await registerRosterWorker({ role: '前端' })
+    const b = await registerRosterWorker({ role: '后端' })
+    const broadcastId = 'bc-idempotent-1'
+    deliverMock.mockClear()
+
+    const first = await postMsg({ broadcast: true, fromSessionId: supervisor, content: '做功能', broadcastId })
+    expect(first.status).toBe(201)
+    expect(deliverMock).toHaveBeenCalledTimes(2)
+    const firstBody = (await first.json()) as { targets: Array<{ sessionId: string; taskId?: string }> }
+    const firstTaskIds = new Map(firstBody.targets.map((t) => [t.sessionId, t.taskId]))
+
+    deliverMock.mockClear()
+    const second = await postMsg({ broadcast: true, fromSessionId: supervisor, content: '做功能', broadcastId })
+    expect(second.status).toBe(201)
+    const secondBody = (await second.json()) as { targets: Array<{ sessionId: string; taskId?: string }> }
+    // 幂等命中：不再重复投递
+    expect(deliverMock).not.toHaveBeenCalled()
+    // 返回的仍是上一轮那批 taskId
+    for (const target of secondBody.targets) {
+      expect(target.taskId).toBe(firstTaskIds.get(target.sessionId))
+    }
+
+    const { collabTaskService } = await import('../services/collabTaskService.js')
+    const tasks = (await collabTaskService.listTasks({})).filter(
+      (task) => task.broadcastId === broadcastId,
+    )
+    expect(tasks).toHaveLength(2) // 没有重复记账
+    expect(tasks.map((task) => task.toSessionId).sort()).toEqual([a, b].sort())
+  })
+
+  it('员工带广播任务页脚里的 taskId 汇报 → 投给主管，不生成新任务', async () => {
+    const supervisor = await registerRosterWorker({ role: '主管', supervisor: true })
+    const worker = await registerRosterWorker({ role: '后端' })
+    deliverMock.mockClear()
+    const broadcast = await postMsg({ broadcast: true, fromSessionId: supervisor, content: '做功能' })
+    const broadcastBody = (await broadcast.json()) as {
+      targets: Array<{ sessionId: string; taskId?: string }>
+    }
+    const taskId = broadcastBody.targets.find((t) => t.sessionId === worker)?.taskId
+    expect(typeof taskId).toBe('string')
+
+    const { collabTaskService } = await import('../services/collabTaskService.js')
+    const before = (await collabTaskService.listTasks({})).length
+    deliverMock.mockClear()
+
+    // 员工按页脚汇报：目标写主管（页脚里的回邮目标），taskId 用广播那条
+    const resp = await postMsg({
+      targetSessionId: supervisor,
+      fromSessionId: worker,
+      taskId: taskId!,
+      content: '【汇报】做完了',
+    })
+    expect(resp.status).toBe(201)
+    const body = (await resp.json()) as Record<string, unknown>
+    expect(body.redirectedFrom).toBeUndefined() // 第 ① 步直接命中，无歧义
+    expect(deliverMock.mock.calls[0][0]).toBe(supervisor)
+    expect((await collabTaskService.listTasks({})).length).toBe(before) // 汇报不新建任务
   })
 
   it('should broadcast to enabled servants in the project, skipping disabled and sender', async () => {

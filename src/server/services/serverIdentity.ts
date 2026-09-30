@@ -39,7 +39,34 @@ export type ServerIdentity = {
   version: string
   pid: number
   startedAt: string
+  /**
+   * 能力声明（v1.6.0 CLI 契约 §五）。
+   *
+   * 客户端（CLI 协作工具）靠它区分新旧服务端：旧服务端没有这个字段，客户端只能
+   * 退化成探测 `GET /api/collab-tasks?limit=1` 是否 404 `Unknown API resource`。
+   * 有字段时就按这里的名字精确判断，不必再试探。
+   *
+   * 约定：字段只能**新增**名字，不能删除或改名；任何字段改名、状态机改动都要
+   * bump 这里并附带测试（契约 §六）。
+   */
+  capabilities: string[]
 }
+
+/**
+ * 当前服务端声明的能力名。新增能力时追加，勿改名/删除（旧客户端已按名字判断）。
+ * - collab-tasks：协作台账 REST（/api/collab-tasks*）
+ * - report-caller-check：report/review 的 callerSessionId 权限校验
+ * - mailbox-report：文件信箱 payload 支持 report 字段（先记账再投递）
+ * - broadcast-ledger：广播逐目标独立记账 + broadcastId 关联
+ * - broadcast-lock：同一 broadcastId 的进程内串行（仅单进程内保证）
+ */
+export const SERVER_CAPABILITIES: readonly string[] = [
+  'collab-tasks',
+  'report-caller-check',
+  'mailbox-report',
+  'broadcast-ledger',
+  'broadcast-lock',
+]
 
 export const DESKTOP_SERVER_INFO_FILENAME = 'desktop-server.json'
 
@@ -116,6 +143,7 @@ export function getServerIdentity(): ServerIdentity {
     version: resolvePackageVersion(),
     pid: process.pid,
     startedAt: STARTED_AT,
+    capabilities: [...SERVER_CAPABILITIES],
   }
 }
 

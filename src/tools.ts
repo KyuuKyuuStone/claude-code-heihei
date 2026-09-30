@@ -71,6 +71,15 @@ const getSendMessageTool = () =>
   require('./tools/SendMessageTool/SendMessageTool.js')
     .SendMessageTool as typeof import('./tools/SendMessageTool/SendMessageTool.js').SendMessageTool
 /* eslint-enable @typescript-eslint/no-require-imports */
+/**
+ * 协作工具（v1.6.0 第二批）：按会话角色注入，非协作会话返回空数组。
+ * lazy require 保持冷启动成本不变（普通会话根本不加载这四个工具与 HTTP 客户端）；
+ * 角色判定必须在函数内读 env——顶层求值会早于服务端注入。
+ */
+/* eslint-disable @typescript-eslint/no-require-imports */
+const getCollabTools = () =>
+  require('./tools/CollabTools/index.js').getCollabTools() as Tool[]
+/* eslint-enable @typescript-eslint/no-require-imports */
 import { AskUserQuestionTool } from './tools/AskUserQuestionTool/AskUserQuestionTool.js'
 import { LSPTool } from './tools/LSPTool/LSPTool.js'
 import { ListMcpResourcesTool } from './tools/ListMcpResourcesTool/ListMcpResourcesTool.js'
@@ -248,6 +257,8 @@ export function getAllBaseTools(): Tools {
     // Include ToolSearchTool when tool search might be enabled (optimistic check)
     // The actual decision to defer tools happens at request time in claude.ts
     ...(isToolSearchEnabledOptimistic() ? [ToolSearchTool] : []),
+    // 协作会话专属（主管 3 个 / 员工 2 个 / 非协作会话 0 个）
+    ...getCollabTools(),
   ]
 }
 

@@ -9,8 +9,13 @@ import { subscribeGlobalEvents } from './globalEventsChannel'
 
 /**
  * 全局 `_events` 通道上的员工相关事件（事件契约 v1.5.0）：
- * - servant_turn_changed：回合翻转（状态灯 busy↔idle），局部 patch；
+ * - servant_turn_changed：回合翻转（状态灯执行中↔待命），写入全局回合态映射；
  * - servant_roster_changed：花名册条目增/删/字段更新（A6）。
+ *
+ * 「一件事实一个权威源」（架构决策_侧栏运行指示统一数据源）：某会话是否正在跑回合
+ * 的权威源是服务端 sessionRegistry 的回合态，前端只做订阅副本。副本落在
+ * `turnInProgressBySessionId`——**所有 sessionId 都写，包括不在花名册里的会话**，
+ * 不再像旧实现那样「条目不在花名册就丢弃事件」（那正是「派活后不转圈」的根因）。
  */
 const SERVANT_TURN_CHANGED_SUBTYPE = 'servant_turn_changed'
 const SERVANT_ROSTER_CHANGED_SUBTYPE = 'servant_roster_changed'
@@ -33,6 +38,12 @@ const STRUCTURAL_ROSTER_FIELDS = new Set(['role', 'constraint', 'supervisor', 'e
 type ServantStore = {
   /** 协作身份：sessionId → 身份信息（含未启用条目，供徽标与编辑回显） */
   bySessionId: Record<string, ServantInfo>
+  /**
+   * 全局回合态副本：sessionId → 是否正在跑回合（turnInProgress）。所有会话都记录，
+   * 含花名册外的会话。侧栏运行指示（执行中/待命）只读这里，按 sessionId 做局部
+   * selector 订阅，避免事件风暴下整表重渲染。只有 true 才有意义地出现；缺省 = 未知/否。
+   */
+  turnInProgressBySessionId: Record<string, boolean>
   isLoading: boolean
 
   fetchServants: () => Promise<void>
@@ -40,10 +51,11 @@ type ServantStore = {
   removeServant: (sessionId: string) => Promise<void>
   /**
    * 订阅全局事件通道（共享连接见 globalEventsChannel）：
-   * - servant_turn_changed → 立即局部更新对应条目的 turnInProgress（不等轮询）；
+   * - servant_turn_changed → 写入全局回合态映射（所有 sessionId），并同步花名册条目；
    * - servant_roster_changed（A6）→ added/结构性字段变化触发全量刷新，
    *   running/title/lastActivityAt 局部 patch，removed 本地移除；
-   * 重连成功时补一次全量刷新，填掉断线窗口内错过的事件。返回退订函数。
+   * 重连成功时先清空回合态映射再全量刷新，填掉断线窗口内错过的事件并防止卡 busy。
+   * 返回退订函数。
    */
   subscribeTurnEvents: () => () => void
 }
@@ -87,12 +99,25 @@ function parseRosterChangedData(data: unknown): {
 
 export const useServantStore = create<ServantStore>((set) => ({
   bySessionId: {},
+  turnInProgressBySessionId: {},
   isLoading: false,
 
   fetchServants: async () => {
     set({ isLoading: true })
     try {
-      set({ bySessionId: await fetchAll(), isLoading: false })
+      const bySessionId = await fetchAll()
+      set((s) => ({
+        bySessionId,
+        isLoading: false,
+        // 冷启动/刷新：用花名册的权威回合态初始化员工部分；花名册外的 sessionId
+        // 保留映射里已有的值（事件驱动写入的），不被这次刷新清掉。
+        turnInProgressBySessionId: {
+          ...s.turnInProgressBySessionId,
+          ...Object.fromEntries(
+            Object.values(bySessionId).map((info) => [info.sessionId, info.turnInProgress]),
+          ),
+        },
+      }))
     } catch {
       set({ isLoading: false })
     }
@@ -122,15 +147,27 @@ export const useServantStore = create<ServantStore>((set) => ({
           const parsed = parseTurnChangedData(msg.data)
           if (!parsed) return
           set((s) => {
+            // 全局副本：所有 sessionId 都写，含花名册外的会话（不再丢弃事件）
+            const turnInProgressBySessionId =
+              s.turnInProgressBySessionId[parsed.sessionId] === parsed.turnInProgress
+                ? s.turnInProgressBySessionId
+                : { ...s.turnInProgressBySessionId, [parsed.sessionId]: parsed.turnInProgress }
+            // 花名册里有该条目时同步其字段（徽标/编辑回显仍读花名册）
             const entry = s.bySessionId[parsed.sessionId]
-            // 未登记的会话不在花名册内，忽略；等下次轮询带上
-            if (!entry || entry.turnInProgress === parsed.turnInProgress) return s
-            return {
-              bySessionId: {
-                ...s.bySessionId,
-                [parsed.sessionId]: { ...entry, turnInProgress: parsed.turnInProgress },
-              },
+            const bySessionId =
+              entry && entry.turnInProgress !== parsed.turnInProgress
+                ? {
+                    ...s.bySessionId,
+                    [parsed.sessionId]: { ...entry, turnInProgress: parsed.turnInProgress },
+                  }
+                : s.bySessionId
+            if (
+              turnInProgressBySessionId === s.turnInProgressBySessionId &&
+              bySessionId === s.bySessionId
+            ) {
+              return s
             }
+            return { turnInProgressBySessionId, bySessionId }
           })
           return
         }
@@ -174,8 +211,12 @@ export const useServantStore = create<ServantStore>((set) => ({
           }
         }
       },
-      // 重连成功 → 断线窗口内可能漏了事件，补一次全量刷新对齐真实状态
-      () => { void useServantStore.getState().fetchServants() },
+      // 重连成功 → 断线窗口内可能漏了事件。先清空回合态映射再全量刷新重建初值，
+      // 否则漏掉的 false 事件会让某会话永久卡在「执行中」（防卡 busy）。
+      () => {
+        useServantStore.setState({ turnInProgressBySessionId: {} })
+        void useServantStore.getState().fetchServants()
+      },
     )
   },
 }))

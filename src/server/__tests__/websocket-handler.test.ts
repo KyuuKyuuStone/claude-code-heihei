@@ -1147,4 +1147,64 @@ describe('rebind on phase_changed(→running) (7b, R4a/R4b)', () => {
     expect(invalidations[0].data?.epoch).toBe(5) // 窗口内最大 epoch
     resetCollabPushBroadcastForTests()
   })
+
+  // ── 裁决二（v1.6.0）：kind=task 走专用出口，不再落 session_list 分支 ──
+  it('task 信号走 collab_task_changed，不触发 session_list_invalidated', async () => {
+    ensureCollabPushBroadcastSubscribed()
+    const eventsSocket = makeClientSocket(GLOBAL_EVENTS_SESSION_ID)
+    handleWebSocket.open(eventsSocket)
+    eventsSocket.sent.length = 0
+
+    emitCollabPush({
+      kind: 'task',
+      taskId: 'task-1',
+      projectDir: 'D:/xxw_p/proj',
+      change: 'created',
+      status: 'dispatched',
+    })
+
+    const parsed = eventsSocket.sent.map(
+      (payload) => JSON.parse(payload) as { subtype?: string; data?: unknown },
+    )
+    const taskPush = parsed.filter((m) => m.subtype === 'collab_task_changed')
+    expect(taskPush).toHaveLength(1)
+    // data 精确为四个字段：不夹带 epoch，也不含多余键
+    expect(taskPush[0]!.data).toEqual({
+      taskId: 'task-1',
+      projectDir: 'D:/xxw_p/proj',
+      change: 'created',
+      status: 'dispatched',
+    })
+    // ① 不落 session_list 分支
+    expect(parsed.filter((m) => m.subtype === 'session_list_invalidated')).toHaveLength(0)
+    // ② 不产出 NaN/null epoch（NaN 经 JSON 序列化会变成 null）
+    expect(eventsSocket.sent.some((p) => p.includes('"epoch"'))).toBe(false)
+    resetCollabPushBroadcastForTests()
+  })
+
+  it('task 信号不再污染同窗口的真实列表 epoch（合并去重恢复）', async () => {
+    ensureCollabPushBroadcastSubscribed()
+    const eventsSocket = makeClientSocket(GLOBAL_EVENTS_SESSION_ID)
+    handleWebSocket.open(eventsSocket)
+    eventsSocket.sent.length = 0
+
+    // 修复前：task 先落进 session_list 合并窗口，pendingListEpoch 被 NaN 吃掉，
+    // 随后真实列表的 epoch 与 NaN 取 max 仍是 NaN，前端只能按无条件刷新。
+    emitCollabPush({
+      kind: 'task',
+      taskId: 'task-2',
+      projectDir: 'D:/xxw_p/proj',
+      change: 'status',
+      status: 'accepted',
+    })
+    emitCollabPush({ kind: 'session_list', epoch: 42 })
+
+    await new Promise((resolve) => setTimeout(resolve, 350))
+    const invalidations = eventsSocket.sent
+      .map((payload) => JSON.parse(payload) as { subtype?: string; data?: { epoch?: number } })
+      .filter((m) => m.subtype === 'session_list_invalidated')
+    expect(invalidations).toHaveLength(1)
+    expect(invalidations[0]!.data?.epoch).toBe(42) // 真实 epoch，不是 NaN/null
+    resetCollabPushBroadcastForTests()
+  })
 })

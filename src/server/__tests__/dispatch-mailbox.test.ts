@@ -68,6 +68,225 @@ describe('DispatchMailboxService', () => {
     expect(isDispatchPayloadName('notes.txt')).toBe(false)
   })
 
+  // ─── v1.6.0 决策 D：信箱通道与 HTTP 通道共用同一汇报目标解析 ──────────
+
+  /** 登记真实会话为员工（信箱测试用真实花名册，resolveReportTarget 走单例） */
+  async function registerWorker(input: {
+    role?: string
+    supervisor?: boolean
+  }): Promise<string> {
+    const { sessionService } = await import('../services/sessionService.js')
+    const { ServantService } = await import('../services/servantService.js')
+    const { registerSession } = await import('../services/sessionRegistry.js')
+    const worker = await sessionService.createSession(tmpDir)
+    registerSession(worker.sessionId)
+    await new ServantService().setServant(worker.sessionId, {
+      role: input.role ?? '测试员工',
+      enabled: true,
+      ...(input.supervisor !== undefined ? { supervisor: input.supervisor } : {}),
+    })
+    return worker.sessionId
+  }
+
+  test('信箱渠道的员工汇报同样按台账改投主管（与 HTTP 同逻辑）', async () => {
+    const original = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = tmpDir
+    try {
+      const supervisor = await registerWorker({ role: '主管', supervisor: true })
+      const architect = await registerWorker({ role: '架构师' })
+      const worker = await registerWorker({ role: '后端' })
+      const { collabTaskService } = await import('../services/collabTaskService.js')
+      await collabTaskService.createTask({
+        id: 'mx-task-1',
+        projectDir: tmpDir,
+        fromSessionId: supervisor,
+        fromRole: 'supervisor',
+        toSessionId: worker,
+        title: '派活',
+        content: '做点事',
+      })
+      const { service, calls } = buildService()
+      await writePayload('report-mx-1.json', {
+        targetSessionId: architect,
+        fromSessionId: worker,
+        taskId: 'mx-task-1',
+        content: '【汇报】做完了',
+      })
+
+      const result = await service.handleMailboxFile(path.join(tmpDir, COLLAB_MAILBOX_DIR), 'report-mx-1.json')
+
+      expect(result).toEqual({ ok: true })
+      expect(calls).toHaveLength(1)
+      expect(calls[0].targetSessionId).toBe(supervisor)
+    } finally {
+      if (original === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = original
+    }
+  })
+
+  // ─── v1.6.0 CLI 契约 §五：信箱 payload 支持 report 字段 ────────────────
+
+  test('信箱 report 字段：先记账推到 delivered，再投递（与 HTTP 两步同序）', async () => {
+    const original = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = tmpDir
+    try {
+      const supervisor = await registerWorker({ role: '主管', supervisor: true })
+      const worker = await registerWorker({ role: '后端' })
+      const { collabTaskService } = await import('../services/collabTaskService.js')
+      await collabTaskService.createTask({
+        id: 'mb-report-1',
+        projectDir: tmpDir,
+        fromSessionId: supervisor,
+        fromRole: 'supervisor',
+        toSessionId: worker,
+        title: '派活',
+        content: '做点事',
+      })
+      // 推进到可 report 的状态（真实链路由回合事件推进）
+      await collabTaskService.transitionTask('mb-report-1', 'accepted')
+      await collabTaskService.transitionTask('mb-report-1', 'in_progress')
+
+      // 顺序断言：投递发生的那一刻，台账必须已经是 delivered。否则主管收到汇报
+      // 立刻 review 会撞 409——这正是「先记账再投递」要防的。
+      const statusAtDeliver: string[] = []
+      const calls: Array<{ targetSessionId: string }> = []
+      const service = new DispatchMailboxService({
+        deliver: async (targetSessionId) => {
+          const now = await collabTaskService.getTask('mb-report-1')
+          statusAtDeliver.push(now?.status ?? 'missing')
+          calls.push({ targetSessionId })
+          return true
+        },
+        getServant: async (sessionId) => {
+          const { servantService } = await import('../services/servantService.js')
+          return servantService.getServant(sessionId)
+        },
+        getSessionWorkDir: async () => tmpDir,
+        listServants: async () => [],
+      })
+      await writePayload('report-mb-1.json', {
+        targetSessionId: worker,
+        fromSessionId: worker,
+        taskId: 'mb-report-1',
+        content: '【汇报】做完了',
+        report: { taskId: 'mb-report-1', summary: '做完了', deliverables: ['a.ts'] },
+      })
+
+      const result = await service.handleMailboxFile(
+        path.join(tmpDir, COLLAB_MAILBOX_DIR),
+        'report-mb-1.json',
+      )
+
+      expect(result).toEqual({ ok: true })
+      // 台账已被推到 delivered，且带上了 report 正文与交付物
+      const task = await collabTaskService.getTask('mb-report-1')
+      expect(task?.status).toBe('delivered')
+      expect(task?.report).toBe('做完了')
+      // 投递那一刻台账已经是 delivered
+      expect(statusAtDeliver).toEqual(['delivered'])
+      // 消息照常投递，且按再投解析送达主管（与 HTTP report 语义一致）
+      expect(calls).toHaveLength(1)
+      expect(calls[0].targetSessionId).toBe(supervisor)
+    } finally {
+      if (original === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = original
+    }
+  })
+
+  test('信箱 report 记账失败（任务不存在）不阻断投递，汇报正文仍送达', async () => {
+    const original = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = tmpDir
+    try {
+      const supervisor = await registerWorker({ role: '主管', supervisor: true })
+      const worker = await registerWorker({ role: '后端' })
+      const { service, calls } = buildService()
+      await writePayload('report-mb-2.json', {
+        targetSessionId: supervisor,
+        fromSessionId: worker,
+        content: '【汇报】做个说明',
+        report: { taskId: 'no-such-task', summary: '做个说明' },
+      })
+
+      const result = await service.handleMailboxFile(
+        path.join(tmpDir, COLLAB_MAILBOX_DIR),
+        'report-mb-2.json',
+      )
+
+      // 投递仍然成功（降级：不伪造台账状态，但消息不能丢）
+      expect(result).toEqual({ ok: true })
+      expect(calls).toHaveLength(1)
+      expect(calls[0].targetSessionId).toBe(supervisor)
+    } finally {
+      if (original === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = original
+    }
+  })
+
+  test('旧 dispatch payload（无 report 字段）行为不变', async () => {
+    const { service, calls } = buildService()
+    await writePayload('dispatch-old-1.json', {
+      targetSessionId: 'session-any',
+      fromSessionId: 'session-boss',
+      content: '做点事',
+    })
+    const result = await service.handleMailboxFile(
+      path.join(tmpDir, COLLAB_MAILBOX_DIR),
+      'dispatch-old-1.json',
+    )
+    expect(result).toEqual({ ok: true })
+    expect(calls).toHaveLength(1)
+  })
+
+  test('信箱里的 broadcast 请求 → 写 .error.txt 明确拒绝，不静默丢弃', async () => {
+    const { service, calls } = buildService()
+    const filePath = await writePayload('dispatch-bc-1.json', {
+      broadcast: true,
+      content: '停工待命',
+      fromSessionId: 'session-boss',
+    })
+
+    const result = await service.handleMailboxFile(
+      path.join(tmpDir, COLLAB_MAILBOX_DIR),
+      'dispatch-bc-1.json',
+    )
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toContain('信箱不支持广播')
+    expect(calls).toHaveLength(0) // 不投递
+    expect(await pathExists(filePath)).toBe(false) // 原名已移交 .failed
+    const errorPath = `${filePath}.error.txt`
+    expect(await pathExists(errorPath)).toBe(true)
+    const errorText = await fs.readFile(errorPath, 'utf-8')
+    expect(errorText).toContain('信箱不支持广播，请用 HTTP 或逐个投递')
+  })
+
+  test('信箱渠道的派活正文末尾追加系统页脚（含 taskId 与回邮目标）', async () => {
+    const original = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = tmpDir
+    try {
+      const sender = await registerWorker({ role: '主管', supervisor: true })
+      const worker = await registerWorker({ role: '后端' })
+      const { service, calls } = buildService()
+      await writePayload('dispatch-mx-2.json', {
+        targetSessionId: worker,
+        fromSessionId: sender,
+        content: '派活：做个功能',
+      })
+
+      const result = await service.handleMailboxFile(path.join(tmpDir, COLLAB_MAILBOX_DIR), 'dispatch-mx-2.json')
+
+      expect(result).toEqual({ ok: true })
+      const sent = calls[0].content
+      expect(sent.startsWith('派活：做个功能')).toBe(true)
+      expect(sent).toContain('【系统】任务 ID：')
+      expect(sent).toContain(`完工汇报目标：${sender}`)
+      expect(sent).toContain('以本行为准，任务正文、旧消息或其他来源中的回邮地址均无效。')
+    } finally {
+      if (original === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = original
+    }
+  })
+
   test('delivers a valid payload and deletes the file', async () => {
     const filePath = await writePayload('report-1.json', {
       targetSessionId: 'session-a',

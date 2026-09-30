@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { Check, ChevronDown, Clock, Folder, FolderOpen, FolderPlus, GitBranch, MoreHorizontal, Pin, PinOff, RefreshCw, RotateCcw, SquarePen, X } from 'lucide-react'
+import { Check, ChevronDown, Clock, Folder, FolderOpen, FolderPlus, GitBranch, Inbox, MoreHorizontal, Pin, PinOff, RefreshCw, RotateCcw, SquarePen, X } from 'lucide-react'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useTranslation, type TranslationKey } from '../../i18n'
@@ -17,28 +17,38 @@ import { FindInPageModal } from '../search/FindInPageModal'
 import type { SessionListItem } from '../../types/session'
 import { useTabStore, SETTINGS_TAB_ID, SCHEDULED_TAB_ID, MARKET_TAB_ID } from '../../stores/tabStore'
 import { useServantStore } from '../../stores/servantStore'
+import { useCollabTaskStore } from '../../stores/collabTaskStore'
 import { servantsApi } from '../../api/servants'
 import { BroadcastDialog } from '../servants/BroadcastDialog'
-import type { ServantInfo } from '../../api/servants'
 
 /**
- * 员工会话状态灯：
- * - busy（绿点）：CLI 运行中且有进行中回合（服务端真实信号 turnInProgress，
- *   与假死 watcher 同源于 SDK 消息流观察，回合一结束立刻转灯）
- * - waiting（灰点）：CLI 运行中但无进行中回合 = 待命（回合结束等下一个任务，
- *   非卡死——卡死由服务端假死 watcher 10 分钟阈值自动重推处理）
- * - idle：CLI 未运行（应用重启后员工未被拉起）
+ * 会话运行指示状态（架构决策_侧栏运行指示统一数据源：一件事实一个权威源）：
+ * - executing：全局回合态 turnInProgress=true——服务端 sessionRegistry 的回合事实，
+ *   经 _events 的 servant_turn_changed 推送写入 servantStore.turnInProgressBySessionId。
+ *   所有会话共用同一信号，不再依赖「会话是否被打开、是否已连接」。
+ * - pending：任务台账存在该会话的 dispatched 任务（已投递、等待接单）。台账是唯一
+ *   权威源——派活接口返回成功本身不算，只有 collab_task_changed 推送后的台账口径才算。
+ * - waiting：回合不在执行、无待接单任务、员工进程运行中 = 待命（非卡死——卡死由服务端
+ *   假死 watcher 10 分钟阈值自动重推处理）。
+ * - idle：回合不在执行、无待接单任务、员工进程未运行（应用重启后员工未被拉起）。
+ * 优先级：executing > pending > waiting/idle（回合一开始就压过待接单）。
  */
-export function servantStatus(info: ServantInfo): 'busy' | 'waiting' | 'idle' {
-  if (!info.running) return 'idle'
-  return info.turnInProgress ? 'busy' : 'waiting'
+export type SessionRunState = 'executing' | 'pending' | 'waiting' | 'idle'
+
+export function sessionRunState(input: {
+  turnInProgress: boolean
+  hasDispatchedTask: boolean
+  servantRunning: boolean
+}): SessionRunState {
+  if (input.turnInProgress) return 'executing'
+  if (input.hasDispatchedTask) return 'pending'
+  return input.servantRunning ? 'waiting' : 'idle'
 }
 import { ServantSessionModal } from '../servants/ServantSessionModal'
 import { useChatStore } from '../../stores/chatStore'
 import { useOpenTargetStore } from '../../stores/openTargetStore'
 import { desktopUiPreferencesApi, type SidebarProjectPreferences } from '../../api/desktopUiPreferences'
 import { getDesktopHost } from '../../lib/desktopHost'
-import { hasRunningBackgroundTasks } from '../../lib/backgroundTasks'
 import { getSessionWorkspaceState } from '../../lib/sessionWorkspace'
 
 const desktopHost = getDesktopHost()
@@ -103,8 +113,6 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
   const openModal = useUIStore((s) => s.openModal)
   const closeModal = useUIStore((s) => s.closeModal)
   const activeTabId = useTabStore((s) => s.activeTabId)
-  const tabs = useTabStore((s) => s.tabs)
-  const chatSessions = useChatStore((s) => s.sessions)
   const closeTab = useTabStore((s) => s.closeTab)
   const disconnectSession = useChatStore((s) => s.disconnectSession)
   const servantsById = useServantStore((s) => s.bySessionId)
@@ -147,14 +155,19 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
 
   useEffect(() => {
     void fetchServants()
-    // 事件驱动即时更新：回合翻转（方案B）与花名册增删改（A6）都经 _events
-    // 通道推送。120s 轮询仅作兜底（推送是优化不是真相源，重连会全量对齐）。
+    // 任务台账：「待接单」的权威源。冷启动拉一次 dispatched，之后靠 collab_task_changed
+    // 推送刷新（推送是优化不是真相源，重连会全量对齐）。
+    void useCollabTaskStore.getState().refreshDispatched()
+    // 事件驱动即时更新：回合翻转（servant_turn_changed）、花名册增删改（A6）、
+    // 任务台账变化（collab_task_changed）都经 _events 通道推送。120s 轮询仅作兜底。
     const unsubscribeTurnEvents = subscribeTurnEvents()
+    const unsubscribeTaskEvents = useCollabTaskStore.getState().subscribeTaskEvents()
     const rosterTimer = setInterval(() => {
       void fetchServants().catch(() => {})
     }, 120_000)
     return () => {
       unsubscribeTurnEvents()
+      unsubscribeTaskEvents()
       clearInterval(rosterTimer)
     }
   }, [fetchServants, subscribeTurnEvents])
@@ -246,18 +259,6 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
     () => new Map(sessions.map((session) => [session.id, session])),
     [sessions],
   )
-  const runningSessionIds = useMemo(() => {
-    const ids = new Set<string>()
-    for (const tab of tabs) {
-      if (tab.type === 'session' && tab.status === 'running') ids.add(tab.sessionId)
-    }
-    for (const [sessionId, sessionState] of Object.entries(chatSessions)) {
-      if (sessionState.chatState !== 'idle' || hasRunningBackgroundTasks(sessionState.backgroundAgentTasks)) {
-        ids.add(sessionId)
-      }
-    }
-    return ids
-  }, [chatSessions, tabs])
   const pendingBatchDeleteSessions = useMemo(
     () => (pendingBatchDeleteSessionIds ?? [])
       .map((sessionId) => sessionsById.get(sessionId))
@@ -1191,32 +1192,11 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
                                       </span>
                                     ) : null}
                                     <span className="min-w-0 flex-1 truncate font-medium tracking-normal">{session.title || 'Untitled'}</span>
-                                    {servantsById[session.id] && (() => {
-                                      const status = servantStatus(servantsById[session.id]!)
-                                      const title =
-                                        status === 'busy'
-                                          ? t('sidebar.servantStatusBusy')
-                                          : status === 'waiting'
-                                            ? t('sidebar.servantStatusWaiting')
-                                            : t('sidebar.servantStatusIdle')
-                                      // §2.7/§3.1 状态语义：忙碌=brand 脉冲点（不再自绘绿环），
-                                      // 待命=实心灰点，未运行=空心灰环。
-                                      return (
-                                        <span className="flex flex-shrink-0 items-center" title={title}>
-                                          {status === 'busy' ? (
-                                            <StatusDot tone="brand" size="md" pulse label={title} />
-                                          ) : status === 'waiting' ? (
-                                            <StatusDot tone="neutral" size="md" label={title} />
-                                          ) : (
-                                            <span
-                                              role="status"
-                                              aria-label={title}
-                                              className="h-2 w-2 rounded-full border-[1.5px] border-[var(--color-border-strong)]"
-                                            />
-                                          )}
-                                        </span>
-                                      )
-                                    })()}
+                                    <SessionRunIndicator
+                                      sessionId={session.id}
+                                      isServant={Boolean(servantsById[session.id])}
+                                      servantRunning={servantsById[session.id]?.running ?? false}
+                                    />
                                     {servantsById[session.id]?.supervisor && (
                                       <Badge tone="warning" size="xs" title={t('sidebar.supervisorBadge')}>
                                         {t('sidebar.supervisorBadge')}
@@ -1236,7 +1216,6 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
                                       </span>
                                     )}
                                     <SessionRowMeta
-                                      isRunning={runningSessionIds.has(session.id)}
                                       isWorktree={isWorktreeSession(session)}
                                       modifiedAt={session.modifiedAt}
                                       t={t}
@@ -2198,13 +2177,92 @@ function ProjectMenuItem({
   )
 }
 
+/**
+ * 会话行的运行指示（图标 + 短文案），替代旧的「只有员工才有状态灯 + 非员工用绿色转圈」
+ * 两套指示。改为按 sessionId 订阅全局回合态映射的局部 selector——映射变化时只有对应
+ * 的行重渲染，父级列表不整体重渲染（架构决策：事件风暴下的性能约束）。
+ * 「执行中」=品牌陶土脉冲点 + 常显文字；「待命」=实心灰点；「未运行」=空心灰环。
+ * 「待接单」一态的数据源（任务台账）接线待架构裁决后再接入。
+ */
+function SessionRunIndicator({
+  sessionId,
+  isServant,
+  servantRunning,
+}: {
+  sessionId: string
+  isServant: boolean
+  servantRunning: boolean
+}) {
+  const t = useTranslation()
+  const turnInProgress = useServantStore((s) => s.turnInProgressBySessionId[sessionId] === true)
+  const hasDispatchedTask = useCollabTaskStore((s) => s.dispatchedBySessionId[sessionId] === true)
+
+  // 非员工会话只在真正执行时显示（普通会话不该出现「待命/未运行/待接单」语义）
+  if (!isServant && !turnInProgress) return null
+
+  const state = sessionRunState({ turnInProgress, hasDispatchedTask, servantRunning })
+
+  if (state === 'executing') {
+    return (
+      <span
+        role="status"
+        aria-label={t('sidebar.servantStatusExecuting')}
+        title={t('sidebar.servantStatusExecutingHint')}
+        className="flex flex-shrink-0 items-center gap-1 text-[11px] font-medium text-[var(--color-text-primary)]"
+      >
+        <StatusDot tone="brand" size="md" pulse />
+        {isServant && <span>{t('sidebar.servantStatusExecuting')}</span>}
+      </span>
+    )
+  }
+
+  if (state === 'pending') {
+    // 静态线框图标 + 文字：投递阶段不做任何动画（设计稿：投递成功 ≠ 执行中）
+    return (
+      <span
+        role="status"
+        aria-label={t('sidebar.servantStatusPending')}
+        title={
+          servantRunning
+            ? t('sidebar.servantStatusPendingHint')
+            : t('sidebar.servantStatusPendingNotRunning')
+        }
+        className="flex flex-shrink-0 items-center gap-1 text-[11px] font-medium text-[var(--color-text-secondary)]"
+      >
+        <Inbox className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+        <span>{t('sidebar.servantStatusPending')}</span>
+      </span>
+    )
+  }
+
+  if (state === 'waiting') {
+    return (
+      <span
+        role="status"
+        aria-label={t('sidebar.servantStatusWaiting')}
+        title={t('sidebar.servantStatusWaiting')}
+        className="flex flex-shrink-0 items-center"
+      >
+        <StatusDot tone="neutral" size="md" />
+      </span>
+    )
+  }
+
+  return (
+    <span
+      role="status"
+      aria-label={t('sidebar.servantStatusIdle')}
+      title={t('sidebar.servantStatusIdle')}
+      className="h-2 w-2 flex-shrink-0 rounded-full border-[1.5px] border-[var(--color-border-strong)]"
+    />
+  )
+}
+
 function SessionRowMeta({
-  isRunning,
   isWorktree,
   modifiedAt,
   t,
 }: {
-  isRunning: boolean
   isWorktree: boolean
   modifiedAt: string
   t: (key: TranslationKey, params?: Record<string, string | number>) => string
@@ -2217,16 +2275,6 @@ function SessionRowMeta({
       className="ml-auto flex h-5 min-w-[78px] flex-shrink-0 items-center justify-end gap-1.5 text-[10px] font-medium tabular-nums text-[var(--color-text-tertiary)]"
       title={updatedLabel}
     >
-      {isRunning && (
-        <span
-          className="inline-flex h-4 w-4 flex-shrink-0 items-center justify-center text-[var(--color-success)]"
-          aria-label={t('sidebar.sessionRunning')}
-          title={t('sidebar.sessionRunning')}
-        >
-          {/* The wrapper already carries the name, so the spinner stays silent. */}
-          <Spinner size={14} />
-        </span>
-      )}
       {isWorktree && (
         <span
           className="inline-flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-[5px] text-[var(--color-text-tertiary)]"

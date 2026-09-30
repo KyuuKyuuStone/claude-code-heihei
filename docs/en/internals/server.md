@@ -97,6 +97,16 @@ Business REST APIs live under `/api/*` and cover:
 
 For exact request and response shapes, use the current handlers under `src/server/api/`. The internal `/sdk/<session-id>` WebSocket is used by the Claude CLI process started by the server; it is not a third-party client API.
 
+### `broadcastId` idempotency boundary
+
+A broadcast request to `POST /api/session-messages` may include `broadcastId`. Within a single server process, broadcasts with the same ID are serialized across idempotency checks, per-target delivery, and task recording. A later request with the same ID skips targets already delivered successfully and reuses their task results. If the earlier request succeeded for only some targets, a retry can still process the remaining targets. Requests without `broadcastId` are not locked; different IDs do not block one another.
+
+This concurrent idempotency guarantee is **process-local only**. Concurrent requests with the same ID handled by multiple server processes or instances are not guaranteed to be idempotent against the shared task ledger. This is a known boundary planned for v1.7; do not rely on cross-process safety.
+
+### Future `callerSessionId` compatibility follow-up
+
+Requests to `/api/collab-tasks/:id/report` and `/review` currently allow `callerSessionId` to be omitted for compatibility with older callers. If v1.7 makes this field required, update the file-mailbox report payload format and the server-side mailbox handling at the same time so they include `callerSessionId` or provide an explicitly defined equivalent caller identity source. Otherwise, mailbox reports will fail without caller identity. This is a future compatibility item; it does not change current API behavior.
+
 `/proxy/*` is the provider protocol-translation boundary and depends on runtime authentication and model-routing state. Do not expose it as a general-purpose stateless OpenAI proxy.
 
 ## Chat WebSocket

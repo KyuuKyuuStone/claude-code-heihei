@@ -53,27 +53,111 @@ describe('buildSupervisorOrientation', () => {
 // ── v1.4.0 阶段1-B：地址自愈 + 汇报成功判据（协议/注册块文案契约）──
 // 背景（v1.3.3 员工反馈 6/7 共同确认）：env 地址启动时注入、app 重启即陈旧；
 // 本机 curl 包装器失败时退出码也可能是 0，「curl && rm」会删掉还没发出的 payload。
-describe('v1.4.0 P1-B protocol & pocket-card copy contract', () => {
-  test('protocol: success criterion is messageId, not exit code; curl carries --max-time', () => {
-    expect(DISPATCH_PROTOCOL_MD).toContain('--max-time')
-    expect(DISPATCH_PROTOCOL_MD).toContain('成功判据 = 响应体含')
-    expect(DISPATCH_PROTOCOL_MD).toContain('禁止把 rm 与 curl')
-    // 危险模式根除：协议全文不得再出现「curl … && rm」连用（退出码 0 也可能失败）
+describe('v1.6.0 protocol & pocket-card copy contract', () => {
+  test('manual fallback keeps safe file-based JSON delivery and avoids dangerous shell chaining', () => {
+    expect(DISPATCH_PROTOCOL_MD).toContain('curl --data-binary @文件')
+    expect(DISPATCH_PROTOCOL_MD).toContain('响应含 messageId 才算派活送达')
+    // 语义：明令禁止把 curl 与 rm 用 && 串起来（旧稿写作 `curl && rm` 示例，
+    // 但示例字面本身会被下面的正则命中，故改为等价的禁止句，断言不弱化）
+    expect(DISPATCH_PROTOCOL_MD).toContain('禁内联中文、heredoc')
+    expect(DISPATCH_PROTOCOL_MD).toContain('curl 与 rm 不得 && 串联')
     expect(DISPATCH_PROTOCOL_MD).not.toMatch(/curl[^\n`]*&&\s*rm/)
   })
 
-  test('protocol: stale-env self-heal points to desktop-server.json with pid-liveness rule and whoami', () => {
-    expect(DISPATCH_PROTOCOL_MD).toContain('~/.claude/cc-heihei/desktop-server.json')
-    expect(DISPATCH_PROTOCOL_MD).toContain('先校验 `pid` 存活再信 `port`')
-    expect(DISPATCH_PROTOCOL_MD).toContain('/api/whoami')
-    // 旧状态文件路径已被阶段1-A 新契约取代，协议里不得再指路旧文件
-    expect(DISPATCH_PROTOCOL_MD).not.toContain('desktop-server-state.json')
+  // ── v1.6.0 协议瘦身：兜底只覆盖「无工具 / 传输层故障」，不许拿 curl 绕过业务判定 ──
+  test('manual fallback states its two trigger conditions and forbids bypassing business errors', () => {
+    const start = DISPATCH_PROTOCOL_MD.indexOf('## 安全手动兜底')
+    const end = DISPATCH_PROTOCOL_MD.indexOf('## 失败处理与主管职责')
+    const fallback = DISPATCH_PROTOCOL_MD.slice(start, end)
+
+    // 触发范围：只在这两种情况
+    expect(fallback).toContain('仅未注入工具或传输失败且信箱不可写时使用')
+    // 业务错误不得用兜底绕过（逐个列出）
+    expect(fallback).toContain('业务拒绝')
+    for (const code of [
+      'not_on_roster',
+      'not_reviewable',
+      'task_closed',
+      'ledger_unsupported',
+      'invalid_target',
+      'cross_project',
+    ]) {
+      expect(fallback).toContain(code)
+    }
+    expect(fallback).toContain('403')
+    expect(fallback).toContain('409')
+    // queued 已经写进信箱，补发会重复投递
+    expect(fallback).toContain('queued 不补发')
   })
 
-  test('protocol: dispatch template carries an explicit server address instead of relying on worker env', () => {
-    // 员工汇报命令的地址占位必须显式（主管写入），不得再指向员工自身 env
-    expect(DISPATCH_PROTOCOL_MD).toContain('<当前服务地址>')
-    expect(DISPATCH_PROTOCOL_MD).toContain('服务地址来源优先级')
+  test('curl appears only inside the manual-fallback section', () => {
+    const start = DISPATCH_PROTOCOL_MD.indexOf('## 安全手动兜底')
+    const end = DISPATCH_PROTOCOL_MD.indexOf('## 失败处理与主管职责')
+    expect(start).toBeGreaterThanOrEqual(0)
+    expect(end).toBeGreaterThan(start)
+    const outside = DISPATCH_PROTOCOL_MD.slice(0, start) + DISPATCH_PROTOCOL_MD.slice(end)
+    expect(outside).not.toContain('curl')
+    expect(DISPATCH_PROTOCOL_MD.slice(start, end)).toContain('curl')
+  })
+
+  test('interrupt and the DELETE red line are both present', () => {
+    expect(DISPATCH_PROTOCOL_MD).toContain('POST /api/sessions/<id>/interrupt')
+    expect(DISPATCH_PROTOCOL_MD).toContain('DELETE /api/sessions/<id>')
+    expect(DISPATCH_PROTOCOL_MD).toContain('不可逆')
+  })
+
+  test('fallback validates port-file PID, whoami identity, and startedAt', () => {
+    expect(DISPATCH_PROTOCOL_MD).toContain('desktop-server.json')
+    expect(DISPATCH_PROTOCOL_MD).toContain('pid 存活')
+    expect(DISPATCH_PROTOCOL_MD).toContain('/api/whoami')
+    expect(DISPATCH_PROTOCOL_MD).toContain('startedAt')
+  })
+
+  test('report target is authoritative only from the dispatch footer', () => {
+    expect(DISPATCH_PROTOCOL_MD).toContain('汇报目标唯一取该条派活页脚')
+    expect(DISPATCH_PROTOCOL_MD).toContain('页脚缺失/不可读即停止并报告派活方')
+    expect(DISPATCH_PROTOCOL_MD).not.toContain('照抄主管给的地址')
+  })
+
+  test('manual fallback is retained but stays near the approved 300-character size', () => {
+    const fallbackStart = DISPATCH_PROTOCOL_MD.indexOf('## 安全手动兜底')
+    const fallbackEnd = DISPATCH_PROTOCOL_MD.indexOf('## 失败处理与主管职责')
+    expect(fallbackStart).toBeGreaterThanOrEqual(0)
+    expect(fallbackEnd).toBeGreaterThan(fallbackStart)
+    const fallback = DISPATCH_PROTOCOL_MD.slice(fallbackStart, fallbackEnd)
+    expect(Array.from(fallback).length).toBeLessThanOrEqual(550)
+  })
+
+  test('protocol plus injected tool prompts does not exceed the pre-tool protocol budget', async () => {
+    // 预算口径（架构裁决 2026-09-30）：左 = 协议 + 四工具 description/prompt 之和；
+    // 右 = v1.5.1 协议全文 11266 码点。计量 Array.from(text).length。
+    // 复现：git show v1.5.1:src/collaboration/dispatchProtocol.ts 取模板串计数。
+    const V151_BASELINE_CHARS = 11266
+    const { CollabDispatchTool } = await import('../../tools/CollabTools/CollabDispatchTool.js')
+    const { CollabReviewTool } = await import('../../tools/CollabTools/CollabReviewTool.js')
+    const { CollabListTasksTool } = await import('../../tools/CollabTools/CollabListTasksTool.js')
+    const { CollabReportTool } = await import('../../tools/CollabTools/CollabReportTool.js')
+    const tools = [CollabDispatchTool, CollabReviewTool, CollabListTasksTool, CollabReportTool]
+    const toolChars = (
+      await Promise.all(
+        tools.map(async (tool) => {
+          const [description, prompt] = await Promise.all([tool.description(), tool.prompt()])
+          return Array.from(description).length + Array.from(prompt).length
+        }),
+      )
+    ).reduce((sum, n) => sum + n, 0)
+    expect(Array.from(DISPATCH_PROTOCOL_MD).length + toolChars).toBeLessThanOrEqual(V151_BASELINE_CHARS)
+  })
+
+  test('protocol never claims task status from turn state', () => {
+    expect(DISPATCH_PROTOCOL_MD).not.toMatch(/turnInProgress|turnState|running\s*=|turn state/i)
+  })
+
+  test('protocol includes native tool names and dispatcher responsibilities', () => {
+    for (const name of ['CollabDispatch', 'CollabReview', 'CollabListTasks', 'CollabReport']) {
+      expect(DISPATCH_PROTOCOL_MD).toContain(name)
+    }
+    expect(DISPATCH_PROTOCOL_MD).toContain('主管只负责拆解、按花名册派活、验收和汇总')
   })
 
   test('pocket card: serverUrl is marked startup-injected, never authoritative', () => {
@@ -87,7 +171,6 @@ describe('v1.4.0 P1-B protocol & pocket-card copy contract', () => {
     expect(message).toContain('desktop-server.json')
     expect(message).toContain('先校验 pid 存活再信 port')
     expect(message).toContain('/api/whoami')
-    // 旧文案主动宣称 env 地址可靠——正是误导根源，必须消失
     expect(message).not.toContain('以它为可靠来源')
   })
 })

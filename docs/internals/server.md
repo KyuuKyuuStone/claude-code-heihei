@@ -97,6 +97,16 @@ CORS 只限制浏览器读取响应，不是身份认证。非浏览器客户端
 
 具体请求与响应以 `src/server/api/` 的当前处理器为准。内部 `/sdk/<session-id>` WebSocket 是 Server 为自己拉起的 Claude CLI 使用的通道，不是第三方客户端 API。
 
+### 广播任务的 `broadcastId` 幂等边界
+
+`POST /api/session-messages` 的广播请求可带 `broadcastId`。在同一服务端进程内，服务端按 `broadcastId` 串行执行广播的幂等检查、逐目标投递和记账；后续相同 ID 的请求会跳过已成功投递的目标，并复用对应的任务结果。若前次仅部分目标成功，重试仍可处理尚未成功的目标。未提供 `broadcastId` 时不加锁；不同 ID 的广播互不阻塞。
+
+此并发幂等保障仅限**单进程**。多个服务端进程或实例同时处理相同 ID 时，不保证共享台账上的并发幂等；这是已知边界，计划留待 v1.7 处理，不应据此依赖跨进程安全。
+
+### `callerSessionId` 的未来兼容跟进
+
+当前 `/api/collab-tasks/:id/report` 与 `/review` 允许请求省略 `callerSessionId`，以兼容旧调用方。若 v1.7 将该字段改为必填，必须同步更新文件信箱 report payload 格式及服务端代调路径，确保携带 `callerSessionId` 或明确等价的调用身份来源；否则信箱汇报会因缺少身份而失败。此项是未来兼容待办，不改变当前接口行为。
+
 `/proxy/*` 是 Provider 的协议转换入口，包含运行时认证和模型路由状态。不要把它当成通用的、无状态 OpenAI 代理公开出去。
 
 ## 聊天 WebSocket

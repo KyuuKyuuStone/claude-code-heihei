@@ -1919,6 +1919,14 @@ export class ConversationService {
       // readonly 员工禁改文件、whitelist 员工仅白名单目录内可写；提示词约束会被
       // 延续对话的旧上下文压过，机制兜底见 collaboration/supervisorGuard）
       ...(collabIdentity?.supervisor ? { CC_HEIHEI_SUPERVISOR: '1' } : {}),
+      // v1.6.0 CLI 契约 §三：显式的协作身份标记。此前员工身份只能从「没有主管
+      // 标记」去猜，不可靠。主管 → supervisor、在册员工 → servant；非协作会话与
+      // 用户会话（collabIdentity 为 null 或未在册）**不注入**，普通会话零变化。
+      ...(collabIdentity?.supervisor
+        ? { CC_HEIHEI_COLLAB_ROLE: 'supervisor' }
+        : collabIdentity?.registered
+          ? { CC_HEIHEI_COLLAB_ROLE: 'servant' }
+          : {}),
       // A7（v1.5.0）：协作会话（主管/员工，即花名册在册）不注入 computer-use
       // 系列工具——无人值守场景无人审批桌面权限，工具在场只会诱导模型浪费
       // 轮次。走上游自带开关（utils/computerUse/gates.ts getChicagoEnabled）；

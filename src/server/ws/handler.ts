@@ -3533,34 +3533,69 @@ const SESSION_LIST_MERGE_MS = 250
 let pendingListEpoch: number | null = null
 let listMergeTimer: ReturnType<typeof setTimeout> | null = null
 
+/**
+ * 协作推送信号 → 全局事件广播。按 kind **穷尽分派**（裁决二，v1.6.0）。
+ *
+ * 此前只特判 roster，其余 kind 一律当 session_list 处理：task 信号没有 epoch，
+ * `Math.max(pendingListEpoch ?? 0, undefined)` 得到 NaN，JSON 序列化后是 null，
+ * 前端按「无条件刷新」处理——每次任务创建/流转都多刷一次整表会话列表，而且
+ * 同一 250ms 窗口里真实列表的 epoch 也会被 NaN 吃掉，合并去重失效。
+ * 现在 task 走自己的出口；新增 kind 若漏处理，末尾的 never 断言会直接编译报错。
+ */
 function broadcastCollabPush(signal: CollabPushSignal): void {
-  if (signal.kind === 'roster') {
-    broadcastGlobalEvent({
-      type: 'system_notification',
-      subtype: 'servant_roster_changed',
-      data: {
-        sessionId: signal.sessionId,
-        change: signal.change,
-        fields: signal.fields,
-      },
-    })
-    return
+  switch (signal.kind) {
+    case 'roster':
+      broadcastGlobalEvent({
+        type: 'system_notification',
+        subtype: 'servant_roster_changed',
+        data: {
+          sessionId: signal.sessionId,
+          change: signal.change,
+          fields: signal.fields,
+        },
+      })
+      return
+
+    // 任务台账变化（裁决二）：专用事件，前端据此增量更新「待接单」状态。
+    // data 精确限定为这四个字段——不携带 epoch，也不并入会话列表失效。
+    case 'task':
+      broadcastGlobalEvent({
+        type: 'system_notification',
+        subtype: 'collab_task_changed',
+        data: {
+          taskId: signal.taskId,
+          projectDir: signal.projectDir,
+          change: signal.change,
+          status: signal.status,
+        },
+      })
+      return
+
+    case 'session_list': {
+      // 会话列表失效：250ms 窗口合并，只广播窗口内最大 epoch（突发变更不刷屏）
+      pendingListEpoch = Math.max(pendingListEpoch ?? 0, signal.epoch)
+      if (listMergeTimer) return
+      listMergeTimer = setTimeout(() => {
+        listMergeTimer = null
+        const epoch = pendingListEpoch
+        pendingListEpoch = null
+        if (epoch === null) return
+        broadcastGlobalEvent({
+          type: 'system_notification',
+          subtype: 'session_list_invalidated',
+          data: { epoch },
+        })
+      }, SESSION_LIST_MERGE_MS)
+      listMergeTimer.unref?.()
+      return
+    }
+
+    default: {
+      // 穷尽性检查：CollabPushSignal 新增 kind 却忘记上面加分支时，这里编译报错。
+      const exhaustive: never = signal
+      return exhaustive
+    }
   }
-  // 会话列表失效：250ms 窗口合并，只广播窗口内最大 epoch（突发变更不刷屏）
-  pendingListEpoch = Math.max(pendingListEpoch ?? 0, signal.epoch)
-  if (listMergeTimer) return
-  listMergeTimer = setTimeout(() => {
-    listMergeTimer = null
-    const epoch = pendingListEpoch
-    pendingListEpoch = null
-    if (epoch === null) return
-    broadcastGlobalEvent({
-      type: 'system_notification',
-      subtype: 'session_list_invalidated',
-      data: { epoch },
-    })
-  }, SESSION_LIST_MERGE_MS)
-  listMergeTimer.unref?.()
 }
 
 /**

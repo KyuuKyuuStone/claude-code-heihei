@@ -15,7 +15,8 @@
 
 import * as path from 'path'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
-import { collabTaskService, isTaskStatus } from '../services/collabTaskService.js'
+import { collabTaskService, isTaskStatus, type Task } from '../services/collabTaskService.js'
+import { servantService } from '../services/servantService.js'
 import { sessionService } from '../services/sessionService.js'
 
 async function parseJsonBody(req: Request): Promise<Record<string, unknown>> {
@@ -128,7 +129,18 @@ export async function handleCollabTasksApi(
       const deliverables = Array.isArray(body.deliverables)
         ? body.deliverables.filter((item): item is string => typeof item === 'string')
         : undefined
-      const task = await collabTaskService.reportTask(decodeURIComponent(taskId), {
+      const id = decodeURIComponent(taskId)
+      // v1.6.0 CLI 契约 §三：带 callerSessionId 时校验调用方身份，闭合审查「低 1」。
+      // 不带时维持现状（兼容旧调用方），v1.7 再改成必填。
+      const callerSessionId = readCallerSessionId(body)
+      if (callerSessionId) {
+        const existing = await collabTaskService.getTask(id)
+        // 任务不存在交给 reportTask 抛 404；存在但不是派给调用方 → 403
+        if (existing && existing.toSessionId !== callerSessionId) {
+          throw new ApiError(403, 'callerSessionId is not the assignee of this task', 'FORBIDDEN')
+        }
+      }
+      const task = await collabTaskService.reportTask(id, {
         summary,
         ...(deliverables ? { deliverables } : {}),
       })
@@ -143,7 +155,19 @@ export async function handleCollabTasksApi(
         throw ApiError.badRequest('Field "verdict" must be "pass" or "rework"')
       }
       const note = typeof body.note === 'string' ? body.note : undefined
-      const task = await collabTaskService.reviewTask(decodeURIComponent(taskId), {
+      const id = decodeURIComponent(taskId)
+      const callerSessionId = readCallerSessionId(body)
+      if (callerSessionId) {
+        const existing = await collabTaskService.getTask(id)
+        if (existing && !(await isAllowedReviewer(existing, callerSessionId))) {
+          throw new ApiError(
+            403,
+            'callerSessionId is neither the dispatcher nor the current supervisor of this task',
+            'FORBIDDEN',
+          )
+        }
+      }
+      const task = await collabTaskService.reviewTask(id, {
         verdict,
         ...(note ? { note } : {}),
       })
@@ -158,4 +182,21 @@ export async function handleCollabTasksApi(
   } catch (error) {
     return errorResponse(error)
   }
+}
+
+/** body.callerSessionId 的读取（契约 §三）：缺省/空白视为「未带」，维持旧行为 */
+function readCallerSessionId(body: Record<string, unknown>): string {
+  return typeof body.callerSessionId === 'string' ? body.callerSessionId.trim() : ''
+}
+
+/**
+ * review 的调用方是否合法验收人（契约 §三）：
+ * - 派活人 task.fromSessionId 本人；或
+ * - 该任务所属项目**现任**主管——交接后新主管可以验收旧任务。
+ * 其余一律拒绝（403），用来闭合审查「低 1」：此前 report/review 不校验调用者身份。
+ */
+async function isAllowedReviewer(task: Task, callerSessionId: string): Promise<boolean> {
+  if (task.fromSessionId === callerSessionId) return true
+  const supervisor = await servantService.findSupervisorForProject(task.projectDir)
+  return supervisor?.sessionId === callerSessionId
 }

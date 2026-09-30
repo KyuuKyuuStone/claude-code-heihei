@@ -50,6 +50,7 @@ describe('ConversationService', () => {
   let originalZdotdir: string | undefined
   let originalDisableTerminalShellEnv: string | undefined
   let originalSupervisorEnv: string | undefined
+  let originalCollabRoleEnv: string | undefined
   let originalServantConstraintEnv: string | undefined
   let originalServantWriteDirsEnv: string | undefined
 
@@ -78,6 +79,7 @@ describe('ConversationService', () => {
     originalZdotdir = process.env.ZDOTDIR
     originalDisableTerminalShellEnv = process.env.CC_HEIHEI_DISABLE_TERMINAL_SHELL_ENV
     originalSupervisorEnv = process.env.CC_HEIHEI_SUPERVISOR
+    originalCollabRoleEnv = process.env.CC_HEIHEI_COLLAB_ROLE
     originalServantConstraintEnv = process.env.CC_HEIHEI_SERVANT_CONSTRAINT
     originalServantWriteDirsEnv = process.env.CC_HEIHEI_SERVANT_WRITE_DIRS
 
@@ -104,6 +106,7 @@ describe('ConversationService', () => {
     // 协作身份 env：运行者（如主管 shell）携带的 CC_HEIHEI_* 会经 cleanEnv
     // 泄漏进 buildChildEnv 断言——用例必须与运行者环境隔离
     delete process.env.CC_HEIHEI_SUPERVISOR
+    delete process.env.CC_HEIHEI_COLLAB_ROLE
     delete process.env.CC_HEIHEI_SERVANT_CONSTRAINT
     delete process.env.CC_HEIHEI_SERVANT_WRITE_DIRS
     resetTerminalShellEnvironmentCacheForTests()
@@ -179,6 +182,8 @@ describe('ConversationService', () => {
 
     if (originalSupervisorEnv === undefined) delete process.env.CC_HEIHEI_SUPERVISOR
     else process.env.CC_HEIHEI_SUPERVISOR = originalSupervisorEnv
+    if (originalCollabRoleEnv === undefined) delete process.env.CC_HEIHEI_COLLAB_ROLE
+    else process.env.CC_HEIHEI_COLLAB_ROLE = originalCollabRoleEnv
 
     if (originalServantConstraintEnv === undefined) delete process.env.CC_HEIHEI_SERVANT_CONSTRAINT
     else process.env.CC_HEIHEI_SERVANT_CONSTRAINT = originalServantConstraintEnv
@@ -352,6 +357,42 @@ describe('ConversationService', () => {
       expect(normalEnv.CLAUDE_COMPUTER_USE_ENABLED).toBeUndefined()
     } finally {
       // 恢复生产装配的注入源
+      registerServantInfoSource((sessionId) => servantService.getServant(sessionId))
+    }
+  })
+
+  // ── v1.6.0 CLI 契约 §三：CC_HEIHEI_COLLAB_ROLE 显式协作身份 ──
+  test('buildChildEnv injects a clear CC_HEIHEI_COLLAB_ROLE per role, and none for non-collab', async () => {
+    const service = new ConversationService() as any
+    try {
+      // 在册员工 → servant（此前员工身份只能从「没有主管标记」去猜，不可靠）
+      registerServantInfoSource(async (sessionId) =>
+        sessionId === 'servant-r1' ? { sessionId, supervisor: false } : null,
+      )
+      const servantEnv = (await service.buildChildEnv('/tmp', undefined, undefined, undefined, undefined, 'servant-r1')) as Record<string, string>
+      expect(servantEnv.CC_HEIHEI_COLLAB_ROLE).toBe('servant')
+      expect(servantEnv.CC_HEIHEI_SUPERVISOR).toBeUndefined()
+
+      // 主管 → supervisor
+      const service2 = new ConversationService() as any
+      registerServantInfoSource(async (sessionId) =>
+        sessionId === 'supervisor-r1' ? { sessionId, supervisor: true } : null,
+      )
+      const supervisorEnv = (await service2.buildChildEnv('/tmp', undefined, undefined, undefined, undefined, 'supervisor-r1')) as Record<string, string>
+      expect(supervisorEnv.CC_HEIHEI_COLLAB_ROLE).toBe('supervisor')
+      expect(supervisorEnv.CC_HEIHEI_SUPERVISOR).toBe('1')
+
+      // 非协作 / 用户会话：两个身份变量都不注入，普通会话零变化
+      const service3 = new ConversationService() as any
+      registerServantInfoSource(async () => null)
+      const normalEnv = (await service3.buildChildEnv('/tmp', undefined, undefined, undefined, undefined, 'plain-r1')) as Record<string, string>
+      expect(normalEnv.CC_HEIHEI_COLLAB_ROLE).toBeUndefined()
+      expect(normalEnv.CC_HEIHEI_SUPERVISOR).toBeUndefined()
+
+      // 无 sessionId 的子进程同样不注入
+      const anonymousEnv = (await new ConversationService().buildChildEnv('/tmp')) as Record<string, string>
+      expect(anonymousEnv.CC_HEIHEI_COLLAB_ROLE).toBeUndefined()
+    } finally {
       registerServantInfoSource((sessionId) => servantService.getServant(sessionId))
     }
   })

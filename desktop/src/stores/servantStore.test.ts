@@ -69,7 +69,7 @@ describe('servantStore', () => {
     vi.resetAllMocks()
     wsManagerMock.reset()
     resetGlobalEventsChannelForTests()
-    useServantStore.setState({ bySessionId: {}, isLoading: false })
+    useServantStore.setState({ bySessionId: {}, turnInProgressBySessionId: {}, isLoading: false })
   })
 
   it('fetches the roster into a sessionId map', async () => {
@@ -187,6 +187,76 @@ describe('servantStore', () => {
       })
       wsManagerMock.emitMessage({ type: 'system_notification', subtype: 'other', data: {} })
       expect(useServantStore.getState().bySessionId['sess-1']?.turnInProgress).toBe(false)
+      unsubscribe()
+    })
+
+    it('records turnInProgress for every sessionId, including ones off the roster', () => {
+      useServantStore.setState({ bySessionId: { 'sess-1': makeServant() } })
+      const unsubscribe = useServantStore.getState().subscribeTurnEvents()
+
+      // 花名册外的会话：写入全局映射，但不新建花名册条目
+      wsManagerMock.emitMessage({
+        type: 'system_notification',
+        subtype: 'servant_turn_changed',
+        data: { sessionId: 'sess-off-roster', turnInProgress: true },
+      })
+      expect(useServantStore.getState().turnInProgressBySessionId['sess-off-roster']).toBe(true)
+      expect(useServantStore.getState().bySessionId['sess-off-roster']).toBeUndefined()
+
+      // 花名册内会话：映射与花名册条目同步
+      wsManagerMock.emitMessage({
+        type: 'system_notification',
+        subtype: 'servant_turn_changed',
+        data: { sessionId: 'sess-1', turnInProgress: true },
+      })
+      expect(useServantStore.getState().turnInProgressBySessionId['sess-1']).toBe(true)
+      expect(useServantStore.getState().bySessionId['sess-1']?.turnInProgress).toBe(true)
+
+      wsManagerMock.emitMessage({
+        type: 'system_notification',
+        subtype: 'servant_turn_changed',
+        data: { sessionId: 'sess-off-roster', turnInProgress: false },
+      })
+      expect(useServantStore.getState().turnInProgressBySessionId['sess-off-roster']).toBe(false)
+      unsubscribe()
+    })
+
+    it('seeds the turn map from the roster on fetch and keeps off-roster entries', async () => {
+      // 事件先写入一个花名册外的 sessionId（模拟冷启动前已到达的推送）
+      useServantStore.setState({ turnInProgressBySessionId: { 'sess-off-roster': true } })
+      apiListMock.mockResolvedValue({
+        servants: [
+          makeServant({ turnInProgress: true }),
+          makeServant({ sessionId: 'sess-2', turnInProgress: false }),
+        ],
+      })
+
+      await useServantStore.getState().fetchServants()
+
+      expect(useServantStore.getState().turnInProgressBySessionId).toEqual({
+        'sess-off-roster': true,
+        'sess-1': true,
+        'sess-2': false,
+      })
+    })
+
+    it('clears and rebuilds the turn map on reconnect (no stuck busy)', async () => {
+      useServantStore.setState({
+        bySessionId: { 'sess-1': makeServant() },
+        turnInProgressBySessionId: { 'sess-1': true, stale: true },
+      })
+      apiListMock.mockResolvedValue({ servants: [makeServant({ turnInProgress: false })] })
+      const unsubscribe = useServantStore.getState().subscribeTurnEvents()
+
+      wsManagerMock.emitState('reconnecting')
+      wsManagerMock.emitState('connected')
+
+      // 重连：清空映射（去掉断线窗口内漏发 false 造成的残留 busy）后按花名册重建
+      await vi.waitFor(() => {
+        const map = useServantStore.getState().turnInProgressBySessionId
+        expect(map['stale']).toBeUndefined()
+        expect(map['sess-1']).toBe(false)
+      })
       unsubscribe()
     })
 

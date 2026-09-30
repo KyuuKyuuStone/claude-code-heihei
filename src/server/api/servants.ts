@@ -28,6 +28,9 @@ import {
 } from '../../collaboration/dispatchProtocol.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { collabTaskService } from '../services/collabTaskService.js'
+import { withBroadcastLock } from '../services/broadcastLock.js'
+import { appendReportFooter, resolveReportTarget } from '../services/reportTargetResolver.js'
+import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 
 export async function handleServantsApi(
   req: Request,
@@ -189,15 +192,60 @@ export async function handleSessionMessagesApi(
         return await handleBroadcast(req, body)
       }
 
-      const targetSessionId = body.targetSessionId as string
+      const requestedTargetId = body.targetSessionId as string
       const fromSessionId = body.fromSessionId as string | undefined
+      const explicitTaskId = typeof body.taskId === 'string' ? body.taskId.trim() : ''
+
+      if (typeof requestedTargetId !== 'string' || !requestedTargetId.trim()) {
+        throw ApiError.badRequest('Field "targetSessionId" is required')
+      }
+
+      // v1.6.0（决策 D）：员工汇报的收件人以**任务台账**为准，请求正文里的地址
+      // 只作参考。解析发生在校验之前——解析出的新目标可能比原目标更权威，若原
+      // 目标已失效（例如旧主管卸任），不该先拿它报 404。
+      // 主管派活、用户会话发消息不会被解析，行为与之前完全一致。
+      const resolution = await resolveReportTarget({
+        targetSessionId: requestedTargetId,
+        ...(fromSessionId ? { fromSessionId } : {}),
+        ...(explicitTaskId ? { taskId: explicitTaskId } : {}),
+      })
+      const targetSessionId = resolution.targetSessionId
+
+      if (resolution.redirectedFrom) {
+        // 改投属于「替用户做决定」，必须全程可审计：诊断事件 + 响应字段。
+        logForDiagnosticsNoPII('info', 'collab_report_redirected', {
+          requestedTarget: resolution.redirectedFrom,
+          resolvedTarget: targetSessionId,
+          resolvedBy: resolution.resolvedBy ?? 'unknown',
+          workerSessionId: fromSessionId ?? 'unknown',
+        })
+        void diagnosticsService
+          .recordEvent({
+            type: 'collab_report_redirected',
+            severity: 'info',
+            summary: `员工汇报改投：${resolution.redirectedFrom} → ${targetSessionId}`,
+            sessionId: targetSessionId,
+            details: {
+              requestedTarget: resolution.redirectedFrom,
+              resolvedTarget: targetSessionId,
+              resolvedBy: resolution.resolvedBy,
+              workerSessionId: fromSessionId ?? null,
+              taskId: explicitTaskId || null,
+            },
+          })
+          .catch(() => {})
+      } else if (resolution.warning) {
+        // 多来源歧义等：只告警不改投（规则只在台账证据明确时生效）。
+        logForDiagnosticsNoPII('warn', 'collab_report_target_ambiguous', {
+          requestedTarget: requestedTargetId,
+          warning: resolution.warning,
+        })
+      }
 
       // 目标不在花名册 → 可行动 404（原先 deliver 失败报 500，主管无法区分
       // 「会话没跑」与「目标已移除」）。主管也在花名册（getServant 非 null），
       // 员工→主管汇报天然放行；被禁用员工仍在册，同样放行（与既有语义一致）。
-      if (typeof targetSessionId !== 'string' || !targetSessionId.trim()) {
-        throw ApiError.badRequest('Field "targetSessionId" is required')
-      }
+      // 走到这里说明解析没有更好的人选——沿用原目标校验，不凭空编造收件人。
       const rosterTarget = await servantService.getServant(targetSessionId)
       if (!rosterTarget) {
         throw ApiError.notFound(
@@ -238,31 +286,41 @@ export async function handleSessionMessagesApi(
         targetSessionId,
         ...(fromSessionId ? { fromSessionId } : {}),
       })
-      let delivered = false
+      // v1.6.0（决策 D）：这一条到底是「派活」还是「员工汇报」？
+      // 只有派活才①追加系统页脚②记台账。汇报（resolveReportTarget 判定）与
+      // 目标是主管的消息都不是派活——后者正是「给主管的每条汇报都凭空造出一条
+      // dispatched 任务」那个缺陷的源头。
+      const isDispatch =
+        rosterTarget.enabled && !rosterTarget.supervisor && !resolution.isReport
+      const dispatchTaskId = isDispatch ? explicitTaskId || crypto.randomUUID() : ''
+      const content = String(body.content ?? '')
+
+      let sent = false
       try {
-        delivered = await sessionMessenger.deliver(
+        sent = await sessionMessenger.deliver(
           targetSessionId,
-          body.content as string,
+          isDispatch
+            ? appendReportFooter(content, dispatchTaskId, fromSessionId ?? '')
+            : content,
           req.headers.get('host') || '127.0.0.1',
         )
       } catch (error) {
         forgetReceipt(messageId)
         throw error
       }
-      if (!delivered) {
+      if (!sent) {
         forgetReceipt(messageId)
         throw ApiError.internal('Message could not be delivered to the session')
       }
-      // v1.6.0：派活投递成功 → 任务台账 dispatched（规划 3.1「投递成功→dispatched」）。
-      // 只对「目标是 enabled 员工」生效——员工向主管汇报不是派活，不入台账。
-      // 幂等键 = body.taskId；不带则自动建任务。台账失败不阻塞投递（投递是主线）。
-      const trackedTaskId = rosterTarget.enabled
+      // 派活投递成功 → 任务台账 dispatched（规划 3.1「投递成功→dispatched」）。
+      // 幂等键 = taskId；台账失败不阻塞投递（投递是主线）。
+      const trackedTaskId = isDispatch
         ? await collabTaskService.recordDispatch({
             toSessionId: targetSessionId,
             ...(fromSessionId ? { fromSessionId } : {}),
-            content: String(body.content ?? ''),
+            content,
+            taskId: dispatchTaskId,
             ...(typeof body.title === 'string' ? { title: body.title } : {}),
-            ...(typeof body.taskId === 'string' ? { taskId: body.taskId } : {}),
           })
         : null
       // 撞车提醒：目标忙（运行中且最近 3 分钟有活动）时在响应里声明，
@@ -276,6 +334,13 @@ export async function handleSessionMessagesApi(
           messageId,
           // 派活场景回传 taskId：主管可据此 ReviewTask/查台账；汇报场景为 undefined
           ...(trackedTaskId ? { taskId: trackedTaskId } : {}),
+          // 改投审计（决策 D）：员工汇报被服务端改投时，这里说明原目标与依据。
+          ...(resolution.redirectedFrom
+            ? {
+                redirectedFrom: resolution.redirectedFrom,
+                resolvedBy: resolution.resolvedBy,
+              }
+            : {}),
           target: { sessionId: targetSessionId, ...targetState },
         },
         { status: 201 },
@@ -306,6 +371,23 @@ async function describeTargetState(
 }
 
 /** 广播：body {broadcast:true, content, fromSessionId} → 本项目全部 enabled 员工 */
+/** 广播里单个目标的投递结果（裁决二第 6 条的 targets[] 元素） */
+type BroadcastTargetResult = {
+  sessionId: string
+  role?: string
+  taskId?: string
+  messageId?: string
+  delivered: boolean
+  error?: string
+}
+
+/**
+ * 广播：`{broadcast:true, content, fromSessionId, broadcastId?}`。
+ *
+ * 裁决二（2026-09-30）：广播 = **N 条独立单播派活**的语法糖。每个目标单独投递、
+ * 单独记账（各自独立的 taskId 与台账记录，broadcastId 只作关联），各自 report/review
+ * 互不影响。与单播走同一套 recordDispatch / appendReportFooter，不另起一套。
+ */
 async function handleBroadcast(req: Request, body: Record<string, unknown>): Promise<Response> {
   const fromSessionId = typeof body.fromSessionId === 'string' ? body.fromSessionId.trim() : ''
   const content = typeof body.content === 'string' ? body.content : ''
@@ -316,29 +398,136 @@ async function handleBroadcast(req: Request, body: Record<string, unknown>): Pro
     throw ApiError.badRequest('Field "content" is required for broadcast')
   }
 
-  const targets = (await servantService.listServants({
-    includeAll: true,
-    forSessionId: fromSessionId,
-  })).filter((servant) => servant.enabled && servant.sessionId !== fromSessionId)
-  if (targets.length === 0) {
-    throw ApiError.notFound('No enabled servants in this project to broadcast to')
+  // 裁决二第 5 条：请求体可带 broadcastId 做幂等。注意区分「显式传入」与「自动生成」——
+  // 只有显式传入才需要串行化（裁决三）；自动生成的 UUID 每次不同，加锁没有意义。
+  const explicitBroadcastId =
+    typeof body.broadcastId === 'string' && body.broadcastId.trim() ? body.broadcastId.trim() : ''
+  const broadcastId = explicitBroadcastId || crypto.randomUUID()
+
+  // 裁决三：显式 broadcastId 时才进临界区。整段「查幂等记录 → 逐目标投递 → 成功记账」
+  // 必须原子，否则并发的两个同 ID 请求会各自查出「还没有任务」而重复投递、重复记账。
+  if (explicitBroadcastId) {
+    return withBroadcastLock(`broadcast:${broadcastId}`, () =>
+      runBroadcast(req, { fromSessionId, content, broadcastId }),
+    )
+  }
+  return runBroadcast(req, { fromSessionId, content, broadcastId })
+}
+
+async function runBroadcast(
+  req: Request,
+  input: { fromSessionId: string; content: string; broadcastId: string },
+): Promise<Response> {
+  const { fromSessionId, content, broadcastId } = input
+
+  // 裁决二第 1 条：只有主管和非员工会话（如用户会话）可以广播。在册的非主管员工
+  // 发起广播返回 403——员工广播没有明确的派活语义，还会把汇报散发给所有人。
+  const sender = await servantService.getServant(fromSessionId)
+  if (sender?.enabled && !sender.supervisor) {
+    throw new ApiError(403, '员工不能广播，请汇报给主管', 'FORBIDDEN')
   }
 
+  // 裁决二第 2 条：目标只含同项目 enabled、supervisor=false、且不是发起者。
+  // **主管永远不作为广播目标**（原先只过滤了 enabled，主管也会收到带页脚的派活）。
+  const targets = (
+    await servantService.listServants({ includeAll: true, forSessionId: fromSessionId })
+  ).filter((servant) => servant.enabled && !servant.supervisor && servant.sessionId !== fromSessionId)
+  if (targets.length === 0) {
+    throw ApiError.notFound('No enabled non-supervisor servants in this project to broadcast to')
+  }
+
+  // 发起者身份快照，与单播的 fromRole 规则一致（供汇报改投的交接修正使用）。
+  const fromRole = !sender ? 'other' : sender.supervisor ? 'supervisor' : 'servant'
+
   const host = req.headers.get('host') || '127.0.0.1'
-  const results = await Promise.allSettled(
-    targets.map((target) => sessionMessenger.deliver(target.sessionId, content, host)),
+  /** 本次请求真正新投递的目标数；为 0（全部幂等命中）即为去重放行 */
+  let actuallyDelivered = 0
+  const results = await Promise.all(
+    targets.map(async (target): Promise<BroadcastTargetResult> => {
+      // 幂等：该目标在同 broadcastId 下已成功投递并记账 → 跳过投递与记账。
+      const existing = await collabTaskService.findBroadcastTask(broadcastId, target.sessionId)
+      if (existing) {
+        return {
+          sessionId: target.sessionId,
+          ...(target.role ? { role: target.role } : {}),
+          taskId: existing.id,
+          delivered: true,
+        }
+      }
+
+      // 每目标独立 taskId：先生成，页脚与台账用**同一个**值（与单播一致），
+      // 不存在「页脚里是查不到的一次性 UUID」那种情况。
+      const targetTaskId = crypto.randomUUID()
+      const messageId = crypto.randomUUID()
+      recordDelivery({
+        messageId,
+        targetSessionId: target.sessionId,
+        ...(fromSessionId ? { fromSessionId } : {}),
+      })
+      try {
+        const delivered = await sessionMessenger.deliver(
+          target.sessionId,
+          appendReportFooter(content, targetTaskId, fromSessionId),
+          host,
+        )
+        if (!delivered) {
+          forgetReceipt(messageId)
+          return {
+            sessionId: target.sessionId,
+            ...(target.role ? { role: target.role } : {}),
+            messageId,
+            delivered: false,
+            error: 'Message could not be delivered to the target session',
+          }
+        }
+      } catch (error) {
+        forgetReceipt(messageId)
+        return {
+          sessionId: target.sessionId,
+          ...(target.role ? { role: target.role } : {}),
+          messageId,
+          delivered: false,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      }
+
+      // 投递成功才记账（裁决二第 6 条：失败目标不记账，与单播顺序一致）。
+      const taskId = await collabTaskService.recordDispatch({
+        toSessionId: target.sessionId,
+        fromSessionId,
+        fromRole,
+        broadcastId,
+        content,
+        taskId: targetTaskId,
+      })
+      actuallyDelivered += 1
+      return {
+        sessionId: target.sessionId,
+        ...(target.role ? { role: target.role } : {}),
+        ...(taskId ? { taskId } : {}),
+        messageId,
+        delivered: true,
+      }
+    }),
   )
-  const failed = targets
-    .filter((_, index) => {
-      const result = results[index]
-      return result?.status === 'rejected' || result?.value !== true
-    })
-    .map((target) => target.sessionId)
-  if (failed.length === targets.length) {
+
+  const failed = results.filter((result) => !result.delivered)
+  if (failed.length === results.length) {
     throw ApiError.internal('Broadcast failed for all targets')
   }
   return Response.json(
-    { ok: true, broadcast: true, delivered: targets.length - failed.length, ...(failed.length > 0 ? { failed } : {}) },
+    {
+      ok: true,
+      broadcast: true,
+      broadcastId,
+      delivered: results.length - failed.length,
+      // 向后兼容：旧调用方只读这两个字段
+      ...(failed.length > 0 ? { failed: failed.map((result) => result.sessionId) } : {}),
+      targets: results,
+      // 裁决三：临界区内重查发现所有目标都已投递过 → 本次没有新投递，标记去重放行。
+      // 部分命中（上次有目标失败、本次重试成功）不算——本次确实投递了目标。
+      ...(actuallyDelivered === 0 ? { deduplicated: true } : {}),
+    },
     { status: 201 },
   )
 }
