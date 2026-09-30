@@ -14,7 +14,6 @@
     "perf:local-index:10k": "bun run scripts/perf/local-index-benchmark.ts --sessions 10000 --runs 20",
     "check:desktop": "cd desktop && bun run lint && bun run test -- --run && bun run build",
     "check:electron": "cd desktop && bun run check:electron",
-    "check:adapters": "cd adapters && bun test",
     "check:docs": "npm --prefix site ci --loglevel=error && npm --prefix site run --loglevel=error build && npm --prefix site run --loglevel=error check",
     "check:persistence-upgrade": "bun test src/server/__tests__/persistence-upgrade.test.ts",
     "lint:layers": "node node_modules/dependency-cruiser/bin/dependency-cruiser.mjs src --config .dependency-cruiser.cjs --ignore-known",

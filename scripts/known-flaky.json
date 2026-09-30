@@ -9,7 +9,8 @@
     {
       "test": "refuses to write through a project .claude directory symlink",
       "reason": "Windows symlink 能力探测能建≠全场景可靠（批量进程内偶发挂、单文件复跑绿）；能力探测+skipIf 已在用例侧，残余窗口按噪声口径（2026-09-28 分诊）",
-      "added": "2026-09-28"
+      "added": "2026-09-28",
+      "triageNote": "低5（v1.5.0）：下次该条再出现时，先抓失败原文定帧（断言级 EPERM 还是锁窗口）再续标；若转确定性红仍按红线 FAIL，不得凭标注放行。"
     }
   ]
 }

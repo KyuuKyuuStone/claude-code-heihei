@@ -144,18 +144,23 @@ describe('ServantService', () => {
     }
   })
 
-  it('auto-cleans servants whose session file is gone (direct lookup keeps semantics)', async () => {
+  it('读路径不删数据：会话文件消失后条目仍在（title 退化为 id 前缀）', async () => {
     await service.setServant(sessionId, { role: '后端', enabled: true })
     expect(await service.listServants()).toHaveLength(1)
 
-    // 删掉会话文件（模拟会话被删除）→ 下次拉取自动清理出花名册
+    // 删掉会话文件（模拟「查不到会话」——可能是真被删，也可能只是索引/IO 抖动）
     const found = await sessionService.findSessionFile(sessionId)
     expect(found).not.toBeNull()
     await fs.rm(found!.filePath, { force: true })
     sessionService.invalidateSessionListCachesForTests?.()
 
-    expect(await service.listServants()).toEqual([])
-    expect(await service.getServant(sessionId)).toBeNull()
+    // v1.5.0 花名册高危修复：listServants 是只读操作——查不到会话**不得**移除条目。
+    // （旧实现把摘要 null 当「已删除」直接写盘，一次抖动就能清空整个花名册。）
+    const roster = await service.listServants()
+    expect(roster).toHaveLength(1)
+    expect(roster[0].sessionId).toBe(sessionId)
+    expect(roster[0].title).toBe(sessionId.slice(0, 8))
+    expect(await service.getServant(sessionId)).not.toBeNull()
   })
 
   it('getSessionListSummaryForSession returns summary for known session, null for unknown', async () => {
@@ -202,12 +207,22 @@ describe('ServantService', () => {
     )
   })
 
-  it('should drop servants whose session was deleted', async () => {
+  it('删除会话不静默清花名册：只有 pruneForDeletedSessions（显式删除事件）才移除', async () => {
+    // 两条在册：避开「N>0 → 0」的兜底防线，才能观察到单条移除
+    const second = await sessionService.createSession(tmpDir)
     await service.setServant(sessionId, { role: '前端', enabled: true })
+    await service.setServant(second.sessionId, { role: '后端', enabled: true })
+
     await sessionService.deleteSession(sessionId)
 
-    expect(await service.listServants()).toEqual([])
+    // 读路径不做删除判定——删除会话这件事本身不碰花名册
+    expect(await service.listServants()).toHaveLength(2)
+
+    // 显式删除事件钩子才移除
+    const removed = await service.pruneForDeletedSessions([sessionId])
+    expect(removed.map((entry) => entry.sessionId)).toEqual([sessionId])
     expect(await service.getServant(sessionId)).toBeNull()
+    expect(await service.getServant(second.sessionId)).not.toBeNull()
   })
 
   it('should scope the roster to the requesting session project', async () => {
@@ -382,9 +397,14 @@ describe('ServantService', () => {
       enabled: true,
       constraint: 'readonly',
     })
-    // 删除会话 → listServants 的自动清理路径（第二个静默移除点）
+    // 第二条在册：避开 N>0 → 0 兜底，走正常的单条移除
+    const second = await sessionService.createSession(tmpDir)
+    await service.setServant(second.sessionId, { role: '前端', enabled: true })
+
+    // 显式删除事件驱动的清理（以前挂在 listServants 的读路径上）
     await sessionService.deleteSession(sessionId)
-    expect(await service.listServants()).toEqual([])
+    await service.pruneForDeletedSessions([sessionId])
+    expect(await service.getServant(sessionId)).toBeNull()
 
     const logged = await readDiagnosticsEventually('servant_removed')
     expect(logged).toContain('session-deleted-auto-cleanup')
@@ -616,7 +636,13 @@ describe('Servants API', () => {
     // 随身档案：环境变量/Bash 不可用时，凭消息文本即可完成汇报与自救
     expect(deliverMock.mock.calls[0][1]).toContain(sessionId)
     expect(deliverMock.mock.calls[0][1]).toContain('已直接内联可用')
-    expect(deliverMock.mock.calls[0][1]).toContain('computer-use')
+    // v1.5.0 A7：协作会话已结构性禁用 computer-use（服务端注入
+    // CLAUDE_COMPUTER_USE_ENABLED=0），上岗消息不再需要「不要尝试」的文案
+    expect(deliverMock.mock.calls[0][1]).not.toContain('computer-use')
+    // v1.5.0 低-4：口袋卡补上端口文件陈旧判定（与 dispatchProtocol 共用同一段
+    // 常量文本 SERVER_ADDRESS_STALENESS_NOTE）
+    expect(deliverMock.mock.calls[0][1]).toContain('陈旧判定')
+    expect(deliverMock.mock.calls[0][1]).toContain('startedAt')
 
     // 再次保存（已是员工）：不重复触发
     const again = await handleServantsApi(

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { RefreshCw } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
+import { Spinner } from '@/components/ui/Spinner'
 import { useChatStore } from '../../stores/chatStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useTranslation, type TranslationKey } from '../../i18n'
@@ -71,7 +71,8 @@ export function StreamingIndicator() {
         aria-live="polite"
         className="mb-2 flex w-full max-w-[min(720px,100%)] flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[var(--color-warning-container)] px-3 py-2 text-xs text-[var(--color-on-warning-container)] shadow-[var(--shadow-card)]"
       >
-        <RefreshCw size={14} strokeWidth={2.2} className="shrink-0 animate-spin text-[var(--color-warning)]" aria-hidden="true" />
+        {/* §2.7：降级/重试用 warning 色；转圈走共享 Spinner */}
+        <Spinner size={14} className="text-[var(--color-warning)]" />
         <span className="font-medium">{t('chat.retry.title')}</span>
         {/*
           Neutral rather than `tone="warning"`: these chips sit on the warning
@@ -109,7 +110,7 @@ export function StreamingIndicator() {
         aria-live="polite"
         className="mb-2 flex w-fit items-center gap-[9px] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-4 py-2 text-[13.5px] text-[var(--color-text-secondary)]"
       >
-        <RefreshCw size={13} strokeWidth={2.2} className="shrink-0 animate-spin text-[var(--color-text-secondary)]" aria-hidden="true" />
+        <Spinner size={13} className="text-[var(--color-text-secondary)]" />
         <span className="font-medium text-[var(--color-text-primary)]">
           {t('chat.fallback.title')}
         </span>

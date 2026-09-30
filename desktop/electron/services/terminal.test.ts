@@ -140,7 +140,7 @@ describe('Electron terminal service', () => {
     expect(normalizeTerminalBashPath('   ', () => false)).toBeNull()
   })
 
-  it('resolves platform-specific shells from the same settings shape as Tauri', () => {
+  it('resolves platform-specific shells from the startup shell settings', () => {
     expect(resolveDesktopTerminalShell('win32', { startupShell: 'pwsh' })).toBe('pwsh.exe')
     expect(resolveDesktopTerminalShell('win32', { startupShell: 'powershell' })).toBe('powershell.exe')
     expect(resolveDesktopTerminalShell('win32', { startupShell: 'cmd' })).toBe('cmd.exe')

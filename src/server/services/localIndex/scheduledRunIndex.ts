@@ -10,6 +10,7 @@ import {
   assertScheduledRunIndexSchemaSupported,
   migrateScheduledRunIndexDatabase,
 } from './scheduledRunMigrations.js'
+import { configureLocalIndexConnection } from './pragmas.js'
 
 export type ScheduledRunRecord = {
   id: string
@@ -312,11 +313,9 @@ export function openScheduledRunIndex(options?: {
   const database = new Database(databasePath)
   try {
     assertScheduledRunIndexSchemaSupported(database)
-    database.exec(`PRAGMA busy_timeout = ${LOCAL_INDEX_BUSY_TIMEOUT_MS}`)
-    database.exec('PRAGMA journal_mode = WAL')
-    database.exec('PRAGMA synchronous = NORMAL')
-    database.exec('PRAGMA foreign_keys = ON')
-    database.exec('PRAGMA wal_autocheckpoint = 1000')
+    // v1.5.0 低11：与 localIndex 主库共享同一连接配置（此前手抄 5 条且漏了
+    // journal_size_limit，WAL 无上限增长）
+    configureLocalIndexConnection(database, LOCAL_INDEX_BUSY_TIMEOUT_MS)
     migrateScheduledRunIndexDatabase(database)
   } catch (error) {
     database.close(true)

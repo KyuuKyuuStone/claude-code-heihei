@@ -18,11 +18,11 @@
 
 </div>
 
-Claude Code Heihei 是一个 **Windows 桌面端 Claude Code 工作台**。它在经典会话工作台之上新增了 **会话级上下级协作** 能力，同时保留多会话、多项目、Diff 审阅、权限审批、模型配置、Computer Use、技能市场，并新增了**本地 GGUF 模型**支持。
+Claude Code Heihei 是一个 **Windows 专属、自用为主的「主管/员工」AI 协作工作台**，构建在 Claude Code 之上。核心是**会话级派活**：每个项目任命一名「主管」，把任务派进「员工」会话，员工无人值守执行、完工自动汇报；其余是完整的会话工作台能力（多会话、多项目、Diff 审阅、权限审批、模型配置、Computer Use、技能）。**本地 GGUF 模型为冻结的可选功能**——能用，但不再新增功能，也**不参与协作会话**。
 
 ## 下载
 
-[![下载 Windows 安装包](https://img.shields.io/badge/⬇%20下载-Windows%20exe-FF7A00?style=for-the-badge)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases/latest/download/Claude-Code-Heihei-1.0.1-win-x64.exe)
+[![下载 Windows 安装包](https://img.shields.io/badge/⬇%20下载-Windows%20exe-FF7A00?style=for-the-badge)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases/latest)
 
 > 历史版本见 [Releases](https://github.com/KyuuKyuuStone/claude-code-heihei/releases)。
 
@@ -33,7 +33,7 @@ Claude Code Heihei 是一个 **Windows 桌面端 Claude Code 工作台**。它�
 | ![界面预览 1](docs/images/app/ZY01.jpg) | ![界面预览 2](docs/images/app/ZY02.jpg) |
 | ![界面预览 3](docs/images/app/ZY03.jpg) | ![界面预览 4](docs/images/app/ZY04.jpg) |
 
-### 本地大模型
+### 本地大模型（冻结的可选功能）
 
 |  |  |
 |:--:|:--:|
@@ -64,7 +64,9 @@ Claude Code Heihei 是一个 **Windows 桌面端 Claude Code 工作台**。它�
 - **Computer Use**：授权后让 Agent 截图、点击、输入并控制桌面应用。
 - **MCP 支持**：接入 MCP 工具与外部能力。
 
-### 本地大模型（新增）
+### 本地大模型（冻结的可选功能）
+
+> **冻结**：本地模型仍可运行，但不再新增功能，且**不参与协作会话**。
 
 直接在你**自己的电脑上跑 GGUF 模型**——不联网、不要 API Key、数据不出本机。应用内置 [llama.cpp](https://github.com/ggml-org/llama.cpp) 内核，支持纯 CPU 与 GPU（Vulkan，跨 NVIDIA / AMD / Intel）。一键**跑分**真探测你的硬件：GPU 能不能扛住实测说了算（跑不动自动退纯 CPU）、67%/100% 两档实测取最快，报告给出运行方式结论（纯 CPU / GPU 全量 / 混合）、首字延迟预估和 KV 缓存账单。配置方案参数按硬件自动填好，上下文按内存规划（装不下自动换 q8_0 KV 缓存），多模态模型支持配 mmproj 看图，N 卡可外接官方 CUDA 引擎提速。特别适合普通学生电脑。
 

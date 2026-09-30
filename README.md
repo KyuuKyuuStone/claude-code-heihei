@@ -18,11 +18,11 @@
 
 </div>
 
-Claude Code Heihei is a **Windows desktop Claude Code workspace**. It adds a **session-level supervisor–worker collaboration** layer on top of the classic session workspace, while keeping multi-session, multi-project, diff review, permission approval, model setup, Computer Use, skill marketplace, and now **local GGUF models** in one app.
+Claude Code Heihei is a **Windows-only, self-hosted supervisor–worker AI collaboration workspace** built on Claude Code. Its core is **session-level delegation**: one supervisor per project dispatches tasks into worker sessions, which run unattended and report back. On top of that it is a full session workspace — multi-session, multi-project, diff review, permission approval, model setup, Computer Use, skills. **Local GGUF models are a frozen optional feature** — they still work, but receive no new development and do **not** take part in collaboration sessions.
 
 ## Download
 
-[![Download Windows installer](https://img.shields.io/badge/⬇%20Download-Windows%20exe-FF7A00?style=for-the-badge)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases/latest/download/Claude-Code-Heihei-1.0.1-win-x64.exe)
+[![Download Windows installer](https://img.shields.io/badge/⬇%20Download-Windows%20exe-FF7A00?style=for-the-badge)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases/latest)
 
 > For other platforms and versions, see [Releases](https://github.com/KyuuKyuuStone/claude-code-heihei/releases).
 
@@ -33,7 +33,7 @@ Claude Code Heihei is a **Windows desktop Claude Code workspace**. It adds a **s
 | ![Screenshot 1](docs/images/app/ZY01.jpg) | ![Screenshot 2](docs/images/app/ZY02.jpg) |
 | ![Screenshot 3](docs/images/app/ZY03.jpg) | ![Screenshot 4](docs/images/app/ZY04.jpg) |
 
-### Local models
+### Local models (frozen optional feature)
 
 |  |  |
 |:--:|:--:|
@@ -64,7 +64,9 @@ Claude Code Heihei is a **Windows desktop Claude Code workspace**. It adds a **s
 - **Computer Use**: let the agent screenshot, click, type, and control desktop apps after authorization.
 - **MCP support**: connect MCP tools and external capabilities.
 
-### Local models (new)
+### Local models (frozen optional feature)
+
+> **Frozen**: local models still run, but are no longer developed and **do not participate in collaboration sessions**.
 
 Run **GGUF models directly on your own machine** — no internet, no API key, nothing leaves your computer. The app bundles the [llama.cpp](https://github.com/ggml-org/llama.cpp) runtime and supports pure CPU and GPU inference (Vulkan, cross NVIDIA / AMD / Intel). A one-click **benchmark** really probes your hardware: the GPU must survive a live inference probe (weak cards fall back to CPU automatically), 67%/100% usage tiers are measured twice each and the fastest wins. The report tells you the run mode (pure CPU / full GPU / hybrid), a first-token latency estimate, and the KV-cache bill. Config presets auto-fill from your hardware, context size is planned against your memory (falling back to q8_0 KV cache when f16 doesn't fit), vision models work with an mmproj projector, and NVIDIA users can plug in the official CUDA build. Perfect for modest student machines.
 

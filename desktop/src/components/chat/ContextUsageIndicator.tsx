@@ -5,6 +5,7 @@ import type { ChatState } from '../../types/chat'
 import { useMobileViewport } from '../../hooks/useMobileViewport'
 import { isDesktopRuntime } from '../../lib/desktopRuntime'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
+import { Spinner } from '@/components/ui/Spinner'
 
 type Props = {
   sessionId?: string
@@ -279,7 +280,8 @@ export function ContextUsageIndicator({
       >
         <span className="relative grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full">
           {loading && !displayContext ? (
-            <span className="absolute inset-[2px] rounded-full border-2 border-[var(--color-text-tertiary)] border-t-transparent motion-safe:animate-spin" />
+            // P0-5：转圈唯一出口是共享 Spinner
+            <Spinner size={14} className="absolute inset-[2px]" />
           ) : (
             <span
               className="relative grid h-[18px] w-[18px] place-items-center rounded-full"

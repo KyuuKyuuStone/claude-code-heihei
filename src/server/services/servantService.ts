@@ -11,7 +11,6 @@
 
 import * as fs from 'fs/promises'
 import * as path from 'path'
-import * as os from 'os'
 import * as crypto from 'crypto'
 import { ApiError } from '../middleware/errorHandler.js'
 import { diagnosticsService } from './diagnosticsService.js'
@@ -19,6 +18,9 @@ import { sessionService } from './sessionService.js'
 import type { SessionListSummary } from './localIndex/types.js'
 import { getSessionSnapshot } from './sessionRegistry.js'
 import { isSessionTurnInProgress } from './dispatchReceiptService.js'
+import { emitCollabPush } from '../../collaboration/collabPushSignals.js'
+import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
+import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 
 export type ServantEntry = {
   sessionId: string
@@ -126,9 +128,34 @@ function recordServantRemoved(
 
 export class ServantService {
   private getFilePath(): string {
-    const configDir =
-      process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
-    return path.join(configDir, 'servant_sessions.json')
+    // v1.5.0 花名册高危修复：改用与 sessionService 同一个解析器。
+    // 以前这里用 `||`（空串回退 ~/.claude），而 sessionService 走
+    // getClaudeConfigHomeDir（`??`，空串不回退）。一旦 CLAUDE_CONFIG_DIR 是空串
+    // （某些启动方式会这样传），本服务读写真实的 ~/.claude/servant_sessions.json，
+    // sessionService 却去 cwd/projects 找 transcript——两边看到的不是同一个世界，
+    // 于是「查不到任何会话」被当成「全部会话已删除」，整个花名册被一个 GET 清空。
+    return path.join(getClaudeConfigHomeDir(), 'servant_sessions.json')
+  }
+
+  /**
+   * 进程内写队列（v1.6.0）：所有「读-改-写」花名册的操作串行执行。
+   *
+   * 花名册是单文件整体重写，并发写会 lost update：A 读到 S 改完写回 S'，
+   * B 若在 A 写回前也读到 S，随后写回 S'' 就把 A 的改动覆盖掉。2026-09-30
+   * 排查「登记后身份消失」时确认过这条链路（当时还叠加了读路径误清理）。
+   * 队列只覆盖单个进程；多进程（理论上只有 sidecar 一个）不在此列。
+   *
+   * 失败不阻断队列：单个操作抛错由调用方收到，后续操作照常执行。
+   */
+  private writeQueue: Promise<unknown> = Promise.resolve()
+
+  private enqueueWrite<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.writeQueue.then(operation, operation)
+    this.writeQueue = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
   }
 
   /** 列出员工会话（默认仅 enabled 的花名册；includeAll 时含未启用条目） */
@@ -150,29 +177,23 @@ export class ServantService {
     // 分钟级事件循环阻塞（实录 /api/servant-sessions?all=1 请求 120s 超时），
     // 冷启动开会话「加载中…」被一并拖长。
     const byId = new Map(
-      (
-        await Promise.all(
-          candidates.map(
-            async (s) =>
-              [s.sessionId, await sessionService.getSessionListSummaryForSession(s.sessionId)] as const,
-          ),
-        )
-      ).filter((pair): pair is readonly [string, SessionListSummary] => pair[1] !== null),
+      await Promise.all(
+        candidates.map(
+          async (s) =>
+            [s.sessionId, await sessionService.getSessionListSummaryForSession(s.sessionId)] as const,
+        ),
+      ),
     )
 
-    // 会话已被删除的条目自动清理（第二个移除路径，同样要留 servant_removed 痕迹）
-    const alive = candidates.filter((s) => byId.has(s.sessionId))
-    if (alive.length !== candidates.length) {
-      const aliveIds = new Set(alive.map((s) => s.sessionId))
-      const removed = data.servants.filter((s) => !aliveIds.has(s.sessionId) && !byId.has(s.sessionId))
-      data.servants = data.servants.filter((s) => aliveIds.has(s.sessionId) || byId.has(s.sessionId))
-      await this.writeFile(data)
-      for (const entry of removed) {
-        recordServantRemoved(entry, 'session-deleted-auto-cleanup')
-      }
-    }
-
-    let result = alive
+    // v1.5.0 花名册高危修复：**读操作绝不删数据**。
+    //
+    // 这里原本有一段「摘要为 null ⇒ 会话已删除 ⇒ writeFile 移除条目」的自动清理。
+    // 但摘要为 null 的成因远不止「会话被删」：索引未就绪、扫描/IO 抖动、配置目录
+    // 解析不一致（sessionService 用 ?? 而本服务用 ||，空 CLAUDE_CONFIG_DIR 下两者
+    // 指向不同的 ~/.claude）都会让它瞬时为 null。实测就是一次 9 条 servant_removed
+    // 挤在同一毫秒——整个花名册被一个 GET 请求抹掉，用户的登记 1 秒后必被清。
+    // 清理已挪到明确删除事件（pruneForDeletedSessions，由 DELETE /api/sessions 调用）。
+    let result = candidates
     if (options?.forSessionId) {
       // 请求方未必是员工（主管不是 enabled 员工），byId 里可能没有——直查其摘要。
       const forSummary =
@@ -180,7 +201,9 @@ export class ServantService {
         (await sessionService.getSessionListSummaryForSession(options.forSessionId))
       const forWorkDir = forSummary?.workDir
       if (forWorkDir) {
-        result = alive.filter(
+        // 注意用 result（= 全部候选），不再有「alive」子集：摘要缺失的条目现在
+        // 也要参与过滤，只是 workDir 未知（undefined ≠ forWorkDir，会被排除）。
+        result = result.filter(
           (s) =>
             // 自排除：请求者不出现在自己的花名册里（防主管把自己当员工自派）
             s.sessionId !== options.forSessionId &&
@@ -191,11 +214,13 @@ export class ServantService {
 
     return result
       .map((entry) => {
-        const session = byId.get(entry.sessionId)!
+        // 摘要取不到也照常返回条目（要求：花名册条目不能因摘要失败而消失）。
+        // title/workDir 退化为兜底值，用户仍能看到员工身份。
+        const session = byId.get(entry.sessionId) ?? null
         return {
           ...entry,
-          title: session.title,
-          workDir: session.workDir,
+          title: session?.title ?? entry.sessionId.slice(0, 8),
+          workDir: session?.workDir ?? undefined,
           // v1.3.0 阶段4 · 7a：改读 registry 快照，删除对 conversationService
           // 的静态 import——反向依赖环消失。旧 hasSession（map 含即真）≈
           // starting∪running 都算「在跑」；此处**有意收紧**为仅 running：
@@ -203,7 +228,7 @@ export class ServantService {
           // false，同语义）。（v1.3.1 · R3 注释如实修订，行为不变。）
           running: getSessionSnapshot(entry.sessionId)?.phase === 'running',
           turnInProgress: isSessionTurnInProgress(entry.sessionId),
-          ...(session.modifiedAt ? { lastActivityAt: session.modifiedAt } : {}),
+          ...(session?.modifiedAt ? { lastActivityAt: session.modifiedAt } : {}),
         }
       })
       .sort((a, b) => b.updatedAt - a.updatedAt)
@@ -266,61 +291,81 @@ export class ServantService {
       throw ApiError.notFound(`Session not found: ${sessionId}`)
     }
 
-    const data = await this.readFile()
+    // 临界区：读-改-写整段进进程内队列（v1.6.0 写-写串行化）。并发登记/
+    // 移除若各自读同一份快照再写回，后写者会覆盖先写者的改动（lost update）。
+    const { data, index, entry } = await this.enqueueWrite(async () => {
+      const data = await this.readFile()
 
-    // 主管任命：每个项目（workDir）最多一名
-    if (input.supervisor) {
-      const workDirById = new Map(sessions.map((s) => [s.id, s.workDir]))
-      const existing = data.servants.find(
-        (s) =>
-          s.supervisor &&
-          s.sessionId !== sessionId &&
-          workDirById.get(s.sessionId) === thisSession.workDir,
-      )
-      if (existing) {
-        throw ApiError.conflict(
-          `This project already has a supervisor: ${existing.sessionId}. Unappoint it first.`,
+      // 主管任命：每个项目（workDir）最多一名
+      if (input.supervisor) {
+        const workDirById = new Map(sessions.map((s) => [s.id, s.workDir]))
+        const existing = data.servants.find(
+          (s) =>
+            s.supervisor &&
+            s.sessionId !== sessionId &&
+            workDirById.get(s.sessionId) === thisSession.workDir,
         )
+        if (existing) {
+          throw ApiError.conflict(
+            `This project already has a supervisor: ${existing.sessionId}. Unappoint it first.`,
+          )
+        }
       }
-    }
 
-    const index = data.servants.findIndex((s) => s.sessionId === sessionId)
-    const previousConstraint = index !== -1 ? data.servants[index].constraint : undefined
-    const previousWriteDirs = index !== -1 ? data.servants[index].writeDirs : undefined
+      const index = data.servants.findIndex((s) => s.sessionId === sessionId)
+      const previousConstraint = index !== -1 ? data.servants[index].constraint : undefined
+      const previousWriteDirs = index !== -1 ? data.servants[index].writeDirs : undefined
 
-    // 约束档位与白名单目录一起归一（未传档位时沿用旧档位）
-    const nextConstraint =
-      input.constraint !== undefined ? input.constraint : previousConstraint
-    let nextWriteDirs: string[] | undefined
-    if (nextConstraint === 'whitelist') {
-      nextWriteDirs = input.writeDirs !== undefined ? normalizeWriteDirs(input.writeDirs) : previousWriteDirs
-      if (!nextWriteDirs || nextWriteDirs.length === 0) {
-        throw ApiError.badRequest('whitelist constraint requires at least one write directory')
+      // 约束档位与白名单目录一起归一（未传档位时沿用旧档位）
+      const nextConstraint =
+        input.constraint !== undefined ? input.constraint : previousConstraint
+      let nextWriteDirs: string[] | undefined
+      if (nextConstraint === 'whitelist') {
+        nextWriteDirs = input.writeDirs !== undefined ? normalizeWriteDirs(input.writeDirs) : previousWriteDirs
+        if (!nextWriteDirs || nextWriteDirs.length === 0) {
+          throw ApiError.badRequest('whitelist constraint requires at least one write directory')
+        }
       }
-    }
-    // 非 whitelist 档：writeDirs 不落盘（切档自动清除，防脏数据残留）
+      // 非 whitelist 档：writeDirs 不落盘（切档自动清除，防脏数据残留）
 
-    const entry: ServantEntry = {
+      const entry: ServantEntry = {
+        sessionId,
+        role: input.role?.trim() || undefined,
+        description: input.description?.trim() || undefined,
+        enabled: input.enabled,
+        ...(input.supervisor !== undefined
+          ? { supervisor: input.supervisor }
+          : index !== -1 && data.servants[index].supervisor !== undefined
+            ? { supervisor: data.servants[index].supervisor }
+            : {}),
+        // 约束档位：未传时保留旧值（禁用员工也保留，重新启用不丢设置）
+        ...(nextConstraint ? { constraint: nextConstraint } : {}),
+        ...(nextWriteDirs ? { writeDirs: nextWriteDirs } : {}),
+        updatedAt: Date.now(),
+      }
+      if (index === -1) {
+        data.servants.push(entry)
+      } else {
+        data.servants[index] = entry
+      }
+      await this.writeFile(data)
+      return { data, index, entry }
+    })
+    // v1.5.0 A6：花名册变化广播信号（ws 层订阅后翻成 servant_roster_changed）。
+    // fields 取结构性字段全集——前端拿到可据此决定局部 patch 还是全量刷新。
+    emitCollabPush({
+      kind: 'roster',
       sessionId,
-      role: input.role?.trim() || undefined,
-      description: input.description?.trim() || undefined,
-      enabled: input.enabled,
-      ...(input.supervisor !== undefined
-        ? { supervisor: input.supervisor }
-        : index !== -1 && data.servants[index].supervisor !== undefined
-          ? { supervisor: data.servants[index].supervisor }
-          : {}),
-      // 约束档位：未传时保留旧值（禁用员工也保留，重新启用不丢设置）
-      ...(nextConstraint ? { constraint: nextConstraint } : {}),
-      ...(nextWriteDirs ? { writeDirs: nextWriteDirs } : {}),
-      updatedAt: Date.now(),
-    }
-    if (index === -1) {
-      data.servants.push(entry)
-    } else {
-      data.servants[index] = entry
-    }
-    await this.writeFile(data)
+      change: index === -1 ? 'added' : 'updated',
+      fields: [
+        'role',
+        'description',
+        'enabled',
+        'supervisor',
+        'constraint',
+        'writeDirs',
+      ].filter((field) => field in entry),
+    })
 
     // 新登记的协作会话：title 按角色生成（custom-title 优先级最高，且之后
     // 用户的 AI title/手动改名仍可覆盖）。只修新会话（index===-1），历史不回填；
@@ -402,14 +447,63 @@ export class ServantService {
   }
 
   /** 移除会话的协作身份；返回被删条目（供调用方发 servant_removed 事件） */
-  async removeServant(sessionId: string): Promise<ServantEntry> {
-    const data = await this.readFile()
-    const index = data.servants.findIndex((s) => s.sessionId === sessionId)
-    if (index === -1) {
-      throw ApiError.notFound(`Servant not registered: ${sessionId}`)
+  /**
+   * 明确的会话删除事件钩子（v1.5.0 花名册高危修复）。
+   *
+   * 花名册条目的移除**只允许**从这里发生：调用方（DELETE /api/sessions/:id）
+   * 已经确认这些会话真的被删了。以前这个清理挂在 listServants（GET 路径）上，
+   * 靠「摘要为 null」推断删除——一次 IO 抖动就能清空整个花名册。
+   *
+   * 兜底防线：只要这次移除会导致「N>0 → 0」或「一次移除多条」，就判定可疑，
+   * 整批跳过并记 warn 诊断 servant_roster_mass_cleanup_skipped。宁可留脏条目
+   * （用户可手动移除），也不让协作身份静默消失。
+   *
+   * @returns 实际被移除的条目（被兜底拦截时为空数组）
+   */
+  async pruneForDeletedSessions(sessionIds: readonly string[]): Promise<ServantEntry[]> {
+    if (sessionIds.length === 0) return []
+
+    const doomed = await this.enqueueWrite(async () => {
+      const data = await this.readFile()
+      const targets = new Set(sessionIds)
+      const doomed = data.servants.filter((s) => targets.has(s.sessionId))
+      if (doomed.length === 0) return []
+
+      const total = data.servants.length
+      const remaining = total - doomed.length
+      if (doomed.length >= 2 || (total > 0 && remaining === 0)) {
+        logForDiagnosticsNoPII('warn', 'servant_roster_mass_cleanup_skipped', {
+          requested: doomed.length,
+          total,
+          remaining,
+        })
+        return []
+      }
+
+      data.servants = data.servants.filter((s) => !targets.has(s.sessionId))
+      await this.writeFile(data)
+      return doomed
+    })
+    for (const entry of doomed) {
+      recordServantRemoved(entry, 'session-deleted-auto-cleanup')
+      emitCollabPush({ kind: 'roster', sessionId: entry.sessionId, change: 'removed', fields: [] })
     }
-    const [removed] = data.servants.splice(index, 1)
-    await this.writeFile(data)
+    return doomed
+  }
+
+  async removeServant(sessionId: string): Promise<ServantEntry> {
+    const removed = await this.enqueueWrite(async () => {
+      const data = await this.readFile()
+      const index = data.servants.findIndex((s) => s.sessionId === sessionId)
+      if (index === -1) {
+        throw ApiError.notFound(`Servant not registered: ${sessionId}`)
+      }
+      const [entry] = data.servants.splice(index, 1)
+      await this.writeFile(data)
+      return entry
+    })
+    // v1.5.0 A6：移除广播（前端据此删条目）
+    emitCollabPush({ kind: 'roster', sessionId, change: 'removed', fields: [] })
     return removed
   }
 

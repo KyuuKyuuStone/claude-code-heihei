@@ -7,6 +7,8 @@ order: 0
 
 # Desktop feature map
 
+> **Claude Code Heihei is a Windows-only, self-hosted supervisor–worker AI collaboration workspace** — its core is session-level dispatch: a supervisor dispatches work into worker sessions that run unattended and report back.
+
 The desktop app puts "talking to Claude" and "seeing what it actually changed" in the same window: projects and history on the left, the conversation in the middle, files, diffs, and a browser preview one click away on the right.
 
 This page is a map, not a manual. One line per feature — click through for the details. If you haven't installed it or connected a model yet, start with [Get started](../start/index.md).

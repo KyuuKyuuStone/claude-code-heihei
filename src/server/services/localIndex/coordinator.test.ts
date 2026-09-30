@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test'
 import { getEventListeners } from 'node:events'
 import { appendFile, chmod, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import type { LocalIndexDatabase } from './database.js'
 import {
   createLocalIndexCoordinator,
@@ -2107,7 +2107,10 @@ describe('discoverActivityTranscriptSources', () => {
 
     const result = await discoverActivityTranscriptSources(root, new AbortController().signal)
 
-    const names = result.candidates.map(candidate => candidate.path.split('/').pop()).sort()
+    // v1.5.0：改用 basename——实现用 path.join 返回平台原生分隔符（Windows 是
+    // `\`），原先的 split('/') 在 Windows 下不切割，pop() 返回整条绝对路径，
+    // 该断言自基线起在 Windows 上就失败（实现/测试文件与 b09ee5f 逐字节一致）。
+    const names = result.candidates.map(candidate => basename(candidate.path)).sort()
     // agent-wf.jsonl lives at subagents/workflows/<wf_id>/ — the level that used to be skipped
     // entirely, leaving every workflow agent's tokens and tool calls out of the stats.
     expect(names).toEqual([

@@ -99,8 +99,6 @@ describe('ElectronServerRuntime', () => {
 
     const firstUrl = await runtime.getServerUrl()
     const firstChild = sidecarMocks.serverChildren[0]!
-    const firstAdapters = [...sidecarMocks.adapterChildren]
-    expect(firstAdapters).toHaveLength(5)
     firstChild.emit('exit', 7, null)
 
     const [secondUrl, coalescedUrl] = await Promise.all([
@@ -114,11 +112,6 @@ describe('ElectronServerRuntime', () => {
     expect(secondUrl).toBe('http://127.0.0.1:49322')
     expect(coalescedUrl).toBe(secondUrl)
     expect(sidecarMocks.serverChildren).toHaveLength(2)
-    expect(sidecarMocks.adapterChildren).toHaveLength(10)
-    for (const adapter of firstAdapters) expect(adapter.kill).toHaveBeenCalledTimes(1)
-    for (const adapter of sidecarMocks.adapterChildren.slice(5)) {
-      expect(adapter.kill).not.toHaveBeenCalled()
-    }
     expect(await runtime.getServerUrl()).toBe(secondUrl)
     expect(secondChild).toBeDefined()
   })
@@ -137,7 +130,7 @@ describe('ElectronServerRuntime', () => {
       .not.toBe(path.join(homedir(), '.claude'))
   })
 
-  it('keeps the desktop access token out of the adapter sidecars', async () => {
+  it('keeps the desktop access token in the server sidecar env', async () => {
     const runtime = createRuntime()
 
     await runtime.startServer()
@@ -145,14 +138,9 @@ describe('ElectronServerRuntime', () => {
     const localToken = runtime.getLocalAccessToken()
     expect(localToken.length).toBeGreaterThanOrEqual(32)
     expect(sidecarMocks.serverPlans[0]!.env.CC_HEIHEI_LOCAL_ACCESS_TOKEN).toBe(localToken)
-    for (const adapter of sidecarMocks.spawnSidecar.mock.calls
-      .map(([plan]) => plan)
-      .filter(plan => plan.args[0] === 'adapters')) {
-      expect(adapter.env.CC_HEIHEI_LOCAL_ACCESS_TOKEN).toBe(localToken)
-    }
   })
 
-  it('gives the server only the dynamic bridge URL while adapters explicitly inherit it', async () => {
+  it('gives the server only the dynamic bridge URL (proxy env scrubbed)', async () => {
     const bridge = {
       start: vi.fn(async () => 'http://127.0.0.1:49123'),
       stop: vi.fn(async () => undefined),
@@ -176,16 +164,6 @@ describe('ElectronServerRuntime', () => {
     expect(serverEnv.HTTPS_PROXY).toBeUndefined()
     expect(serverEnv.ALL_PROXY).toBeUndefined()
     expect(serverEnv.all_proxy).toBeUndefined()
-    const adapterPlans = sidecarMocks.spawnSidecar.mock.calls
-      .map(([plan]) => plan)
-      .filter(plan => plan.args[0] === 'adapters')
-    expect(adapterPlans).toHaveLength(5)
-    for (const plan of adapterPlans) {
-      expect(plan.env.HTTP_PROXY).toBe('http://127.0.0.1:49123')
-      expect(plan.env.HTTPS_PROXY).toBe('http://127.0.0.1:49123')
-      expect(plan.env.ALL_PROXY).toBe('http://127.0.0.1:49123')
-      expect(plan.env.all_proxy).toBe('http://127.0.0.1:49123')
-    }
 
     runtime.stopAll()
     expect(bridge.stop).toHaveBeenCalledTimes(1)
@@ -302,129 +280,6 @@ describe('ElectronServerRuntime', () => {
     expect(sidecarMocks.serverChildren).toHaveLength(1)
     expect(sidecarMocks.adapterChildren).toHaveLength(0)
     expect(sidecarMocks.serverChildren[0]!.kill).toHaveBeenCalledTimes(1)
-  })
-
-  it('stops active adapters immediately when the server exits without restart demand', async () => {
-    const runtime = createRuntime()
-    await runtime.startServer()
-    const activeAdapters = [...sidecarMocks.adapterChildren]
-
-    sidecarMocks.serverChildren[0]!.emit('exit', 19, null)
-
-    for (const adapter of activeAdapters) {
-      expect(adapter.kill).toHaveBeenCalledTimes(1)
-    }
-    expect(sidecarMocks.serverChildren).toHaveLength(1)
-  })
-
-  it('stops active adapters immediately when the server emits a process error', async () => {
-    const runtime = createRuntime()
-    await runtime.startServer()
-    const activeAdapters = [...sidecarMocks.adapterChildren]
-
-    sidecarMocks.serverChildren[0]!.emit('error', new Error('active server failed'))
-
-    for (const adapter of activeAdapters) {
-      expect(adapter.kill).toHaveBeenCalledTimes(1)
-    }
-  })
-
-  it('does not let a stale server exit stop replacement adapters', async () => {
-    const runtime = createRuntime()
-    await runtime.startServer()
-    const firstServer = sidecarMocks.serverChildren[0]!
-    firstServer.emit('exit', 20, null)
-    await runtime.getServerUrl()
-    const replacementAdapters = sidecarMocks.adapterChildren.slice(5)
-
-    firstServer.emit('exit', 21, 'SIGTERM')
-
-    expect(replacementAdapters).toHaveLength(5)
-    for (const adapter of replacementAdapters) {
-      expect(adapter.kill).not.toHaveBeenCalled()
-    }
-  })
-
-  it('stops the current adapter generation after an explicit adapter restart', async () => {
-    const runtime = createRuntime()
-    await runtime.startServer()
-    const firstAdapters = [...sidecarMocks.adapterChildren]
-
-    await runtime.restartAdaptersSidecars()
-    const restartedAdapters = sidecarMocks.adapterChildren.slice(5)
-    sidecarMocks.serverChildren[0]!.emit('exit', 22, null)
-
-    for (const adapter of firstAdapters) {
-      expect(adapter.kill).toHaveBeenCalledTimes(1)
-    }
-    for (const adapter of restartedAdapters) {
-      expect(adapter.kill).toHaveBeenCalledTimes(1)
-    }
-  })
-
-  it('coalesces overlapping manual adapter restarts into one live generation', async () => {
-    const runtime = createRuntime()
-    await runtime.startServer()
-    const originalAdapters = [...sidecarMocks.adapterChildren]
-
-    const firstRestart = runtime.restartAdaptersSidecars()
-    const secondRestart = runtime.restartAdaptersSidecars()
-
-    expect(secondRestart).toBe(firstRestart)
-    await Promise.all([firstRestart, secondRestart])
-    expect(sidecarMocks.adapterChildren).toHaveLength(10)
-    for (const adapter of originalAdapters) {
-      expect(adapter.kill).toHaveBeenCalledTimes(1)
-    }
-    for (const adapter of sidecarMocks.adapterChildren.slice(5)) {
-      expect(adapter.kill).not.toHaveBeenCalled()
-    }
-  })
-
-  it('cancels a manual adapter restart when its server exits after the first spawn', async () => {
-    const runtime = createRuntime()
-    await runtime.startServer()
-    const firstServer = sidecarMocks.serverChildren[0]!
-    const originalAdapters = [...sidecarMocks.adapterChildren]
-    sidecarMocks.onAdapterSpawn = () => {
-      sidecarMocks.onAdapterSpawn = null
-      firstServer.emit('exit', 23, null)
-    }
-
-    await runtime.restartAdaptersSidecars()
-
-    expect(sidecarMocks.adapterChildren).toHaveLength(6)
-    for (const adapter of originalAdapters) {
-      expect(adapter.kill).toHaveBeenCalledTimes(1)
-    }
-    expect(sidecarMocks.adapterChildren[5]!.kill).toHaveBeenCalledTimes(1)
-
-    await expect(runtime.getServerUrl()).resolves.toBe('http://127.0.0.1:49322')
-    expect(sidecarMocks.serverChildren).toHaveLength(2)
-    expect(sidecarMocks.adapterChildren).toHaveLength(11)
-    for (const adapter of sidecarMocks.adapterChildren.slice(6)) {
-      expect(adapter.kill).not.toHaveBeenCalled()
-    }
-  })
-
-  it('rejects when the published child exits during adapter startup', async () => {
-    const runtime = createRuntime()
-    sidecarMocks.onAdapterSpawn = () => {
-      sidecarMocks.onAdapterSpawn = null
-      sidecarMocks.serverChildren[0]!.emit('exit', 18, 'SIGTERM')
-    }
-
-    await expect(runtime.startServer()).rejects.toThrow('code=18, signal=SIGTERM')
-
-    expect(sidecarMocks.adapterChildren).toHaveLength(1)
-    expect(sidecarMocks.adapterChildren[0]!.kill).toHaveBeenCalledTimes(1)
-
-    await expect(runtime.getServerUrl()).resolves.toBe('http://127.0.0.1:49322')
-    expect(sidecarMocks.serverChildren).toHaveLength(2)
-    expect(sidecarMocks.adapterChildren).toHaveLength(6)
-    for (const adapter of sidecarMocks.adapterChildren.slice(1)) {
-      expect(adapter.kill).not.toHaveBeenCalled()
-    }
   })
 
   it('handles an asynchronous child process error without crashing Electron', async () => {

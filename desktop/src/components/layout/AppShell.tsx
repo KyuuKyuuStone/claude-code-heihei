@@ -293,7 +293,8 @@ export function AppShell() {
                 <div className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-[10px] font-medium text-[var(--color-text-tertiary)]">
                   {activeTab?.status === 'running' ? (
                     <span className="flex shrink-0 items-center gap-1 text-[var(--color-text-secondary)]">
-                      <StatusDot tone="success" pulse />
+                      {/* §2.7：运行中一律 brand，与 TabBar 一致（原 success 已废弃） */}
+                      <StatusDot tone="brand" pulse />
                       {t('session.active')}
                     </span>
                   ) : null}

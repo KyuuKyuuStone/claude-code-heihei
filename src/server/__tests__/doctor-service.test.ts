@@ -147,13 +147,15 @@ describe('DoctorService', () => {
   })
 
   test('still reports a configured optional feature when its file is malformed', async () => {
-    await fs.writeFile(path.join(configDir, 'adapters.json'), '{broken', 'utf-8')
+    // 样本用现存的 cc-heihei-settings 体检项（adapters 项已随 v1.5.0 C10 移除）
+    await fs.mkdir(path.join(configDir, 'cc-heihei'), { recursive: true })
+    await fs.writeFile(path.join(configDir, 'cc-heihei', 'settings.json'), '{broken', 'utf-8')
     const service = new DoctorService({ configDir, homeDir })
 
     const report = await service.getReport()
-    const adapters = report.items.find((item) => item.id === 'adapters')
+    const settings = report.items.find((item) => item.id === 'cc-heihei-settings')
 
-    expect(adapters?.status).toBe('invalid_json')
+    expect(settings?.status).toBe('invalid_json')
     expect(report.summary.invalidCount).toBeGreaterThanOrEqual(1)
     expect(report.summary.neutralCount).toBeGreaterThan(0)
   })

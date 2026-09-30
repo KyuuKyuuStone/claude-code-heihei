@@ -112,10 +112,6 @@ vi.mock('../api/providers', () => ({
   },
 }))
 
-vi.mock('../pages/AdapterSettings', () => ({
-  AdapterSettings: () => <div />,
-}))
-
 vi.mock('../stores/agentStore', () => ({
   useAgentStore: () => ({
     activeAgents: [],

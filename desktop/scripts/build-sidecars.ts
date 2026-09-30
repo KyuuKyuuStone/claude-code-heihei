@@ -11,8 +11,6 @@ const binariesDir = path.join(desktopRoot, 'src-tauri', 'binaries')
 
 const targetTriple =
   process.env.SIDECAR_TARGET_TRIPLE ||
-  process.env.TAURI_ENV_TARGET_TRIPLE ||
-  process.env.CARGO_BUILD_TARGET ||
   (await detectHostTriple())
 
 const bunTarget = mapTargetTripleToBun(targetTriple)
@@ -34,7 +32,7 @@ await stageRipgrepLicenses(binariesDir)
 await stageHostRipgrepForOfflineBuild()
 
 // 单一合并 sidecar：server / cli 共享一份 bun runtime + 共享依赖代码。
-// 调用方（Electron sidecar manager / legacy Tauri host / conversationService）
+// 调用方（Electron sidecar manager / conversationService）
 // 通过第一个 positional 参数选择 'server' 或 'cli' 模式，详见 desktop/sidecars/claude-sidecar.ts。
 await compileExecutable({
   entrypoint: path.join(desktopRoot, 'sidecars/claude-sidecar.ts'),

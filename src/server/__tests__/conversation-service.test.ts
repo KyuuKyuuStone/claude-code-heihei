@@ -10,6 +10,8 @@ import {
 import { ProviderService } from '../services/providerService.js'
 // v1.3.0 阶段2（5d）：crashed 生命周期接线——直插 session 的用例需 registry 前置
 import {
+  beginTurn,
+  getSessionSnapshot,
   markRunning,
   markStarting,
   registerSession,
@@ -322,6 +324,80 @@ describe('ConversationService', () => {
       else process.env.CLAUDE_CODE_EAGER_FLUSH = previous
       resetTerminalShellEnvironmentCacheForTests()
     }
+  })
+
+  // ── v1.5.0 A7：协作会话不注入 computer-use ──
+  test('buildChildEnv disables computer-use for collaboration sessions (A7)', async () => {
+    const service = new ConversationService() as any
+    try {
+      // 员工（花名册在册、非主管、无约束档）
+      registerServantInfoSource(async (sessionId) =>
+        sessionId === 'servant-s1' ? { sessionId, supervisor: false } : null,
+      )
+      const servantEnv = (await service.buildChildEnv('/tmp', undefined, undefined, undefined, undefined, 'servant-s1')) as Record<string, string>
+      expect(servantEnv.CLAUDE_COMPUTER_USE_ENABLED).toBe('0')
+
+      // 主管同样禁用
+      const service2 = new ConversationService() as any
+      registerServantInfoSource(async (sessionId) =>
+        sessionId === 'supervisor-s1' ? { sessionId, supervisor: true } : null,
+      )
+      const supervisorEnv = (await service2.buildChildEnv('/tmp', undefined, undefined, undefined, undefined, 'supervisor-s1')) as Record<string, string>
+      expect(supervisorEnv.CLAUDE_COMPUTER_USE_ENABLED).toBe('0')
+
+      // 普通（非协作）会话行为不变：不注入该变量
+      const service3 = new ConversationService() as any
+      registerServantInfoSource(async () => null)
+      const normalEnv = (await service3.buildChildEnv('/tmp', undefined, undefined, undefined, undefined, 'plain-s1')) as Record<string, string>
+      expect(normalEnv.CLAUDE_COMPUTER_USE_ENABLED).toBeUndefined()
+    } finally {
+      // 恢复生产装配的注入源
+      registerServantInfoSource((sessionId) => servantService.getServant(sessionId))
+    }
+  })
+
+  // ── v1.5.0 C4：sendSdkMessage 同步异常 → 主动 detach + 清 turn ──
+  test('sendSdkMessage detaches a dead socket and clears the turn (C4 half-open connection)', () => {
+    const service = new ConversationService() as any
+    const sessionId = 'halfopen-1'
+    resetRegistryForTests()
+    registerSession(sessionId)
+    markRunning(sessionId)
+    const sent: string[] = []
+    const session = installNetworkTestSession(service, sessionId, sent)
+    // 模拟半开连接：send 抛同步异常（socket 已死但 close 事件未到达）
+    session.sdkSocket = {
+      send() {
+        throw new Error('EPIPE: socket closed')
+      },
+    }
+    const handle = beginTurn(sessionId, { awaitSend: false })
+    expect(handle).not.toBeNull()
+    expect(getSessionSnapshot(sessionId)?.turn).toBe('turn_in_progress')
+
+    const ok = service.sendSdkMessage(sessionId, { type: 'user', message: 'hi' })
+
+    expect(ok).toBe(false) // 未送达，交给上层走失败路径
+    expect(service.isSdkConnected(sessionId)).toBe(false) // socket 已 detach
+    expect(getSessionSnapshot(sessionId)?.turn).toBe('none') // 转圈不会悬空
+  })
+
+  test('sendSdkMessage keeps the connection when send succeeds (C4 no false positive)', () => {
+    const service = new ConversationService() as any
+    const sessionId = 'healthy-1'
+    resetRegistryForTests()
+    registerSession(sessionId)
+    markRunning(sessionId)
+    const sent: string[] = []
+    installNetworkTestSession(service, sessionId, sent)
+    beginTurn(sessionId, { awaitSend: false })
+
+    const ok = service.sendSdkMessage(sessionId, { type: 'user', message: 'hi' })
+
+    expect(ok).toBe(true)
+    expect(service.isSdkConnected(sessionId)).toBe(true)
+    expect(getSessionSnapshot(sessionId)?.turn).toBe('turn_in_progress')
+    expect(sent).toHaveLength(1)
   })
 
   test('buildChildEnv lets caller env override the stream max-duration cap (#766)', async () => {

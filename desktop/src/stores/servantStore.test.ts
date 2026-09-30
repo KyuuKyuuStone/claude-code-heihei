@@ -49,6 +49,7 @@ vi.mock('../api/websocket', () => ({
 
 import type { ServantInfo } from '../api/servants'
 import { useServantStore } from './servantStore'
+import { resetGlobalEventsChannelForTests } from './globalEventsChannel'
 
 function makeServant(overrides: Partial<ServantInfo> = {}): ServantInfo {
   return {
@@ -67,6 +68,7 @@ describe('servantStore', () => {
   beforeEach(() => {
     vi.resetAllMocks()
     wsManagerMock.reset()
+    resetGlobalEventsChannelForTests()
     useServantStore.setState({ bySessionId: {}, isLoading: false })
   })
 
@@ -218,6 +220,86 @@ describe('servantStore', () => {
         data: { sessionId: 'sess-1', turnInProgress: true },
       })
       expect(useServantStore.getState().bySessionId['sess-1']?.turnInProgress).toBe(false)
+    })
+  })
+
+  describe('servant_roster_changed (A6 花名册推送)', () => {
+    const emitRoster = (data: unknown) => wsManagerMock.emitMessage({
+      type: 'system_notification',
+      subtype: 'servant_roster_changed',
+      data,
+    })
+
+    it('added triggers a full roster refetch', async () => {
+      apiListMock.mockResolvedValue({ servants: [makeServant()] })
+      const unsubscribe = useServantStore.getState().subscribeTurnEvents()
+
+      emitRoster({ sessionId: 'sess-1', change: 'added', fields: ['role'] })
+      await vi.waitFor(() => expect(apiListMock).toHaveBeenCalledTimes(1))
+      unsubscribe()
+    })
+
+    it('updated with structural fields triggers a full refetch', async () => {
+      useServantStore.setState({ bySessionId: { 'sess-1': makeServant() } })
+      apiListMock.mockResolvedValue({ servants: [makeServant({ constraint: 'readonly' })] })
+      const unsubscribe = useServantStore.getState().subscribeTurnEvents()
+
+      emitRoster({ sessionId: 'sess-1', change: 'updated', fields: ['constraint'] })
+      await vi.waitFor(() => expect(apiListMock).toHaveBeenCalledTimes(1))
+      unsubscribe()
+    })
+
+    it('updated with an item snapshot replaces the entry without a refetch', () => {
+      useServantStore.setState({ bySessionId: { 'sess-1': makeServant() } })
+      const unsubscribe = useServantStore.getState().subscribeTurnEvents()
+
+      emitRoster({
+        sessionId: 'sess-1',
+        change: 'updated',
+        fields: ['running'],
+        item: makeServant({ running: true }),
+      })
+
+      expect(useServantStore.getState().bySessionId['sess-1']?.running).toBe(true)
+      expect(apiListMock).not.toHaveBeenCalled()
+      unsubscribe()
+    })
+
+    it('removed deletes the entry locally without a refetch', () => {
+      useServantStore.setState({ bySessionId: { 'sess-1': makeServant() } })
+      const unsubscribe = useServantStore.getState().subscribeTurnEvents()
+
+      emitRoster({ sessionId: 'sess-1', change: 'removed' })
+
+      expect(useServantStore.getState().bySessionId['sess-1']).toBeUndefined()
+      expect(apiListMock).not.toHaveBeenCalled()
+      unsubscribe()
+    })
+
+    it('ignores updated/removed for sessions not in the roster', () => {
+      const unsubscribe = useServantStore.getState().subscribeTurnEvents()
+
+      emitRoster({ sessionId: 'sess-unknown', change: 'removed' })
+      emitRoster({
+        sessionId: 'sess-unknown',
+        change: 'updated',
+        fields: ['running'],
+        item: makeServant({ sessionId: 'sess-unknown', running: true }),
+      })
+
+      expect(useServantStore.getState().bySessionId['sess-unknown']).toBeUndefined()
+      expect(apiListMock).not.toHaveBeenCalled()
+      unsubscribe()
+    })
+
+    it('ignores throttled lastActivityAt-only events without an item (no refetch storm)', () => {
+      useServantStore.setState({ bySessionId: { 'sess-1': makeServant() } })
+      const unsubscribe = useServantStore.getState().subscribeTurnEvents()
+
+      emitRoster({ sessionId: 'sess-1', change: 'updated', fields: ['lastActivityAt'] })
+
+      expect(apiListMock).not.toHaveBeenCalled()
+      unsubscribe()
     })
   })
 })

@@ -24,6 +24,8 @@ import { readFileSync, unlinkSync } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { renameWithRetry } from '../../utils/atomicFs.js'
+import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 
 export type DesktopServerInfo = {
   url: string
@@ -41,20 +43,59 @@ export type ServerIdentity = {
 
 export const DESKTOP_SERVER_INFO_FILENAME = 'desktop-server.json'
 
+/**
+ * 「我是桌面 app 拉起的正式 sidecar」标记（v1.5.0）。
+ *
+ * 由来（真实事故，2026-09-29）：端口文件是**单一槽位**的对外契约，任何实例
+ * 启动都会覆盖它、退出时按 pid 归属决定是否清除。测试套件里 `startServer(0)`
+ * 的用例（conversations / tasks）会拉起真实监听的服务端——它不是提供服务的
+ * 那个实例，却把正在服务的桌面 app 从端口文件上挤掉；测试进程退出后文件残留，
+ * 所有按契约读文件的员工都先撞死地址（实测 ECONNREFUSED）。
+ *
+ * 因此：**只有桌面 app 拉起的正式 sidecar 才写/清端口文件**。
+ * marker 由 desktop/electron/services/sidecarManager.ts 的 buildSidecarEnv
+ * 注入（dev 模式 `bun run electron:dev` 走同一个 sidecarManager，同样会写，
+ * 符合预期）；测试、脚本、手工 `bun src/server/index.ts` 一律不写。
+ *
+ * 注意：读端口文件**不做门槛**——所有进程（含测试）都有读取权。
+ */
+export const DESKTOP_SIDECAR_ENV_MARKER = 'CC_HEIHEI_DESKTOP_SIDECAR'
+
+/** 本进程是否为桌面 app 拉起的正式 sidecar */
+export function isDesktopSidecarProcess(): boolean {
+  return process.env[DESKTOP_SIDECAR_ENV_MARKER] === '1'
+}
+
 /** 模块加载即定格的启动时间（ISO8601）；端口文件与 whoami 共用同一值 */
 const STARTED_AT = new Date().toISOString()
 
-/** package.json version（启动时读一次缓存；读不到退 'unknown'，不炸启动） */
+/**
+ * 应用版本（启动时解析一次缓存）。
+ * v1.5.0 C3：打包 sidecar 下原来的 `../../../package.json`（仓库根，开发占位
+ * 999.0.0-local）读不到/不可靠，whoami 实测返回 unknown。改为多级来源：
+ *   ① env `CC_HEIHEI_APP_VERSION`（打包链注入，最权威；打包脚本由运维拨出）
+ *   ② desktop/package.json（用户可见的真实版本号，如 1.4.1）
+ * 都读不到退 'unknown'——宁可显式未知，也不回退仓库根的 999.0.0-local 占位
+ * 误导探活方。
+ */
 let cachedVersion: string | null = null
+
+function readVersionFrom(pkgUrl: URL): string | null {
+  try {
+    const parsed = JSON.parse(readFileSync(pkgUrl, 'utf-8')) as { version?: unknown }
+    return typeof parsed.version === 'string' && parsed.version.trim() ? parsed.version : null
+  } catch {
+    return null
+  }
+}
+
 function resolvePackageVersion(): string {
   if (cachedVersion !== null) return cachedVersion
-  try {
-    const raw = readFileSync(new URL('../../../package.json', import.meta.url), 'utf-8')
-    const parsed = JSON.parse(raw) as { version?: unknown }
-    cachedVersion = typeof parsed.version === 'string' ? parsed.version : 'unknown'
-  } catch {
-    cachedVersion = 'unknown'
-  }
+  const fromEnv = process.env.CC_HEIHEI_APP_VERSION
+  cachedVersion =
+    (fromEnv && fromEnv.trim() ? fromEnv : null) ??
+    readVersionFrom(new URL('../../../desktop/package.json', import.meta.url)) ??
+    'unknown'
   return cachedVersion
 }
 
@@ -84,6 +125,13 @@ export async function writeDesktopServerInfo(
   port: number,
   opts?: { home?: string },
 ): Promise<void> {
+  // 门控：非正式 sidecar（测试/脚本/手工启动）不得占用端口文件槽位
+  if (!isDesktopSidecarProcess()) {
+    logForDiagnosticsNoPII('debug', 'server_info_write_skipped_not_sidecar', {
+      port,
+    })
+    return
+  }
   const dir = desktopServerInfoDir(opts?.home)
   const info: DesktopServerInfo = {
     url: `http://127.0.0.1:${port}`,
@@ -92,20 +140,86 @@ export async function writeDesktopServerInfo(
     startedAt: STARTED_AT,
   }
   await fs.mkdir(dir, { recursive: true })
-  await fs.writeFile(path.join(dir, DESKTOP_SERVER_INFO_FILENAME), JSON.stringify(info, null, 2), 'utf-8')
+  // 低-2（v1.5.0）：先清扫同目录的陈旧 tmp（<文件>.<pid>.tmp，其 pid 已死）。
+  // 进程被强杀时可能留下半截 tmp；不清会累积，也会与「读目录判断端口文件」的
+  // 逻辑混淆。失败只记 debug（清扫是卫生项，不影响本次写入）。
+  await sweepStaleServerInfoTmp(dir)
+  // C3（v1.5.0）：tmp + rename 原子落盘（对跳 EPERM/EBUSY 重试）——读取方
+  // （员工投递前读端口文件）不会读到半截 JSON。
+  const finalPath = path.join(dir, DESKTOP_SERVER_INFO_FILENAME)
+  const tmpPath = `${finalPath}.${process.pid}.tmp`
+  await fs.writeFile(tmpPath, JSON.stringify(info, null, 2), 'utf-8')
+  await renameWithRetry(fs, tmpPath, finalPath)
 }
 
-/** 正常退出清理（SIGTERM/SIGINT 路径 await；'exit' 兜底走同步变体） */
+/**
+ * 清扫同目录里属于**已死进程**的 desktop-server.json.<pid>.tmp。
+ * 本进程自己的 tmp 不动（正在写）。任何失败只记 debug 诊断。
+ */
+async function sweepStaleServerInfoTmp(dir: string): Promise<void> {
+  const prefix = `${DESKTOP_SERVER_INFO_FILENAME}.`
+  try {
+    const entries = await fs.readdir(dir)
+    for (const entry of entries) {
+      if (!entry.startsWith(prefix) || !entry.endsWith('.tmp')) continue
+      const pidText = entry.slice(prefix.length, -'.tmp'.length)
+      const pid = Number.parseInt(pidText, 10)
+      if (!Number.isInteger(pid) || pid <= 0) continue
+      if (pid === process.pid) continue
+      if (isPidAlive(pid)) continue
+      await fs.rm(path.join(dir, entry), { force: true })
+    }
+  } catch (error) {
+    logForDiagnosticsNoPII('debug', 'server_info_tmp_sweep_failed', {
+      dir,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
+ * 正常退出清理（SIGTERM/SIGINT 路径 await；'exit' 兜底走同步变体）。
+ * C3（v1.5.0）：只删**本进程写的**文件——文件记录的 pid 是另一个（正整数）
+ * pid 时跳过，多实例并存/接力启动时不得清掉后来者的端口文件。坏文件
+ * （读不出结构）照删，避免永久残留误导读取方。
+ */
 export async function clearDesktopServerInfo(opts?: { home?: string }): Promise<void> {
+  // 门控同上：没写过文件的进程也不得删别人的文件
+  if (!isDesktopSidecarProcess()) {
+    logForDiagnosticsNoPII('debug', 'server_info_clear_skipped_not_sidecar', {})
+    return
+  }
+  const current = await readDesktopServerInfo(opts)
+  if (
+    current &&
+    Number.isInteger(current.pid) &&
+    current.pid > 0 &&
+    current.pid !== process.pid
+  ) {
+    return
+  }
   await fs.rm(path.join(desktopServerInfoDir(opts?.home), DESKTOP_SERVER_INFO_FILENAME), {
     force: true,
   })
 }
 
-/** 'exit' 处理器内的同步兜底（异步回调在退出路径不保证执行） */
+/**
+ * 'exit' 处理器内的同步兜底（异步回调在退出路径不保证执行）。
+ * C3：同步路径做同样的 pid 归属校验（读-判-删全同步完成）。
+ */
 export function clearDesktopServerInfoSync(opts?: { home?: string }): void {
+  if (!isDesktopSidecarProcess()) return
+  const file = path.join(desktopServerInfoDir(opts?.home), DESKTOP_SERVER_INFO_FILENAME)
   try {
-    unlinkSync(path.join(desktopServerInfoDir(opts?.home), DESKTOP_SERVER_INFO_FILENAME))
+    const parsed = JSON.parse(readFileSync(file, 'utf-8')) as { pid?: unknown }
+    if (typeof parsed.pid === 'number' && Number.isInteger(parsed.pid) && parsed.pid > 0 && parsed.pid !== process.pid) {
+      return
+    }
+  } catch {
+    // 文件不存在/坏内容：继续尝试删除（坏文件照删）
+  }
+  try {
+    unlinkSync(file)
   } catch {
     // 文件不存在/被占用：清理失败不阻塞退出
   }

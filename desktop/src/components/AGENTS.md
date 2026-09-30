@@ -4,8 +4,6 @@
 
 规则优先级：根 `AGENTS.md` < `desktop/AGENTS.md` < 本文件。冲突时以本文件为准。
 
-配套文档：[`desktop/docs/component-library-plan.md`](../../docs/component-library-plan.md) 记录审计证据与后续计划。
-
 ---
 
 ## 一、我要做 X，用什么

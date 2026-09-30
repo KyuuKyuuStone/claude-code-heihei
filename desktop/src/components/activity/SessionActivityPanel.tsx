@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, ChevronRight, Circle, FileText, LoaderCircle, Square, Terminal, Users, X } from 'lucide-react'
+import { Check, ChevronRight, Circle, FileText, Square, Terminal, Users, X } from 'lucide-react'
 import { Badge, StatusDot, type Tone } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { IconButton } from '@/components/ui/IconButton'
 import { Progress } from '@/components/ui/Progress'
+import { Spinner } from '@/components/ui/Spinner'
 import { useDismissable } from '@/hooks/useDismissable'
 import { AgentMascot } from './AgentMascot'
 import { getVisibleActivitySections, type ActivityRow, type ActivitySectionId, type SessionActivityModel } from './sessionActivityModel'
@@ -177,15 +178,9 @@ function TaskStatusMarker({ status, t }: { status: ActivityRow['status']; t: Tra
   }
 
   if (status === 'in_progress' || status === 'running') {
-    // Not `Spinner`: this panel's markers stop under reduced motion, while
-    // `Spinner` deliberately slows instead. `SessionActivityPanel.test.tsx`
-    // asserts both the `motion-reduce:animate-none` and the absence of a bare
-    // `.animate-spin` inside a row.
+    // P0-5：转圈唯一出口是共享 Spinner（reduced-motion 减速策略随之统一）。
     return (
-      <span
-        aria-label={t('session.activity.task.inProgress')}
-        className="inline-flex h-5 w-5 shrink-0 rounded-full border-[2.5px] border-[var(--color-primary-fixed-dim)] border-t-[var(--color-brand)] motion-safe:animate-spin motion-reduce:animate-none"
-      />
+      <Spinner size={20} tone="brand" label={t('session.activity.task.inProgress')} />
     )
   }
 
@@ -282,7 +277,7 @@ function BackgroundTaskStopButton({
   return (
     <IconButton
       icon={stopping ? (
-        <LoaderCircle size={14} strokeWidth={2.2} className="motion-safe:animate-spin motion-reduce:animate-none" aria-hidden="true" />
+        <Spinner size={14} />
       ) : (
         <Square size={12} strokeWidth={2.4} aria-hidden="true" />
       )}

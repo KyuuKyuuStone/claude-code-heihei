@@ -4,6 +4,7 @@ import { useSessionStore } from '../../stores/sessionStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useTranslation, type TranslationKey } from '../../i18n'
 import { BrandSeal } from '@/components/composite/BrandSeal'
+import { Badge, StatusDot } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -44,7 +45,9 @@ const desktopHost = getDesktopHost()
 const isDesktopRuntime = desktopHost.isDesktop
 const canUseNativeDialogs = desktopHost.capabilities.dialogs
 const isWindows = typeof navigator !== 'undefined' && /Win/.test(navigator.platform)
-const SESSION_LIST_AUTO_REFRESH_MS = 30_000
+// v1.5.0 C12：会话列表改由 session_list_invalidated 推送驱动（300ms 防抖），
+// 120s 轮询仅作断线兜底（重连全量刷新保留在 subscribeSessionListEvents 内）。
+const SESSION_LIST_AUTO_REFRESH_MS = 120_000
 const SESSION_LIST_FOCUS_REFRESH_MIN_MS = 5_000
 const PROJECT_ORDER_STORAGE_KEY = 'cc-heihei-sidebar-project-order'
 const PROJECT_PINNED_STORAGE_KEY = 'cc-heihei-sidebar-pinned-projects'
@@ -144,12 +147,12 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
 
   useEffect(() => {
     void fetchServants()
-    // 事件驱动即时更新（转圈残留根治·方案B）：回合翻转经 _events 通道推送，
-    // 花名册状态灯不等轮询。20s 轮询保留作兜底（running/lastActivityAt 仍靠它）。
+    // 事件驱动即时更新：回合翻转（方案B）与花名册增删改（A6）都经 _events
+    // 通道推送。120s 轮询仅作兜底（推送是优化不是真相源，重连会全量对齐）。
     const unsubscribeTurnEvents = subscribeTurnEvents()
     const rosterTimer = setInterval(() => {
       void fetchServants().catch(() => {})
-    }, 20_000)
+    }, 120_000)
     return () => {
       unsubscribeTurnEvents()
       clearInterval(rosterTimer)
@@ -873,7 +876,10 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
                 <kbd className="pointer-events-none shrink-0 rounded border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-1 font-mono text-[10px] leading-tight text-[var(--color-text-tertiary)]">⌘K</kbd>
               </button>
               <IconButton
-                icon={<RefreshCw className={`h-4 w-4 ${showRefreshLoading ? 'animate-spin' : ''}`} strokeWidth={1.9} aria-hidden="true" />}
+                icon={showRefreshLoading
+                  // B9/P0-5：转圈唯一出口是共享 Spinner，不再给 RefreshCw 套 animate-spin
+                  ? <Spinner size={16} />
+                  : <RefreshCw className="h-4 w-4" strokeWidth={1.9} aria-hidden="true" />}
                 label={t('sidebar.refreshSessions')}
                 onClick={() => void refreshSessionsNow()}
                 size={isMobile ? '2xl' : 'lg'}
@@ -901,7 +907,7 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
             className="sidebar-section sidebar-section--visible flex flex-1 min-h-0 flex-col"
           >
             {isBatchMode && (
-              <div className="mx-3 mb-2 rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-2 shadow-sm">
+              <div className="mx-3 mb-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-2 shadow-sm">
                 <div className="flex items-center justify-between gap-2">
                   <span className="min-w-0 text-xs font-medium text-[var(--color-text-primary)]">
                     {t('sidebar.batchSelectedCount', { count: selectedCount })}
@@ -1170,7 +1176,7 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
                                   <span className="flex min-w-0 items-center gap-2">
                                     {isBatchMode ? (
                                       <span
-                                        className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-[5px] border transition-colors ${
+                                        className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-[var(--radius-sm)] border transition-colors ${
                                           selectedSessionIds.has(session.id)
                                             ? 'border-[var(--color-brand)] bg-[var(--color-brand)] text-[var(--color-on-primary)]'
                                             // Hairline `--color-border` only reaches 1.2:1 here; a control
@@ -1193,42 +1199,33 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
                                           : status === 'waiting'
                                             ? t('sidebar.servantStatusWaiting')
                                             : t('sidebar.servantStatusIdle')
-                                      return status === 'busy' ? (
-                                        // 点+环：实心绿点外套旋转圆环表达「正在干活」，
-                                        // 与 SessionActivityPanel 的 spinner 同款
-                                        // （motion-safe 才转，motion-reduce 静止成弧线+点）。
-                                        <span className="relative flex-shrink-0 h-3 w-3" title={title}>
-                                          <span
-                                            aria-hidden="true"
-                                            className="absolute inset-0 rounded-full border-2 border-[var(--color-success-container)] border-t-[var(--color-success)] motion-safe:animate-spin motion-reduce:animate-none"
-                                          />
-                                          <span
-                                            aria-hidden="true"
-                                            className="absolute inset-[3px] rounded-full bg-[var(--color-success)]"
-                                          />
+                                      // §2.7/§3.1 状态语义：忙碌=brand 脉冲点（不再自绘绿环），
+                                      // 待命=实心灰点，未运行=空心灰环。
+                                      return (
+                                        <span className="flex flex-shrink-0 items-center" title={title}>
+                                          {status === 'busy' ? (
+                                            <StatusDot tone="brand" size="md" pulse label={title} />
+                                          ) : status === 'waiting' ? (
+                                            <StatusDot tone="neutral" size="md" label={title} />
+                                          ) : (
+                                            <span
+                                              role="status"
+                                              aria-label={title}
+                                              className="h-2 w-2 rounded-full border-[1.5px] border-[var(--color-border-strong)]"
+                                            />
+                                          )}
                                         </span>
-                                      ) : (
-                                        <span
-                                          className="flex-shrink-0 h-2 w-2 rounded-full bg-[var(--color-text-tertiary)]"
-                                          title={title}
-                                        />
                                       )
                                     })()}
                                     {servantsById[session.id]?.supervisor && (
-                                      <span
-                                        className="flex-shrink-0 rounded-[var(--radius-sm)] bg-[var(--color-warning-container,#f5e6c8)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-on-warning-container,#6b4e00)]"
-                                        title={t('sidebar.supervisorBadge')}
-                                      >
+                                      <Badge tone="warning" size="xs" title={t('sidebar.supervisorBadge')}>
                                         {t('sidebar.supervisorBadge')}
-                                      </span>
+                                      </Badge>
                                     )}
                                     {!servantsById[session.id]?.supervisor && servantsById[session.id]?.role && (
-                                      <span
-                                        className="flex-shrink-0 rounded-[var(--radius-sm)] bg-[var(--color-brand-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-on-brand-soft)]"
-                                        title={t('sidebar.servantRole')}
-                                      >
+                                      <Badge tone="brand" size="xs" title={t('sidebar.servantRole')}>
                                         {servantsById[session.id]!.role}
-                                      </span>
+                                      </Badge>
                                     )}
                                     {getSessionWorkspaceState(session) === 'missing' && (
                                       <span
@@ -1553,6 +1550,7 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
 function useSessionListAutoRefresh(fetchSessions: () => Promise<void>): () => Promise<void> {
   const inFlightRef = useRef<Promise<void> | null>(null)
   const lastStartedAtRef = useRef(0)
+  const subscribeSessionListEvents = useSessionStore((s) => s.subscribeSessionListEvents)
 
   const refreshSessions = useCallback((force = false) => {
     if (inFlightRef.current && !force) return inFlightRef.current
@@ -1578,6 +1576,10 @@ function useSessionListAutoRefresh(fetchSessions: () => Promise<void>): () => Pr
   useEffect(() => {
     void refreshSessions(true)
 
+    // C12：服务端列表失效推送 → 300ms 防抖刷新（免高频轮询）；重连全量对齐
+    // 由订阅内部处理。
+    const unsubscribeListEvents = subscribeSessionListEvents()
+
     const refreshIfVisible = () => {
       if (!isDocumentVisible()) return
       void refreshSessions()
@@ -1591,11 +1593,12 @@ function useSessionListAutoRefresh(fetchSessions: () => Promise<void>): () => Pr
     }, SESSION_LIST_AUTO_REFRESH_MS)
 
     return () => {
+      unsubscribeListEvents()
       window.removeEventListener('focus', refreshIfVisible)
       document.removeEventListener('visibilitychange', refreshIfVisible)
       window.clearInterval(timer)
     }
-  }, [refreshSessions])
+  }, [refreshSessions, subscribeSessionListEvents])
 
   return useCallback(() => refreshSessions(true), [refreshSessions])
 }

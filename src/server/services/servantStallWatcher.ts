@@ -15,6 +15,7 @@
  */
 
 import { diagnosticsService } from './diagnosticsService.js'
+import { CORE_INLINE_TOOLS_TEXT } from '../../collaboration/dispatchProtocol.js'
 import { conversationService } from './conversationService.js'
 import { countUnconsumedReceipts, isSessionTurnInProgress } from './dispatchReceiptService.js'
 import { servantService } from './servantService.js'
@@ -24,6 +25,9 @@ import { ProviderService } from './providerService.js'
 const WATCH_INTERVAL_MS = 60_000
 /** 运行中但无活动超过该阈值 = 假死 */
 export const STALL_THRESHOLD_MS = 10 * 60_000
+
+/** C4（v1.5.0）：假死重推连续投递失败达此值 → 升级一条 error 级上报（清零重计） */
+const NUDGE_FAIL_ALERT_THRESHOLD = 3
 /** 同一卡死 episode 的最大自动重推次数，超过则升级主管 */
 export const MAX_AUTO_REPUSH = 3
 
@@ -86,6 +90,8 @@ export class ServantStallWatcher {
   private noProcessSkippedAt = new Map<string, number>()
   /** sessionId → 已上报过的「盲区失联」episode 活动时间戳（同一 episode 只报一次） */
   private blindAlertedAt = new Map<string, number>()
+  /** sessionId → 假死重推连续投递失败次数（C4：达阈值升级上报后清零重计） */
+  private nudgeFailStreak = new Map<string, number>()
 
   constructor(private deps: ServantStallWatcherDeps = defaultDeps) {}
 
@@ -100,6 +106,7 @@ export class ServantStallWatcher {
     this.noProcessAlertedAt.clear()
     this.noProcessSkippedAt.clear()
     this.blindAlertedAt.clear()
+    this.nudgeFailStreak.clear()
   }
 
   start(): void {
@@ -259,21 +266,39 @@ export class ServantStallWatcher {
       const roleText = servant.role ? `${servant.role}（${servant.title}）` : servant.title
       const nudge = [
         `【系统】你已经 ${Math.round(staleFor / 60_000)} 分钟没有任何活动，疑似卡住（自动重推 ${current.nudges + 1}/${MAX_AUTO_REPUSH}）。`,
-        '请汇报当前状态与卡点：1) 若在等待或重试某个失败操作，改用替代方案；2) 若工具调用报错：核心工具（Bash/Read/Write/Glob/Grep）本就内联可用，直接调用即可，不要用 ToolSearch 反复加载；3) 完成或无法继续时，用 .heihei/dispatch/ 信箱向主管汇报。',
+        `请汇报当前状态与卡点：1) 若在等待或重试某个失败操作，改用替代方案；2) 若工具调用报错：核心工具（${CORE_INLINE_TOOLS_TEXT}）本就内联可用，直接调用即可，不要用 ToolSearch 反复加载；3) 完成或无法继续时，用 .heihei/dispatch/ 信箱向主管汇报。`,
       ].join('\n')
 
       // 投递成功才计入次数：旧实现在投递【之前】就 nudges++，投递失败也会吃掉一次额度。
       const delivered = await this.tryDeliver(servant.sessionId, nudge)
       if (!delivered) {
-        this.report(
-          'warn',
-          'nudge-failed',
-          `假死重推投递失败（未计入重推次数）：${roleText}（会话 ID：${servant.sessionId}）`,
-          servant.sessionId,
-          { staleForMs: staleFor, running: true },
-        )
+        // C4（v1.5.0）：回合进行中且投递连续失败——重推根本送不进去（半开
+        // socket/目标不可达）。逐次 warn 会退化成每轮扫描的噪音；计数到阈值
+        // 升级为一条 error 级上报（清零后重新累计），让「重推失效」从噪音
+        // 变成可行动信号。
+        const failures = (this.nudgeFailStreak.get(key) ?? 0) + 1
+        if (failures >= NUDGE_FAIL_ALERT_THRESHOLD) {
+          this.nudgeFailStreak.delete(key)
+          this.report(
+            'error',
+            'nudge-deliver-failed-streak',
+            `员工会话回合进行中但假死重推连续 ${NUDGE_FAIL_ALERT_THRESHOLD} 次投递失败（连接可能已断/目标不可达）：${roleText}（会话 ID：${servant.sessionId}）——任务状态不可知，建议在 UI 重开该会话。`,
+            servant.sessionId,
+            { staleForMs: staleFor, running: true, consecutiveFailures: failures },
+          )
+        } else {
+          this.nudgeFailStreak.set(key, failures)
+          this.report(
+            'warn',
+            'nudge-failed',
+            `假死重推投递失败（未计入重推次数，连续 ${failures}/${NUDGE_FAIL_ALERT_THRESHOLD}）：${roleText}（会话 ID：${servant.sessionId}）`,
+            servant.sessionId,
+            { staleForMs: staleFor, running: true, consecutiveFailures: failures },
+          )
+        }
         continue
       }
+      this.nudgeFailStreak.delete(key)
 
       current.nudges++
       this.stallStates.set(key, current)

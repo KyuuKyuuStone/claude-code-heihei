@@ -1,9 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import {
   classifyFailures,
+  classifyRerunDistribution,
+  isRerunGreen,
   matchKnownFlaky,
   parseJunit,
   verdict,
+  type JunitCase,
 } from './acceptance-lib.ts'
 
 // junit 样例按 bun 1.3.14 的真实输出结构构造（字段：name/classname/file/failures）
@@ -39,6 +42,7 @@ describe('parseJunit', () => {
       const parsed = parseJunit(input)
       expect(parsed.failures).toHaveLength(0)
       expect(parsed.total).toBe(0)
+      expect(parsed.cases).toHaveLength(0)
     }
   })
 
@@ -54,6 +58,13 @@ describe('parseJunit', () => {
     expect(parsed.failures[0]!.name).toBe('red test')
     expect(parsed.failures[0]!.file).toContain('a.test.ts')
     expect(parsed.failures[0]!.message).toContain('expected 1 to be 2')
+  })
+
+  test('cases 保留 classname（低2：name+classname 二元组匹配的数据基础）', () => {
+    const parsed = parseJunit(SAMPLE_XML)
+    expect(parsed.cases).toHaveLength(3)
+    expect(parsed.cases[0]!.classname).toBe('demo suite')
+    expect(parsed.failures[0]!.classname).toBe('demo suite')
   })
 })
 
@@ -105,5 +116,72 @@ describe('verdict', () => {
     expect(verdict([noise])).toMatchObject({ result: 'PASS', realRegressions: 0, envNoise: 1 })
     expect(verdict([noise, real])).toMatchObject({ result: 'FAIL', realRegressions: 1 })
     expect(verdict([])).toMatchObject({ result: 'PASS' })
+  })
+})
+
+describe('classifyRerunDistribution（中1：≥2 红=真回归，恰 1 红=噪声）', () => {
+  test('0 红 → 环境噪声', () => {
+    expect(classifyRerunDistribution(3, 3)).toBe('env-noise')
+  })
+  test('恰好 1 红 → 环境噪声（单一偶发窗口可解释）', () => {
+    expect(classifyRerunDistribution(2, 3)).toBe('env-noise')
+  })
+  test('2 红 → 真回归', () => {
+    expect(classifyRerunDistribution(1, 3)).toBe('real-regression')
+  })
+  test('3 红 → 真回归', () => {
+    expect(classifyRerunDistribution(0, 3)).toBe('real-regression')
+  })
+})
+
+describe('isRerunGreen（C1：没跑到 ≠ 跑过了）', () => {
+  const failure: JunitCase = {
+    name: 'target case',
+    classname: 'demo suite',
+    file: 'src/server/__tests__/demo.test.ts',
+    failed: true,
+  }
+  const RERUN_JUNIT = (body: string) =>
+    `<?xml version="1.0"?><testsuites name="bun test" tests="2" failures="0" time="1"><testsuite name="demo" tests="2" failures="0">${body}</testsuite></testsuites>`
+
+  test('目标用例存在且通过 → 绿', () => {
+    const rerun = parseJunit(RERUN_JUNIT(
+      '<testcase name="target case" classname="demo suite" file="demo.test.ts" /><testcase name="other" classname="demo suite" file="demo.test.ts" />',
+    ))
+    expect(isRerunGreen(rerun, failure)).toBe(true)
+  })
+
+  test('目标用例存在但失败 → 红', () => {
+    const rerun = parseJunit(RERUN_JUNIT(
+      '<testcase name="target case" classname="demo suite" file="demo.test.ts"><failure message="boom">x</failure></testcase>',
+    ))
+    expect(isRerunGreen(rerun, failure)).toBe(false)
+  })
+
+  test('崩溃/半写：junit 缺目标用例（别的用例都过了）→ 红（C1 核心场景）', () => {
+    const rerun = parseJunit(RERUN_JUNIT(
+      '<testcase name="other case" classname="demo suite" file="demo.test.ts" />',
+    ))
+    expect(isRerunGreen(rerun, failure)).toBe(false)
+  })
+
+  test('崩溃/半写：junit 总数为 0（空壳 testsuites）→ 红', () => {
+    const rerun = parseJunit('<?xml version="1.0"?><testsuites name="bun test" tests="0" failures="0" time="0"></testsuites>')
+    expect(isRerunGreen(rerun, failure)).toBe(false)
+  })
+
+  test('同名用例跨 describe：classname 不同 → 不误判为绿（低2）', () => {
+    const rerun = parseJunit(RERUN_JUNIT(
+      '<testcase name="target case" classname="another suite" file="demo.test.ts" />',
+    ))
+    expect(isRerunGreen(rerun, failure)).toBe(false)
+  })
+
+  test('失败项缺 classname（旧行为兼容）→ 只按 name 匹配', () => {
+    const noClassFailure: JunitCase = { ...failure, classname: '' }
+    const rerun = parseJunit(RERUN_JUNIT(
+      '<testcase name="target case" classname="whatever" file="demo.test.ts" />',
+    ))
+    expect(isRerunGreen(rerun, noClassFailure)).toBe(true)
   })
 })

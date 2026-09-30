@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -9,6 +9,9 @@ import { describe, expect, it } from 'vitest'
  * `scripts/quality-gate/package-smoke/` makes no icon assertions, so a build
  * that ships a stale or half-replaced icon set goes green on every pipeline.
  * The rules below were each learned by breaking them.
+ *
+ * Windows-only since v1.5.0: the macOS/Linux icon sets were removed along with
+ * the rest of the non-Windows platform surface.
  */
 const desktopRoot = __dirname
 const icons = path.join(desktopRoot, 'src-tauri', 'icons')
@@ -26,22 +29,11 @@ describe('icon assets', () => {
     expect(sha(source)).toBe(sha(runtime))
   })
 
-  it('ships the sizes Linux actually looks for', () => {
-    // electron-builder points `linux.icon` at the whole icons/ directory and
-    // keeps only files named NxN. `icon.png` (512) has no dimensions in its
-    // name and `128x128@2x.png` (256) collides with `128x128.png`, so both are
-    // dropped — which once left the largest Linux icon at 310px, from a
-    // Windows Store asset, and blurry on HiDPI.
-    const present = new Set(readdirSync(icons))
-    for (const size of [32, 64, 128, 256, 512]) {
-      expect(present.has(`${size}x${size}.png`)).toBe(true)
-    }
-  })
-
-  it('carries a packaged icon for every desktop platform', () => {
-    // mac.icon / win.icon in package.json name these two directly; a missing
-    // file makes electron-builder silently fall back to the Electron logo.
-    for (const file of ['icon.icns', 'icon.ico', 'icon.png']) {
+  it('carries the packaged Windows icons', () => {
+    // win.icon in package.json names icon.ico directly; a missing file makes
+    // electron-builder silently fall back to the Electron logo. icon.png backs
+    // the tray.
+    for (const file of ['icon.ico', 'icon.png']) {
       const full = path.join(icons, file)
       expect(existsSync(full)).toBe(true)
       expect(readFileSync(full).byteLength).toBeGreaterThan(1024)

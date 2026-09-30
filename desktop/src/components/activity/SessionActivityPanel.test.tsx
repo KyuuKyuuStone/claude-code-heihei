@@ -163,14 +163,10 @@ describe('SessionActivityPanel', () => {
     expect(screen.getByLabelText('Task completed')).toBeInTheDocument()
     expect(screen.getByLabelText('Task in progress')).toBeInTheDocument()
     expect(screen.getByLabelText('Task pending')).toBeInTheDocument()
-    // The in-progress marker is the design's terracotta ring — a bordered
-    // circle, not an icon — so the animation classes sit on the marker itself.
-    // It still stops rather than slows under reduced motion, which is why this
-    // panel does not use `Spinner`.
-    expect(screen.getByLabelText('Task in progress')).toHaveClass('motion-safe:animate-spin')
-    expect(screen.getByLabelText('Task in progress')).toHaveClass('motion-reduce:animate-none')
-    expect(screen.getByLabelText('Task in progress')).toHaveClass('rounded-full')
-    expect(screen.getByLabelText('Task in progress').querySelector('svg')).toBeNull()
+    // P0-5：进行中的标记收敛为共享 Spinner（SVG，reduced-motion 策略随之统一）
+    const inProgress = screen.getByLabelText('Task in progress')
+    expect(inProgress.tagName).toBe('svg')
+    expect(inProgress).toHaveClass('animate-spin')
     expect(screen.getByText('Active task').closest('button,div')).toHaveClass('py-2.5')
     expect(screen.getByText('Finished task')).toHaveClass('line-through')
     expect(screen.queryByText('Completed')).not.toBeInTheDocument()
@@ -454,10 +450,9 @@ describe('SessionActivityPanel', () => {
     expect(mascot).toHaveAttribute('data-agent-mascot-tone', 'accent')
     expect(mascot).toHaveAttribute('data-agent-mascot-variant')
     expect(motionRing).toBeInTheDocument()
-    expect(motionRing).toHaveClass('motion-safe:animate-spin')
-    expect(motionRing).toHaveClass('motion-reduce:animate-none')
+    // P0-5：活动环即共享 Spinner（SVG animate-spin 由 Spinner 统一提供）
+    expect(motionRing.querySelector('svg')).toHaveClass('animate-spin')
     expect(row.querySelector('.animate-pulse-dot')).not.toBeInTheDocument()
-    expect(row.querySelector('.animate-spin')).not.toBeInTheDocument()
     expect(row.querySelector('.animate-ping')).not.toBeInTheDocument()
   })
 

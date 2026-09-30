@@ -12,11 +12,6 @@ import * as crypto from 'crypto'
 import { ApiError } from '../middleware/errorHandler.js'
 import { renameWithRetry } from '../../utils/atomicFs.js'
 
-export type TaskNotificationConfig = {
-  enabled: boolean
-  channels: ('desktop' | 'telegram' | 'feishu')[]
-}
-
 export type CronTask = {
   id: string
   name?: string
@@ -33,7 +28,6 @@ export type CronTask = {
   providerId?: string | null
   folderPath?: string
   useWorktree?: boolean
-  notification?: TaskNotificationConfig
 }
 
 type TasksFile = {
@@ -72,12 +66,14 @@ export class CronService {
     }
 
     const data = await this.readTasksFile()
-    const newTask: CronTask = {
+    // 数据边界剥离死字段：旧客户端（或第三方脚本）仍可能发 notification，
+    // 不能让它经 createTask 重新写入任务文件。
+    const newTask: CronTask = this.stripLegacyTaskFields({
       ...task,
       permissionMode: 'bypassPermissions',
       id: crypto.randomBytes(4).toString('hex'),
       createdAt: Date.now(),
-    }
+    } as CronTask)
     data.tasks.push(newTask)
     await this.writeTasksFile(data)
     return newTask
@@ -93,11 +89,11 @@ export class CronService {
 
     // 不允许修改 id 和 createdAt
     const { id: _id, createdAt: _ca, ...safeUpdates } = updates
-    data.tasks[index] = {
+    data.tasks[index] = this.stripLegacyTaskFields({
       ...data.tasks[index],
       ...safeUpdates,
       permissionMode: 'bypassPermissions',
-    }
+    } as CronTask)
     await this.writeTasksFile(data)
     return data.tasks[index]
   }
@@ -137,7 +133,9 @@ export class CronService {
       if (!Array.isArray(parsed.tasks)) {
         return { tasks: [] }
       }
-      return parsed
+      // v1.5.0：剥离已废弃的字段（旧文件残留）。读取即剥离 → 不报错、不丢任务，
+      // 下次写回自然消失。只删已知死字段，其余未知字段原样保留（向后兼容）。
+      return { tasks: parsed.tasks.map((task) => this.stripLegacyTaskFields(task)) }
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         return { tasks: [] }
@@ -146,6 +144,20 @@ export class CronService {
         `Failed to read scheduled tasks: ${(err as Error).message}`,
       )
     }
+  }
+
+  /**
+   * 剥离已随 IM 适配器移除的死字段（v1.5.0）：
+   * `notification`（渠道配置：desktop/telegram/feishu）曾用于把任务结果推给
+   * IM 适配器，适配器删除后成为死配置。读取时丢弃即可——不需要写迁移脚本，
+   * 任务文件在下次任何写操作（创建/更新/标记 lastFiredAt）时自然收敛。
+   */
+  private stripLegacyTaskFields(task: CronTask): CronTask {
+    if (!('notification' in (task as Record<string, unknown>))) return task
+    const { notification: _removedNotification, ...rest } = task as CronTask & {
+      notification?: unknown
+    }
+    return rest
   }
 
   /** 原子写入任务 JSON 文件 */

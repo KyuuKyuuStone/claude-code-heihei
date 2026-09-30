@@ -1,6 +1,6 @@
 import { useRef, useEffect, useMemo, memo, useState, useCallback, useDeferredValue, useLayoutEffect, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { ArrowDown, BookMarked, Bot, CheckCircle2, ChevronDown, ChevronRight, CircleStop, FileStack, LoaderCircle, MessageCircle, Settings, Target, XCircle } from 'lucide-react'
+import { ArrowDown, BookMarked, Bot, CheckCircle2, ChevronDown, ChevronRight, CircleStop, FileStack, MessageCircle, Settings, Target, XCircle } from 'lucide-react'
 import { ApiError } from '../../api/client'
 import { sessionsApi, type SessionTurnCheckpoint } from '../../api/sessions'
 import { listPendingPermissions, useChatStore } from '../../stores/chatStore'
@@ -36,6 +36,7 @@ import { buildTurnCompletionByMessageId, type TurnCompletion } from '../../lib/t
 import { isTouchH5Document } from '../../lib/touchH5'
 import { Button } from '@/components/ui/Button'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { Spinner } from '@/components/ui/Spinner'
 import { clearWindowSelection, getSelectionPopoverPosition, useSelectionPopoverDismiss } from '../../hooks/useSelectionPopoverDismiss'
 import {
   getHeightsForSession,
@@ -218,7 +219,7 @@ function CompactStatusDivider({ message, state }: { message?: CompactSummaryEven
           className="group inline-flex min-h-8 max-w-[min(78vw,520px)] items-center gap-2 rounded-[var(--radius-md)] px-2.5 py-1 text-[13px] font-semibold text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text-primary)] disabled:cursor-default disabled:hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
         >
           {state === 'compacting' ? (
-            <LoaderCircle size={16} strokeWidth={2.1} className="shrink-0 animate-spin text-[var(--color-text-tertiary)]" aria-hidden="true" />
+            <Spinner size={16} className="text-[var(--color-text-tertiary)]" />
           ) : (
             <FileStack size={16} strokeWidth={2.05} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
           )}
@@ -361,7 +362,7 @@ function BackgroundTaskEventCard({ message }: { message: BackgroundTaskEvent }) 
       >
         <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center">
           {isRunning ? (
-            <LoaderCircle size={15} strokeWidth={2.25} className="animate-spin text-[var(--color-brand)]" aria-hidden="true" />
+            <Spinner size={15} tone="brand" />
           ) : isFailed ? (
             <XCircle size={15} strokeWidth={2.25} className="text-[var(--color-error)]" aria-hidden="true" />
           ) : isStopped ? (
@@ -960,6 +961,8 @@ const VIRTUAL_MAX_ITEM_HEIGHT = 24_000
 // don't convert those into bottom-scroll corrections.
 const CONTENT_RESIZE_FOLLOW_JITTER_MAX_DELTA_PX = 2
 const USER_SCROLL_INTENT_WINDOW_MS = 500
+/** v1.5.0 历史分页：滚动条距顶部不足该像素时触发向前翻页。 */
+const EARLIER_HISTORY_TRIGGER_PX = 240
 const CONVERSATION_NAVIGATION_MIN_ITEMS = 4
 const CONVERSATION_NAVIGATION_FULL_MIN_WIDTH_PX = 960
 const CONVERSATION_NAVIGATION_COMPACT_MIN_WIDTH_PX = 560
@@ -1576,6 +1579,10 @@ export function MessageList({ sessionId, compact = false, mobileLayout = false }
   const branchSession = useSessionStore((s) => s.branchSession)
   const stopGeneration = useChatStore((s) => s.stopGeneration)
   const reloadHistory = useChatStore((s) => s.reloadHistory)
+  const loadEarlierHistory = useChatStore((s) => s.loadEarlierHistory)
+  // v1.5.0 历史分页：首开只装最近一窗，滚近顶部时按游标向前翻页。
+  const historyHasMore = sessionState?.historyHasMore === true
+  const earlierHistoryStatus = sessionState?.earlierHistoryStatus ?? 'idle'
   const queueComposerPrefill = useChatStore((s) => s.queueComposerPrefill)
   const isMemberSession = useTeamStore((s) =>
     resolvedSessionId ? Boolean(s.getMemberBySessionId(resolvedSessionId)) : false,
@@ -1614,6 +1621,12 @@ export function MessageList({ sessionId, compact = false, mobileLayout = false }
   const pendingMeasuredHeightsRef = useRef(false)
   const measureFlushFrameRef = useRef<number | null>(null)
   const navigationHighlightTimerRef = useRef<number | null>(null)
+  // v1.5.0 历史分页：向前翻页时的滚动锚点（prepend 前 scrollHeight/scrollTop）。
+  const earlierHistoryPrependAnchorRef = useRef<{
+    sessionId: string
+    scrollHeight: number
+    scrollTop: number
+  } | null>(null)
   const workspaceOriginRestoreFrameRef = useRef<number | null>(null)
   const conversationFindRefreshTimerRef = useRef<number | null>(null)
   const conversationFindLastRefreshAtRef = useRef(0)
@@ -1806,6 +1819,26 @@ export function MessageList({ sessionId, compact = false, mobileLayout = false }
       return
     }
     syncVirtualViewportFromContainer(container)
+
+    // v1.5.0 历史分页：用户滚近顶部且还有更早历史时，按游标翻页。
+    // 先记录滚动锚点（scrollHeight/scrollTop），prepend 提交后由
+    // useLayoutEffect 按高度差回移 scrollTop，用户视口不跳动。
+    if (
+      resolvedSessionId &&
+      historyHasMore &&
+      earlierHistoryStatus !== 'loading' &&
+      messages.length > 0 &&
+      container.scrollTop <= EARLIER_HISTORY_TRIGGER_PX &&
+      !earlierHistoryPrependAnchorRef.current
+    ) {
+      earlierHistoryPrependAnchorRef.current = {
+        sessionId: resolvedSessionId,
+        scrollHeight: container.scrollHeight,
+        scrollTop: container.scrollTop,
+      }
+      void loadEarlierHistory(resolvedSessionId)
+    }
+
     const isAtBottom = isNearScrollBottom(container)
     const isPermissionLayoutShift =
       hasPendingPermissionCard &&
@@ -1820,7 +1853,40 @@ export function MessageList({ sessionId, compact = false, mobileLayout = false }
     if (resolvedSessionId) {
       rememberSessionScroll(resolvedSessionId, container)
     }
-  }, [hasPendingPermissionCard, resolvedSessionId, syncVirtualViewportFromContainer])
+  }, [
+    earlierHistoryStatus,
+    hasPendingPermissionCard,
+    historyHasMore,
+    loadEarlierHistory,
+    messages.length,
+    resolvedSessionId,
+    syncVirtualViewportFromContainer,
+  ])
+
+  // 翻页请求失败（earlierHistoryStatus 归 error）时释放锚点，允许用户再次上滚重试。
+  useEffect(() => {
+    if (earlierHistoryStatus === 'error') {
+      earlierHistoryPrependAnchorRef.current = null
+    }
+  }, [earlierHistoryStatus])
+
+  // prepend 提交后恢复视口：scrollTop += 新增内容高度，用户看到的消息保持原位。
+  useLayoutEffect(() => {
+    const anchor = earlierHistoryPrependAnchorRef.current
+    if (!anchor || anchor.sessionId !== resolvedSessionId) return
+    earlierHistoryPrependAnchorRef.current = null
+    const container = scrollContainerRef.current
+    if (!container) return
+    const heightDelta = container.scrollHeight - anchor.scrollHeight
+    if (heightDelta <= 0) return
+    const nextScrollTop = anchor.scrollTop + heightDelta
+    // 这次 scrollTop 变化是程序补偿，不是用户滚动——按既有程序化滚动协议登记，
+    // 避免 onScroll 把它误判成用户上滚（关掉自动跟随/弹"回到底部"）。
+    ignoreProgrammaticScrollUntilRef.current = performance.now() + 250
+    ignoreProgrammaticScrollTopRef.current = nextScrollTop
+    container.scrollTop = nextScrollTop
+    syncVirtualViewportFromContainer(container)
+  }, [messages, resolvedSessionId, syncVirtualViewportFromContainer])
 
   const markUserScrollIntent = useCallback(() => {
     userScrollIntentUntilRef.current = performance.now() + USER_SCROLL_INTENT_WINDOW_MS
@@ -2636,6 +2702,34 @@ export function MessageList({ sessionId, compact = false, mobileLayout = false }
           ref={scrollContentRef}
           className={compact ? 'mx-auto max-w-full' : 'mx-auto max-w-[900px]'}
         >
+          {(historyHasMore || earlierHistoryStatus === 'loading') && resolvedSessionId && (
+            <div
+              data-testid="earlier-history-status"
+              className="flex justify-center pb-1 pt-2 text-xs text-[var(--color-text-tertiary)]"
+            >
+              {earlierHistoryStatus === 'loading' ? (
+                <span>{t('chat.loadingEarlier')}</span>
+              ) : (
+                <button
+                  type="button"
+                  className="rounded-[var(--radius-md)] px-3 py-1 transition-colors hover:bg-[var(--color-surface-container-low)] hover:text-[var(--color-text-secondary)]"
+                  onClick={() => {
+                    const container = scrollContainerRef.current
+                    if (container && !earlierHistoryPrependAnchorRef.current) {
+                      earlierHistoryPrependAnchorRef.current = {
+                        sessionId: resolvedSessionId,
+                        scrollHeight: container.scrollHeight,
+                        scrollTop: container.scrollTop,
+                      }
+                    }
+                    void loadEarlierHistory(resolvedSessionId)
+                  }}
+                >
+                  {t('chat.loadEarlier')}
+                </button>
+              )}
+            </div>
+          )}
           {virtualTranscriptWindow.enabled ? (
             <VirtualSpacer height={virtualTranscriptWindow.beforeHeight} position="top" />
           ) : null}

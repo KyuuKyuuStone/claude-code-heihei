@@ -820,7 +820,8 @@ const TabItem = forwardRef<HTMLDivElement, {
         {leadingGlyph}
       </span>
 
-      <span className={`min-w-0 flex-1 truncate text-xs ${isActive ? 'text-[var(--color-text-primary)] font-medium' : 'text-[var(--color-text-secondary)]'}`}>
+      {/* C4：标签标题 13px，与侧边栏会话行（同一「会话名」概念）对齐 */}
+      <span className={`min-w-0 flex-1 truncate text-[13px] ${isActive ? 'text-[var(--color-text-primary)] font-medium' : 'text-[var(--color-text-secondary)]'}`}>
         {displayTitle}
       </span>
 

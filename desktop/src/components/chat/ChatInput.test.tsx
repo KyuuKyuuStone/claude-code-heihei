@@ -829,7 +829,8 @@ describe('ChatInput file mentions', () => {
 
     const panel = screen.getByTestId('chat-input-panel')
     // 20px composer corner + the composer step of the shadow scale, the same
-    // shell EmptySession renders (docs/redesign-paper-ink-seal.md §2).
+    // shell EmptySession renders（原设计稿 docs/redesign-paper-ink-seal.md 已删除，
+    // 规格以此断言为准）。
     expect(panel).toHaveClass('rounded-[var(--radius-2xl)]', 'glass-panel--composer')
     expect(panel).not.toHaveClass('rounded-b-none')
 

@@ -97,6 +97,15 @@ export type PerSessionState = {
   connectionSnapshotReady?: boolean
   historyStatus?: 'idle' | 'loading' | 'ready' | 'error'
   historyError?: string | null
+  /**
+   * v1.5.0 大会话首开分页：首开只拉最近一窗（HISTORY_PAGE_SIZE 条），
+   * 更早历史按 historyNextBefore 游标向上翻页。旧服务端不分页时首窗即全量，
+   * 服务端不带 hasMore → false，行为退化为旧语义。
+   */
+  historyHasMore?: boolean
+  historyNextBefore?: number | null
+  /** 向上翻页（加载更早历史）的进行态，与首开 historyStatus 相互独立。 */
+  earlierHistoryStatus?: 'idle' | 'loading' | 'error'
   streamingText: string
   streamingToolInput: string
   activeToolUseId: string | null
@@ -163,6 +172,9 @@ const DEFAULT_SESSION_STATE: PerSessionState = {
   connectionSnapshotReady: false,
   historyStatus: 'idle',
   historyError: null,
+  historyHasMore: false,
+  historyNextBefore: null,
+  earlierHistoryStatus: 'idle',
   streamingText: '',
   streamingToolInput: '',
   activeToolUseId: null,
@@ -309,6 +321,8 @@ type ChatStore = {
   stopGeneration: (sessionId: string) => void
   stopBackgroundTask: (sessionId: string, taskId: string) => void
   loadHistory: (sessionId: string) => Promise<void>
+  /** v1.5.0：向上翻页加载更早历史（按 historyNextBefore 游标）， prepend 到消息列表头部。 */
+  loadEarlierHistory: (sessionId: string) => Promise<void>
   reloadHistory: (
     sessionId: string,
     guard?: {
@@ -1114,8 +1128,16 @@ function summarizeTokenUsageFromHistory(messages: MessageEntry[]): TokenUsage | 
   }
 }
 
-async function fetchAndMapSessionHistory(sessionId: string) {
-  const { messages, taskNotifications } = await sessionsApi.getMessages(sessionId)
+/** v1.5.0 首开窗口大小：只拉最近一页历史，向上滚动再按游标翻更早页。 */
+export const HISTORY_PAGE_SIZE = 200
+
+async function fetchAndMapSessionHistory(
+  sessionId: string,
+  params?: { limit?: number; before?: number },
+) {
+  const { messages, taskNotifications, total, hasMore, nextBefore } = params
+    ? await sessionsApi.getMessages(sessionId, params)
+    : await sessionsApi.getMessages(sessionId)
   const uiMessages = mapHistoryMessagesToUiMessages(messages)
   const restoredNotifications = {
     ...reconstructAgentNotifications(messages),
@@ -1130,10 +1152,15 @@ async function fetchAndMapSessionHistory(sessionId: string) {
     lastTodos: extractLastTodoWriteFromHistory(messages),
     hasMessagesAfterTaskCompletion: hasUserMessagesAfterTaskCompletion(messages),
     tokenUsage: summarizeTokenUsageFromHistory(messages),
+    // 旧服务端忽略 limit 且不带 hasMore 字段 → 视为"已给全量"。
+    historyHasMore: hasMore === true,
+    historyNextBefore: typeof nextBefore === 'number' ? nextBefore : null,
+    historyTotal: typeof total === 'number' ? total : null,
   }
 }
 
 const historyLoadsInFlight = new Map<string, Promise<void>>()
+const earlierHistoryLoadsInFlight = new Map<string, Promise<void>>()
 
 function shouldPrewarmSession(sessionId: string): boolean {
   const knownSession = useSessionStore.getState().sessions.find((session) => session.id === sessionId)
@@ -1232,6 +1259,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     clearPendingToolInputDelta(sessionId)
     clearPendingTaskToolUseIds(sessionId)
     clearPendingToolParentUseIds(sessionId)
+    earlierHistoryLoadsInFlight.delete(sessionId)
     wsManager.disconnect(sessionId)
     set((s) => {
       const { [sessionId]: _, ...rest } = s.sessions
@@ -1511,7 +1539,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           lastTodos,
           hasMessagesAfterTaskCompletion,
           tokenUsage,
-        } = await fetchAndMapSessionHistory(sessionId)
+          historyHasMore,
+          historyNextBefore,
+        } = await fetchAndMapSessionHistory(sessionId, { limit: HISTORY_PAGE_SIZE })
         set((state) => {
           const session = state.sessions[sessionId]
           if (!session) return state
@@ -1519,6 +1549,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             return { sessions: updateSessionIn(state.sessions, sessionId, (s) => ({
               historyStatus: 'ready',
               historyError: null,
+              historyHasMore,
+              historyNextBefore,
               activeGoal: activeGoal ?? s.activeGoal ?? null,
               agentTaskNotifications: { ...s.agentTaskNotifications, ...restoredNotifications },
               backgroundAgentTasks: mergeBackgroundAgentTaskRecords(
@@ -1535,6 +1567,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           return { sessions: updateSessionIn(state.sessions, sessionId, (s) => ({
             historyStatus: 'ready',
             historyError: null,
+            historyHasMore,
+            historyNextBefore,
             messages: mergeBackgroundTaskMessages(uiMessages, restoredBackgroundTasks),
             activeGoal,
             agentTaskNotifications: { ...s.agentTaskNotifications, ...restoredNotifications },
@@ -1545,11 +1579,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             tokenUsage: tokenUsage ?? s.tokenUsage,
           })) }
         })
-        if (lastTodos && lastTodos.length > 0) {
-          const taskStore = useCLITaskStore.getState()
-          if (taskStore.sessionId === sessionId && taskStore.tasks.length === 0) taskStore.setTasksFromTodos(lastTodos, sessionId)
-        } else {
-          useCLITaskStore.getState().setTasksFromTodos([], sessionId)
+        // 低16：历史回放只在任务面板还没有该会话数据时播种。
+        // 轮询已落地的新值不被历史快照覆盖；窗口化分页后
+        // lastTodos=null 只表示「窗口内没有 TodoWrite」，绝不在此清空。
+        const taskStore = useCLITaskStore.getState()
+        if (
+          lastTodos && lastTodos.length > 0
+          && taskStore.sessionId === sessionId
+          && taskStore.tasks.length === 0
+        ) {
+          taskStore.setTasksFromTodos(lastTodos, sessionId)
         }
         if (hasMessagesAfterTaskCompletion) {
           useCLITaskStore.getState().markCompletedAndDismissed(sessionId)
@@ -1574,6 +1613,67 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     })()
 
     historyLoadsInFlight.set(sessionId, load)
+    return load
+  },
+
+  loadEarlierHistory: async (sessionId) => {
+    const session = get().sessions[sessionId]
+    if (!session) return
+    if (session.historyHasMore !== true || session.historyNextBefore == null) return
+    if (earlierHistoryLoadsInFlight.has(sessionId)) return
+
+    const before = session.historyNextBefore
+    let load!: Promise<void>
+    load = (async () => {
+      try {
+        set((state) => {
+          if (!state.sessions[sessionId]) return state
+          return {
+            sessions: updateSessionIn(state.sessions, sessionId, () => ({
+              earlierHistoryStatus: 'loading',
+            })),
+          }
+        })
+        // 只取消息与分页游标：todos / activeGoal / tokenUsage 等"尾部语义"
+        // 派生只由首开窗口驱动，翻旧页时不动它们。
+        const page = await fetchAndMapSessionHistory(sessionId, {
+          limit: HISTORY_PAGE_SIZE,
+          before,
+        })
+        set((state) => {
+          const current = state.sessions[sessionId]
+          if (!current) return state
+          // 游标在请求期间被并发重置（如重连重载）时放弃本次 prepend，防重复。
+          if (current.historyNextBefore !== before) return state
+          return {
+            sessions: updateSessionIn(state.sessions, sessionId, (s) => ({
+              // 服务端游标保证本页严格更老且无重叠，直接前插即可；
+              // tool_use/tool_result 配对发生在渲染层（toolResultMap 按
+              // toolUseId 关联），跨页天然成立。
+              messages: [...page.uiMessages, ...s.messages],
+              historyHasMore: page.historyHasMore,
+              historyNextBefore: page.historyNextBefore,
+              earlierHistoryStatus: 'idle',
+            })),
+          }
+        })
+      } catch {
+        set((state) => {
+          if (!state.sessions[sessionId]) return state
+          return {
+            sessions: updateSessionIn(state.sessions, sessionId, () => ({
+              earlierHistoryStatus: 'error',
+            })),
+          }
+        })
+      } finally {
+        if (earlierHistoryLoadsInFlight.get(sessionId) === load) {
+          earlierHistoryLoadsInFlight.delete(sessionId)
+        }
+      }
+    })()
+
+    earlierHistoryLoadsInFlight.set(sessionId, load)
     return load
   },
 
@@ -1633,10 +1733,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         }
       })
 
-      if (lastTodos && lastTodos.length > 0) {
-        useCLITaskStore.getState().setTasksFromTodos(lastTodos, sessionId)
-      } else {
-        useCLITaskStore.getState().setTasksFromTodos([], sessionId)
+      // 低16：与 loadHistory 同一约定——历史回放只播种，不覆盖/清空
+      // 轮询已落地的任务状态（reload 后 1s 轮询即会给出真值）。
+      const reloadTaskStore = useCLITaskStore.getState()
+      if (
+        lastTodos && lastTodos.length > 0
+        && reloadTaskStore.sessionId === sessionId
+        && reloadTaskStore.tasks.length === 0
+      ) {
+        reloadTaskStore.setTasksFromTodos(lastTodos, sessionId)
       }
       if (hasMessagesAfterTaskCompletion) {
         useCLITaskStore.getState().markCompletedAndDismissed(sessionId)
@@ -2501,6 +2606,26 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           const hasRemainingPermissions = remainingPermissions.length > 0 ||
             remainingComputerUsePermissions.length > 0
 
+          const nextChatState = hasRemainingPermissions
+            ? 'permission_pending'
+            : !msg.turnActive
+              ? 'idle'
+              : session.chatState === 'idle' || session.chatState === 'permission_pending'
+                ? 'thinking'
+                : session.chatState
+
+          // C7（v1.5.0）：重连快照判回合已结束（归 idle）时镜像 clearTurnClock——
+          // 正常 status:idle 路径会清 turnStartedAt/elapsedTimer，snapshot 分支此前
+          // 不清：断连窗口内回合结束后，残留时间戳让下回合 ensureTurnStartedAt
+          // 幂等跳过，StreamingIndicator 读秒从上一回合的陈旧时间戳起跳。
+          const turnClockReset =
+            nextChatState === 'idle' && session.turnStartedAt != null
+              ? (() => {
+                  if (session.elapsedTimer) clearInterval(session.elapsedTimer)
+                  return { elapsedTimer: null, turnStartedAt: null } as const
+                })()
+              : null
+
           return {
             connectionSnapshotReady: true,
             pendingPermissions,
@@ -2510,13 +2635,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               pendingComputerUsePermissions,
               session.pendingComputerUsePermission,
             ),
-            chatState: hasRemainingPermissions
-              ? 'permission_pending'
-              : !msg.turnActive
-                ? 'idle'
-                : session.chatState === 'idle' || session.chatState === 'permission_pending'
-                  ? 'thinking'
-                  : session.chatState,
+            chatState: nextChatState,
+            ...(turnClockReset ?? {}),
           }
         })
         break

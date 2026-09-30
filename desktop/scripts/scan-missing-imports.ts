@@ -23,11 +23,10 @@ import path from 'node:path'
 
 const repoRoot = path.resolve(import.meta.dir, '../..')
 const srcRoot = path.join(repoRoot, 'src')
-const adaptersRoot = path.join(repoRoot, 'adapters')
 
 // 扫描 + 创建 stub 时允许的根目录。stub 写到这些目录之外会被拒绝，
 // 防止意外往 node_modules / 系统路径写文件。
-const ALLOWED_STUB_ROOTS = [srcRoot, adaptersRoot]
+const ALLOWED_STUB_ROOTS = [srcRoot]
 
 const STUB_MARKER_TS = '// @generated stub from scan-missing-imports'
 const STUB_MARKER_TEXT = '<!-- @generated stub from scan-missing-imports -->'
@@ -159,7 +158,7 @@ async function main() {
   const missing = new Map<string, Set<string>>() // stubPath → set of importers
   let scannedFiles = 0
 
-  for await (const file of walkRoots([srcRoot, adaptersRoot])) {
+  for await (const file of walkRoots([srcRoot])) {
     scannedFiles++
     let contents: string
     try {
@@ -196,7 +195,7 @@ async function main() {
   let createdCount = 0
   let skippedCount = 0
   for (const [stubPath, importers] of missing) {
-    // 安全检查：只在 ALLOWED_STUB_ROOTS（src/、adapters/）下创建，
+    // 安全检查：只在 ALLOWED_STUB_ROOTS（src/）下创建，
     // 且如果文件已存在但不是 stub 就跳过
     const isAllowed = ALLOWED_STUB_ROOTS.some(
       (root) => stubPath.startsWith(root + path.sep),

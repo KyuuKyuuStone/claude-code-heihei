@@ -511,6 +511,17 @@ export function startServer(port = PORT, host = HOST) {
     console.warn(`[Server] Failed to write desktop-server.json (port discovery degraded): ${message}`)
   })
 
+  // v1.5.0 A6：协作推送——花名册 lastActivityAt 巡检（5s 节流）。
+  // 与其他后台任务同款动态 import：启动失败不影响服务器体。
+  void import('./services/collabPushService.js')
+    .then((mod) => {
+      mod.collabPushService.startActivitySweep()
+    })
+    .catch((error) => {
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn(`[Server] collab push activity sweep failed to start: ${message}`)
+    })
+
   // Watch for stalled servant sessions (running but no activity) and
   // auto-repush with troubleshooting hints, escalating to the supervisor.
   void import('./services/servantStallWatcher.js')

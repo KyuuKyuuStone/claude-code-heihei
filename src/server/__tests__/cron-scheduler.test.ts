@@ -780,3 +780,89 @@ describe('Scheduled Tasks API — runs endpoints', () => {
     expect(body.runs[0].taskId).toBe('task-a')
   })
 })
+
+/**
+ * v1.5.0：IM 适配器移除后的死配置兼容。
+ * 旧 scheduled_tasks.json 里残留的 notification 字段（desktop/telegram/feishu
+ * 渠道配置）必须被安全忽略：读取不报错、任务不丢、列表不外泄该字段，
+ * 下次写回自然剥离；同时不得误删未知字段（向后兼容）。
+ */
+describe('CronService 旧配置兼容（notification 死字段清理）', () => {
+  let tmpDir: string
+  let originalConfigDir: string | undefined
+
+  beforeEach(async () => {
+    tmpDir = await createTmpDir()
+    originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = tmpDir
+  })
+
+  afterEach(async () => {
+    if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+    await cleanupTmpDir(tmpDir)
+  })
+
+  async function writeLegacyTasksFile(tasks: unknown[]): Promise<string> {
+    const filePath = path.join(tmpDir, 'scheduled_tasks.json')
+    await fs.writeFile(filePath, JSON.stringify({ tasks }, null, 2), 'utf-8')
+    return filePath
+  }
+
+  const legacyTask = {
+    id: 'abcd1234',
+    name: '旧任务',
+    cron: '0 9 * * *',
+    prompt: '跑日报',
+    createdAt: 1_700_000_000_000,
+    notification: { enabled: true, channels: ['desktop', 'telegram', 'feishu'] },
+    __unknownFutureField: { keep: 'me' },
+  }
+
+  it('reads legacy files without error and without dropping tasks', async () => {
+    await writeLegacyTasksFile([legacyTask])
+    const service = new CronService()
+
+    const tasks = await service.listTasks()
+
+    expect(tasks).toHaveLength(1)
+    expect(tasks[0]!.id).toBe('abcd1234')
+    expect(tasks[0]!.prompt).toBe('跑日报')
+    // 已废弃字段不出现在对外模型里
+    expect('notification' in tasks[0]!).toBe(false)
+    // 未知字段原样保留（不做白名单裁剪，避免误删其它组件写入的字段）
+    expect((tasks[0] as Record<string, unknown>).__unknownFutureField).toEqual({ keep: 'me' })
+  })
+
+  it('strips the legacy field on the next write-back', async () => {
+    const filePath = await writeLegacyTasksFile([legacyTask])
+    const service = new CronService()
+
+    // 任意写操作都会整文件回写 → 死字段自然消失
+    await service.updateLastFired('abcd1234', '2026-09-29T10:00:00.000Z')
+
+    const raw = JSON.parse(await fs.readFile(filePath, 'utf-8')) as {
+      tasks: Array<Record<string, unknown>>
+    }
+    expect(raw.tasks).toHaveLength(1)
+    expect('notification' in raw.tasks[0]!).toBe(false)
+    expect(raw.tasks[0]!.lastFiredAt).toBe('2026-09-29T10:00:00.000Z')
+    expect(raw.tasks[0]!.__unknownFutureField).toEqual({ keep: 'me' })
+  })
+
+  it('ignores a notification field sent by an old client on create', async () => {
+    const service = new CronService()
+    const created = await service.createTask({
+      cron: '0 9 * * *',
+      prompt: '新任务',
+      // @ts-expect-error 旧前端仍在发的死字段：类型已删，运行时必须被忽略
+      notification: { enabled: true, channels: ['desktop'] },
+    })
+
+    expect('notification' in created).toBe(false)
+    const raw = JSON.parse(
+      await fs.readFile(path.join(tmpDir, 'scheduled_tasks.json'), 'utf-8'),
+    ) as { tasks: Array<Record<string, unknown>> }
+    expect('notification' in raw.tasks[0]!).toBe(false)
+  })
+})

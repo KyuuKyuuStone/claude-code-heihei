@@ -1,5 +1,6 @@
 import { memo, useMemo, useState } from 'react'
-import { CircleStop, LoaderCircle } from 'lucide-react'
+import { CircleStop } from 'lucide-react'
+import { Spinner } from '@/components/ui/Spinner'
 import { CodeViewer } from './CodeViewer'
 import { DiffViewer } from './DiffViewer'
 import { TerminalChrome } from './TerminalChrome'
@@ -206,7 +207,7 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
         ) : (
           /* The ink square is the design's tool badge: solid `--t1` with the page
              ground as its glyph color, which is exactly the primary-button pair. */
-          <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-fg)]">
+          <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-fg)]">
             <span className="material-symbols-outlined text-[16px]">{icon}</span>
           </span>
         )}
@@ -229,7 +230,7 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
             className="inline-flex min-w-0 max-w-[58%] shrink-0 items-center gap-1 text-[12.5px] text-[var(--color-text-tertiary)]"
             title={liveStatsSummary ? `${pendingSummary} · ${liveStatsSummary}` : pendingSummary}
           >
-            <LoaderCircle size={13} strokeWidth={2.4} className="animate-spin" aria-hidden="true" />
+            <Spinner size={13} />
             <span className="truncate">{pendingSummary}</span>
             {liveStatsSummary ? (
               <>
@@ -308,7 +309,7 @@ function EnterPlanModeToolCallBlock({
         </span>
         {isPending ? (
           <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-[var(--color-outline)]">
-            <LoaderCircle size={12} strokeWidth={2.4} className="animate-spin" aria-hidden="true" />
+            <Spinner size={12} />
             {t('tool.preparingTool')}
           </span>
         ) : null}
@@ -376,7 +377,7 @@ function PlanToolCallBlock({
         ) : null}
         {isPending ? (
           <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-[var(--color-outline)]">
-            <LoaderCircle size={12} strokeWidth={2.4} className="animate-spin" aria-hidden="true" />
+            <Spinner size={12} />
             {t('tool.preparingTool')}
           </span>
         ) : null}
@@ -972,7 +973,7 @@ function renderPartialInput(
       <div className="border-b border-[var(--color-border)] px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-[var(--color-outline)]">
         {t?.('tool.partialInput') ?? 'Partial input'}
       </div>
-      <CodeViewer code={formattedInput} language="json" maxLines={8} wrapLongLines />
+      <CodeViewer code={formattedInput} language="json" maxLines={8} wrapLongLines streaming />
     </div>
   )
 }

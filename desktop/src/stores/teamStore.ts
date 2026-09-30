@@ -16,6 +16,9 @@ const memberSessionId = (agentId: string) => `team-member:${agentId}`
 /** Module-level timer for polling member transcript */
 let memberPollTimer: ReturnType<typeof setInterval> | null = null
 let polledMemberSessionId: string | null = null
+// handleTeamCreated 的延迟补拉定时器：clearTeam 时必须一并清理，
+// 否则切换团队后旧团队的 fetchTeamDetail 仍会命中（低18）。
+let teamCreatedRefreshTimers: ReturnType<typeof setTimeout>[] = []
 const memberTranscriptCursors = new Map<string, {
   teamName: string
   agentId: string
@@ -368,6 +371,8 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
 
   clearTeam: () => {
     get().stopMemberPolling()
+    for (const timer of teamCreatedRefreshTimers) clearTimeout(timer)
+    teamCreatedRefreshTimers = []
     memberTranscriptCursors.clear()
     memberRefreshGenerations.clear()
     set({ activeTeam: null, memberColors: new Map() })
@@ -378,9 +383,14 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
       teams: [...s.teams, { name: teamName, memberCount: 0 }],
     }))
     get().fetchTeamDetail(teamName)
-    setTimeout(() => get().fetchTeamDetail(teamName), 1500)
-    setTimeout(() => get().fetchTeamDetail(teamName), 4000)
-    setTimeout(() => get().fetchTeamDetail(teamName), 8000)
+    for (const timer of teamCreatedRefreshTimers) clearTimeout(timer)
+    teamCreatedRefreshTimers = [1500, 4000, 8000].map((delay) => {
+      const timer = setTimeout(() => {
+        teamCreatedRefreshTimers = teamCreatedRefreshTimers.filter((t) => t !== timer)
+        get().fetchTeamDetail(teamName)
+      }, delay)
+      return timer
+    })
   },
 
   handleTeamUpdate: (teamName: string, members: TeamMemberStatus[]) => {

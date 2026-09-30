@@ -3,14 +3,11 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
 
-const host = process.env.TAURI_DEV_HOST
-
 export default defineConfig({
   base: './',
   plugins: [react(), tailwindcss()],
   build: {
-    // Vite 8 defaults to baseline-widely-available (safari16.4+), which
-    // requires macOS 13+. Tauri on macOS 12 uses Safari 15 WebView.
+    // Keep a conservative legacy target for the embedded Chromium webview.
     target: ['es2021', 'safari15'],
     chunkSizeWarningLimit: 2200,
     rollupOptions: {
@@ -25,13 +22,11 @@ export default defineConfig({
       '@': path.resolve(__dirname, 'src'),
     },
   },
-  // Vite options tailored for Tauri development
   clearScreen: false,
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
-    hmr: host ? { protocol: 'ws', host, port: 1421 } : undefined,
+    host: false,
     watch: {
       ignored: ['**/src-tauri/**'],
     },

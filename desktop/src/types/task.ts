@@ -2,6 +2,8 @@
 
 export type TaskNotificationConfig = {
   enabled: boolean
+  // v1.5.0：外部 IM 适配器已移除，只剩桌面通知。存量数据里可能仍有
+  // telegram/feishu（服务端清理前），读取侧需自行过滤（NewTaskModal 已处理）。
   channels: ('desktop' | 'telegram' | 'feishu')[]
 }
 

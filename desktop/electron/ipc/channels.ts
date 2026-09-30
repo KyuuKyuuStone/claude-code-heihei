@@ -47,7 +47,6 @@ export const ELECTRON_IPC_CHANNELS = {
   appModeSet: 'desktop:app-mode:set',
   appModePrepareRestart: 'desktop:app-mode:prepare-restart',
   appModeRestart: 'desktop:app-mode:restart',
-  adaptersRestartSidecar: 'desktop:adapters:restart-sidecar',
   localModelStart: 'desktop:local-model:start',
   localModelStop: 'desktop:local-model:stop',
   localModelStatus: 'desktop:local-model:status',

@@ -33,8 +33,8 @@ export const HOST_DIAGNOSTICS_BYTE_LIMIT = 256 * 1024
 export const ELECTRON_DIAGNOSTICS_FILE_ENV = 'CC_HEIHEI_ELECTRON_DIAGNOSTICS_FILE'
 export const RIPGREP_PATH_ENV = 'CC_HEIHEI_RIPGREP_PATH'
 const HOST_DIAGNOSTICS_LINE_BYTE_LIMIT = 4096
-// Shared with the Tauri shell (src-tauri/src/lib.rs) so both desktop builds
-// reuse the same sticky port across restarts (issue #767).
+// Sticky port shared across desktop restarts so phone bookmarks / QR codes /
+// reverse proxies survive relaunches (issue #767).
 export const SERVER_STATE_FILE = 'desktop-server-state.json'
 const MAX_PORT_RESERVATION_ATTEMPTS = 128
 
@@ -113,12 +113,6 @@ function withBundledRipgrepPath(
     [pathKey]: nextPath,
     [RIPGREP_PATH_ENV]: explicitRipgrep || bundledRipgrep,
   }
-}
-
-export function httpToWebSocketUrl(serverHttpUrl: string): string {
-  if (serverHttpUrl.startsWith('http://')) return `ws://${serverHttpUrl.slice('http://'.length)}`
-  if (serverHttpUrl.startsWith('https://')) return `wss://${serverHttpUrl.slice('https://'.length)}`
-  return serverHttpUrl
 }
 
 export type ReserveLocalPortDeps = {
@@ -595,7 +589,10 @@ export function windowsPowerShellOverride(
   return base === 'pwsh' || base === 'powershell' ? trimmed : null
 }
 
-export function buildSidecarEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function buildSidecarEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  appVersion?: string,
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...baseEnv,
   }
@@ -606,6 +603,15 @@ export function buildSidecarEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     env.CLAUDE_CONFIG_DIR = configDir
     env.XDG_CACHE_HOME = cacheDir
   }
+  // /api/whoami 版本号自报（serverIdentity 优先读 env）：dev 与打包版都准确
+  if (appVersion) {
+    env.CC_HEIHEI_APP_VERSION = appVersion
+  }
+  // 正式 sidecar 标记：只有桌面 app 拉起的实例才写/清端口文件
+  // （~/.claude/cc-heihei/desktop-server.json）。测试/脚本/手工启动不带此标记，
+  // 避免非服务实例覆盖槽位、把正在服务的 app 从端口文件上挤掉
+  // （详见 src/server/services/serverIdentity.ts 的 DESKTOP_SIDECAR_ENV_MARKER）。
+  env.CC_HEIHEI_DESKTOP_SIDECAR = '1'
   return env
 }
 
@@ -615,40 +621,19 @@ export function createServerPlan({
   port,
   bindHost = SERVER_BIND_HOST,
   env = process.env,
+  appVersion,
 }: {
   desktopRoot: string
   appRoot: string
   port: number
   bindHost?: string
   env?: NodeJS.ProcessEnv
+  appVersion?: string
 }): SidecarPlan {
   return {
     command: resolveSidecarExecutable(desktopRoot),
     args: ['server', '--app-root', appRoot, '--host', bindHost, '--port', String(port)],
-    env: buildSidecarEnv(withBundledRipgrepPath(env, desktopRoot)),
-  }
-}
-
-export function createAdapterPlan({
-  desktopRoot,
-  appRoot,
-  serverUrl,
-  flag,
-  env = process.env,
-}: {
-  desktopRoot: string
-  appRoot: string
-  serverUrl: string
-  flag: '--feishu' | '--telegram' | '--wechat' | '--dingtalk' | '--whatsapp'
-  env?: NodeJS.ProcessEnv
-}): SidecarPlan {
-  return {
-    command: resolveSidecarExecutable(desktopRoot),
-    args: ['adapters', '--app-root', appRoot, flag],
-    env: {
-      ...buildSidecarEnv(withBundledRipgrepPath(env, desktopRoot)),
-      ADAPTER_SERVER_URL: httpToWebSocketUrl(serverUrl),
-    },
+    env: buildSidecarEnv(withBundledRipgrepPath(env, desktopRoot), appVersion),
   }
 }
 

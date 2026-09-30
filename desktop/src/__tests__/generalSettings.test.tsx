@@ -74,10 +74,6 @@ vi.mock('@tauri-apps/api/core', () => tauriCoreMock)
 vi.mock('@tauri-apps/plugin-dialog', () => tauriDialogMock)
 vi.mock('@tauri-apps/plugin-process', () => tauriProcessMock)
 
-vi.mock('../pages/AdapterSettings', () => ({
-  AdapterSettings: () => <div>Adapter Settings Mock</div>,
-}))
-
 vi.mock('../pages/ActivitySettings', () => ({
   ActivitySettings: () => <div>Activity Settings Mock</div>,
 }))

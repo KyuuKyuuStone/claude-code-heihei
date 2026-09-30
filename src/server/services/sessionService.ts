@@ -40,6 +40,13 @@ import {
 } from './repositoryLaunchService.js'
 import { registerFilesystemAccessRoot } from './filesystemAccessRoots.js'
 import { normalizeDriveRootPathForPlatform } from './windowsDrivePath.js'
+// v1.5.0 C11：会话摘要的持久化索引（跨重启复用 mtime+size 未变的摘要）
+import {
+  sessionSummaryIndexStore,
+  type SessionUsageTotals,
+} from './sessionSummaryIndexStore.js'
+// v1.5.0 C12：会话列表失效信号（ws 层订阅后广播给 _events 通道）
+import { emitCollabPush } from '../../collaboration/collabPushSignals.js'
 import { cleanSessionTitleSource } from '../../utils/sessionTitleText.js'
 import {
   roughTokenCountEstimationForMessage,
@@ -320,6 +327,30 @@ type RawEntry = {
 
 type RawMessageUsage = NonNullable<RawEntry['message']>['usage']
 
+/**
+ * 摘要取不到时的兜底（v1.5.0 花名册高危修复）：**仅在文件存在、摘要这一步
+ * 失败**时使用——让花名册条目照常显示（title 退化为 id 前缀、workDir 未知），
+ * 而不是因为一次 IO 抖动被当成「会话已删除」删掉。
+ */
+function buildFallbackSessionListSummary(sessionId: string): SessionListSummary {
+  const now = new Date().toISOString()
+  return {
+    title: sessionId.slice(0, 8),
+    createdAt: now,
+    modifiedAt: now,
+    messageCount: 0,
+    workDir: null,
+  }
+}
+
+/** 全文件 token 用量累加器（窗口扫描顺带累加，v1.5.0） */
+type UsageAccumulator = {
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+}
+
 function normalizeMessageUsage(usage: RawMessageUsage): MessageUsage | undefined {
   if (!usage) return undefined
 
@@ -531,6 +562,9 @@ export class SessionService {
     sharedState.epoch += 1
     sharedState.bypass = this.readIndexMutationBypass()
     this.observedSharedMutationEpoch = sharedState.epoch
+    // v1.5.0 C12：会话列表已变 → 广播失效信号（带单调递增 epoch）。ws 层订阅后
+    // 做 250ms 合并再广播给 _events 订阅方；无订阅者时是 no-op。
+    emitCollabPush({ kind: 'session_list', epoch: sharedState.epoch })
   }
 
   private prepareSessionListCaches(scope: string): void {
@@ -724,6 +758,142 @@ export class SessionService {
     return true
   }
 
+  /** 并发受限的 map（保序）——列表排序键批量读取用，避免数百并发 open 打爆 fd */
+  private async mapWithConcurrency<T, R>(
+    items: readonly T[],
+    concurrency: number,
+    fn: (item: T) => Promise<R>,
+  ): Promise<R[]> {
+    const results = new Array<R>(items.length)
+    let cursor = 0
+    const workers = Array.from({ length: Math.min(Math.max(1, concurrency), items.length) }, async () => {
+      for (;;) {
+        const index = cursor
+        cursor += 1
+        if (index >= items.length) return
+        results[index] = await fn(items[index]!)
+      }
+    })
+    await Promise.all(workers)
+    return results
+  }
+
+  /** 排序键逐级扩窗序列（中1）：64KB → 256KB → 1MB */
+  private static readonly TAIL_MODIFIED_WINDOW_BYTES: readonly number[] = [
+    64 * 1024,
+    256 * 1024,
+    1024 * 1024,
+  ]
+
+  /**
+   * v1.5.0 C11：读取会话文件的「内容时间戳」（列表排序键）。
+   *
+   * 语义与 transcriptReducer 的 modifiedAt（semanticModifiedAt ?? fallbackModifiedAt）
+   * 对齐：文件里最后一条 user/assistant 消息（非 isMeta）的 timestamp。
+   * 尾窗读取 + 持久缓存（mtime+size 未变零成本命中）。
+   *
+   * 中1（v1.5.0 第二批）：原实现只读 64KB、找不到就回退 mtime，存在两个**真实
+   * 漂移**场景——①窗口内没有任何 user/assistant 条目；②**最后一条 user 行本身
+   * 超过 64KB**（大会话的超长 tool_result 完全可能）时该行横跨窗口、窗口内只
+   * parse 到更早的条目 → 排序键取到更早的时间戳，刚活跃的大会话在列表中偏后
+   * （用户可感：「刚干完活的会话不在顶部」）。现按 64KB→256KB→1MB 逐级扩窗，
+   * 仍不能断言可信则**退回一次全量语义扫描**（与 GET /api/sessions 的 modifiedAt
+   * 同源）。结果随 mtime+size 进持久索引，所以每个文件最多付一次成本。
+   * 主管裁决：不接受近似口径，必须与全量语义一致。
+   */
+  private async readTailModifiedAt(
+    filePath: string,
+    stat: Stats,
+    projectDir: string,
+    scope: string,
+  ): Promise<string> {
+    await sessionSummaryIndexStore.ensureLoaded()
+    const cached = sessionSummaryIndexStore.getTailModifiedAt(filePath, stat.mtimeMs, stat.size)
+    if (cached) return cached
+
+    let value: string
+    try {
+      value = await this.computeSemanticTailModifiedAt(filePath, stat, projectDir, scope)
+    } catch {
+      // 读失败（ENOENT 等）：按 mtime 降级，不影响列表可用性
+      value = stat.mtime.toISOString()
+    }
+    sessionSummaryIndexStore.setTailModifiedAt(filePath, stat.mtimeMs, stat.size, value)
+    return value
+  }
+
+  /**
+   * 逐级扩窗求「文件内最后一条 user/assistant 的时间戳」；任一级能给出可信结果
+   * 即返回。不可信 = latest 为 null（窗口内一条都没有）或末段无法解析（可能是
+   * 跨窗超长行被截断）——两者都可能漏掉更晚的条目。
+   */
+  private async computeSemanticTailModifiedAt(
+    filePath: string,
+    stat: Stats,
+    projectDir: string,
+    scope: string,
+  ): Promise<string> {
+    for (const windowBytes of SessionService.TAIL_MODIFIED_WINDOW_BYTES) {
+      const start = Math.max(0, stat.size - windowBytes)
+      const { latest, uncertainTail } = await this.scanTailWindow(filePath, start)
+      if (!uncertainTail && latest !== null) return latest
+      if (start === 0) break // 已覆盖全文：再扩窗不会有新信息
+    }
+    // 各级窗口都给不出可信键 → 全量语义扫描（走摘要缓存，与列表 API 口径同源）
+    const summary = await this.getCachedSessionListSummary(filePath, projectDir, stat, scope)
+    return summary.modifiedAt
+  }
+
+  /**
+   * 扫描 [start, EOF] 区间的行，返回其中最后一条 user/assistant 的 timestamp。
+   *
+   * uncertainTail：**末段**（到 EOF 的那一段）无法 parse——它可能是跨窗超长行
+   * 被截断的片段，也可能是完整的坏行；两种情况都不能断言「窗口内找到的 latest
+   * 就是文件内最后一条」，交由调用方扩窗或退回全量。
+   * 窗口**首段**的截断半行无需特判：它位于 latest 之前（位置更早），parse 失败
+   * 自然跳过，不可能更新排序键。文件以 
+ 结尾时末段为空串，跳过、不算不确定。
+   */
+  private async scanTailWindow(
+    filePath: string,
+    start: number,
+  ): Promise<{ latest: string | null; uncertainTail: boolean }> {
+    const stream = createReadStream(filePath, { start, encoding: 'utf8' })
+    let text = ''
+    try {
+      for await (const chunk of stream) {
+        text += typeof chunk === 'string' ? chunk : chunk.toString('utf8')
+      }
+    } finally {
+      stream.destroy()
+    }
+
+    const segments = text.split('\n')
+    let latest: string | null = null
+    let uncertainTail = false
+    for (let index = 0; index < segments.length; index += 1) {
+      const trimmed = segments[index]!.trim()
+      if (!trimmed) continue
+      try {
+        const entry = JSON.parse(trimmed) as RawEntry & { isMeta?: boolean }
+        if (
+          (entry.type === 'user' || entry.type === 'assistant') &&
+          entry.message?.role &&
+          entry.isMeta !== true &&
+          typeof entry.timestamp === 'string'
+        ) {
+          const candidate = Date.parse(entry.timestamp)
+          if (Number.isFinite(candidate) && (!latest || candidate > Date.parse(latest))) {
+            latest = entry.timestamp
+          }
+        }
+      } catch {
+        if (index === segments.length - 1) uncertainTail = true
+      }
+    }
+    return { latest, uncertainTail }
+  }
+
   private async getCachedSessionListSummary(
     filePath: string,
     projectDir: string,
@@ -743,6 +913,23 @@ export class SessionService {
       return this.cloneSessionListSummary(await inFlight)
     }
 
+    // v1.5.0 C11：持久化摘要索引（跨重启复用）。mtime+size 未变 → 零成本命中，
+    // 只有真正变化的文件才走到下面的流式扫描。
+    await sessionSummaryIndexStore.ensureLoaded()
+    const persisted = sessionSummaryIndexStore.get(filePath, stat.mtimeMs, stat.size)
+    if (persisted) {
+      const summary = this.cloneSessionListSummary(persisted)
+      if (this.activeSessionListCacheScope === scope) {
+        this.sessionListSummaryCache.set(filePath, {
+          mtimeMs: stat.mtimeMs,
+          size: stat.size,
+          summary: this.cloneSessionListSummary(summary),
+        })
+        this.enforceSessionListSummaryCacheCapacity()
+      }
+      return summary
+    }
+
     const request = this.scanSessionListSummary(filePath, projectDir, stat)
     this.sessionListSummaryRequests.set(requestKey, request)
     try {
@@ -755,6 +942,13 @@ export class SessionService {
         })
         this.enforceSessionListSummaryCacheCapacity()
       }
+      // C11：写入持久索引（标脏 + 防抖落盘，不阻塞本次列表返回）
+      sessionSummaryIndexStore.set(
+        filePath,
+        stat.mtimeMs,
+        stat.size,
+        this.cloneSessionListSummary(summary),
+      )
       return this.cloneSessionListSummary(summary)
     } finally {
       if (this.sessionListSummaryRequests.get(requestKey) === request) {
@@ -2186,6 +2380,8 @@ export class SessionService {
    */
   async getSessionListSummaryForSession(sessionId: string): Promise<SessionListSummary | null> {
     const found = await this.findSessionFile(sessionId)
+    // 「不存在」只由这一条表达：findSessionFile 连文件都没找到（含目录不可读等，
+    // 见 findSessionFiles 的兜底）。
     if (!found) return null
     try {
       const stat = await fs.stat(found.filePath)
@@ -2196,7 +2392,13 @@ export class SessionService {
         this.activeSessionListCacheScope ?? this.getConfigDir(),
       )
     } catch {
-      return null
+      // v1.5.0 花名册高危修复：文件**确实存在**（findSessionFile 已定位），只是
+      // 摘要这一步失败（索引未就绪、扫描异常、IO 抖动……）。这里以前返回 null，
+      // 调用方（花名册 listServants）会把它当成「会话已删除」而永久删除员工
+      // 身份——一次瞬时抖动就能清空整个花名册（实测 9 条 servant_removed 挤在
+      // 同一毫秒）。改为返回兜底摘要：调用方拿到的是「存在」，只是 title 退化为
+      // id 前缀、workDir 未知；真正的删除由显式删除路径清理。
+      return buildFallbackSessionListSummary(sessionId)
     }
   }
 
@@ -3214,6 +3416,12 @@ export class SessionService {
       for (const filePath of this.sessionListSummaryCache.keys()) {
         if (!discoveredPaths.has(filePath)) this.sessionListSummaryCache.delete(filePath)
       }
+      // C11：持久索引同步剔除已消失的会话文件（仅全量发现时；按 project 过滤的
+      // 发现结果不完整，剔除会误伤其它项目的条目）
+      void sessionSummaryIndexStore
+        .ensureLoaded()
+        .then(() => sessionSummaryIndexStore.pruneMissing(discoveredPaths))
+        .catch(() => {})
     }
     const filesWithStats = (await Promise.all(sessionFiles.map(async (sessionFile) => {
       try {
@@ -3226,16 +3434,48 @@ export class SessionService {
       }
     }))).filter((item): item is NonNullable<typeof item> => item !== null)
 
-    const summarizedFiles: Array<{
+    // v1.5.0 C11：排序/分页前置于「全量摘要」。
+    //
+    // 旧实现在切片之前**摘要全部会话文件**（每个未缓存文件都要流式扫全文），
+    // 单项目 127MB 目录 / 数百会话时列表接口被拖成秒级——绝大多数摘要做出来
+    // 随即被 slice 丢掉。
+    //
+    // 排序键不能用 stat.mtime：列表的 modifiedAt 语义来自**内容**
+    // （transcriptReducer 的 semanticModifiedAt = 最后一条 user/assistant 的
+    // timestamp），metadata-only 写入（仅 touch 文件）会改 mtime 却不该改变
+    // 排序——有专门的回归测试锁定这一点。这里改用**尾部窗口读**取内容时间戳：
+    // 只读文件末尾 64KB（并有持久缓存，mtime+size 未变零成本），拿到与全量
+    // 摘要一致的排序键，成本从"全量扫描 157MB"降到"每文件 ≤64KB 且大多命中缓存"。
+    const sortKeys = await this.mapWithConcurrency(filesWithStats, 16, async (item) => ({
+      ...item,
+      tailModifiedAt: await this.readTailModifiedAt(
+        item.filePath,
+        item.stat,
+        item.projectDir,
+        scope,
+      ),
+    }))
+    sortKeys.sort((a, b) => {
+      const modifiedDifference =
+        Date.parse(b.tailModifiedAt) - Date.parse(a.tailModifiedAt)
+      if (modifiedDifference !== 0) return modifiedDifference
+      const sessionIdDifference = a.sessionId.localeCompare(b.sessionId)
+      return sessionIdDifference || a.filePath.localeCompare(b.filePath)
+    })
+
+    const total = sortKeys.length
+    const offset = options?.offset ?? 0
+    const limit = options?.limit ?? 50
+    const paginatedFiles: Array<{
       filePath: string
       projectDir: string
       sessionId: string
       stat: Stats
       summary: SessionListSummary
     }> = []
-    for (const item of filesWithStats) {
+    for (const item of sortKeys.slice(offset, offset + limit)) {
       try {
-        summarizedFiles.push({
+        paginatedFiles.push({
           ...item,
           summary: await this.getCachedSessionListSummary(
             item.filePath,
@@ -3248,19 +3488,6 @@ export class SessionService {
         // Skip unreadable files
       }
     }
-
-    summarizedFiles.sort((a, b) => {
-      const modifiedAtDifference =
-        Date.parse(b.summary.modifiedAt) - Date.parse(a.summary.modifiedAt)
-      if (modifiedAtDifference !== 0) return modifiedAtDifference
-      const sessionIdDifference = a.sessionId.localeCompare(b.sessionId)
-      return sessionIdDifference || a.filePath.localeCompare(b.filePath)
-    })
-
-    const total = summarizedFiles.length
-    const offset = options?.offset ?? 0
-    const limit = options?.limit ?? 50
-    const paginatedFiles = summarizedFiles.slice(offset, offset + limit)
 
     // Build session list items with metadata from file stats & a streaming
     // transcript summary. Keep this sequential so large JSONL files are not
@@ -3392,6 +3619,212 @@ export class SessionService {
     )
   }
 
+  /**
+   * 窗口化会话历史（v1.5.0 · 大会话首开）：只解析窗口内的条目。
+   *
+   * 旧路径（getSessionMessages）把整份 jsonl 读进内存再逐行 JSON.parse——127MB
+   * 会长会话首开时内存与 CPU 双高。本方法流式扫文件，**只对窗口内的原始行做
+   * parse**，其余行仅计数（total）；峰值内存 ≈ 窗口行文本。
+   *
+   * 游标：`before` 是**条目序号**（0-based，非空行计）——jsonl 只追加，历史条目
+   * 的序号天然稳定，前端向上翻页不会错位。返回窗口 [max(0,before-limit), before)，
+   * 响应带 nextBefore（= 窗口起始序号）供继续向上翻页。
+   *
+   * total 是**非空行数**（含极少数坏行）——与全量模式的"parse 成功条数"可能有
+   * 微小差异，仅用于"还有多少/是否还有更早"的展示，不参与定位。
+   *
+   * 子代理消息注入与全量模式同款（只依据窗口内出现的 agent 链接），行为自洽。
+   */
+  async getSessionMessagesWindow(
+    sessionId: string,
+    options: { limit: number; before?: number },
+  ): Promise<{
+    messages: MessageEntry[]
+    total: number
+    hasMore: boolean
+    nextBefore: number
+    /**
+     * 会话级 token 用量合计（v1.5.0 窗口模式配套）：窗口只映射一页历史，
+     * 前端据此累加的用量会偏小，所以由服务端按**全文件**口径给出。
+     * null = 全文件里一条带 usage 的消息都没有。
+     * 口径与前端 chatStore.summarizeTokenUsageFromHistory 逐项一致。
+     */
+    usageTotals: SessionUsageTotals | null
+  }> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) {
+      throw ApiError.notFound(`Session not found: ${sessionId}`)
+    }
+    const limit = Math.max(1, Math.floor(options.limit))
+    const beforeRaw = options.before
+    const before =
+      beforeRaw !== undefined && Number.isFinite(beforeRaw)
+        ? Math.max(0, Math.floor(beforeRaw))
+        : undefined
+
+    // 用量合计随 mtime+size 缓存：文件没变就直接用上次结果，不重扫（低2 同款：
+    // 命中只更新内存 LRU 序）。未缓存（undefined）才要求本次扫描顺带累加。
+    const stat = await fs.stat(found.filePath)
+    await sessionSummaryIndexStore.ensureLoaded()
+    const cachedUsage = sessionSummaryIndexStore.getUsageTotals(
+      found.filePath,
+      stat.mtimeMs,
+      stat.size,
+    )
+
+    const window = await this.readJsonlFileWindow(found.filePath, {
+      limit,
+      ...(before !== undefined ? { before } : {}),
+      ...(cachedUsage === undefined ? { collectUsage: true } : {}),
+    })
+    const usageTotals = cachedUsage === undefined ? (window.usageTotals ?? null) : cachedUsage
+    if (cachedUsage === undefined) {
+      sessionSummaryIndexStore.setUsageTotals(
+        found.filePath,
+        stat.mtimeMs,
+        stat.size,
+        usageTotals,
+      )
+    }
+
+    const messages = await this.appendSubagentToolMessages(
+      found.projectDir,
+      sessionId,
+      this.entriesToMessages(window.entries),
+    )
+    return {
+      messages,
+      total: window.total,
+      hasMore: window.startIndex > 0,
+      nextBefore: window.startIndex,
+      usageTotals,
+    }
+  }
+
+  /**
+   * 流式读取 jsonl 的窗口：单遍扫描，只保留窗口内原始行的文本（不 parse 其余行）。
+   * 窗口：无 before → 最后 limit 条；有 before → [before-limit, before)。
+   *
+   * 多收 OVERSCAN 行再 parse 后截尾：坏行（parse 失败）也会占一个行序号，若严格
+   * 只收 limit 行，窗口内可用条目会少于 limit（实测 fixture 下一个坏行就少 1 条）。
+   * 多收几行把坏行"吸收"掉，返回的首条序号即游标（可能 > 窗口起点，但保证
+   * 不丢不重——下一次 before 用它继续向上翻）。
+   *
+   * collectUsage（v1.5.0）：同一遍扫描顺带累加全文件的 token 用量合计，
+   * **不额外扫第二遍**（见 accumulateUsageFromLine 的廉价过滤）。
+   */
+  private async readJsonlFileWindow(
+    filePath: string,
+    options: { limit: number; before?: number; collectUsage?: boolean },
+  ): Promise<{
+    entries: RawEntry[]
+    total: number
+    startIndex: number
+    usageTotals?: SessionUsageTotals | null
+  }> {
+    const OVERSCAN_LINES = 8
+    const stream = createReadStream(filePath, { encoding: 'utf8' })
+    const lines = createInterface({ input: stream, crlfDelay: Infinity })
+    const before = options.before
+    const collectLimit = options.limit + OVERSCAN_LINES
+    const buffered: Array<{ index: number; text: string }> = []
+    const usageAcc: UsageAccumulator = {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+    }
+    let total = 0
+    try {
+      for await (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        if (options.collectUsage) this.accumulateUsageFromLine(trimmed, usageAcc)
+        const index = total
+        total += 1
+        if (before === undefined) {
+          buffered.push({ index, text: trimmed })
+          if (buffered.length > collectLimit) buffered.shift()
+          continue
+        }
+        const lowerBound = before - collectLimit
+        if (index >= lowerBound && index < before) {
+          buffered.push({ index, text: trimmed })
+        }
+        // 越过窗口上界仍继续计数（total 要准；只数行、不 parse，成本很低）
+      }
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    } finally {
+      lines.close()
+      stream.destroy()
+    }
+
+    const parsed: Array<{ index: number; entry: RawEntry }> = []
+    for (const { index, text } of buffered) {
+      try {
+        parsed.push({ index, entry: JSON.parse(text) as RawEntry })
+      } catch {
+        // skip malformed lines（与全量路径同款容错）
+      }
+    }
+    const windowed = parsed.slice(-options.limit)
+    const startIndex = windowed.length > 0 ? windowed[0]!.index : total
+    return {
+      entries: windowed.map((item) => item.entry),
+      total,
+      startIndex,
+      ...(options.collectUsage ? { usageTotals: this.buildUsageTotals(usageAcc) } : {}),
+    }
+  }
+
+  /**
+   * 顺带累加一行的 token 用量（v1.5.0 窗口模式配套）。
+   *
+   * 廉价过滤：只对**含 usage 字样的行**做 JSON.parse。会话里占体积的是
+   * tool_result / 附件类的超长行，它们不带 usage——子串检查一行 O(len) 的
+   * 字符串扫描就能挡掉，避免为用量付出一次全量 parse 的代价。
+   * 坏行/半行与窗口路径同款容错（跳过）。
+   */
+  private accumulateUsageFromLine(line: string, acc: UsageAccumulator): void {
+    if (!line.includes('"usage"')) return
+    let entry: RawEntry
+    try {
+      entry = JSON.parse(line) as RawEntry
+    } catch {
+      return
+    }
+    const usage = normalizeMessageUsage(entry.message?.usage)
+    if (!usage) return
+    acc.inputTokens += usage.input_tokens ?? 0
+    acc.outputTokens += usage.output_tokens ?? 0
+    acc.cacheReadTokens += usage.cache_read_input_tokens ?? 0
+    acc.cacheCreationTokens += usage.cache_creation_input_tokens ?? 0
+  }
+
+  /**
+   * 汇总成对外的 usageTotals。**与前端 chatStore.summarizeTokenUsageFromHistory
+   * 逐项一致**：四项全 0 → null；cache 两项仅在 > 0 时出现（输出名去掉 input）。
+   */
+  private buildUsageTotals(acc: UsageAccumulator): SessionUsageTotals | null {
+    if (
+      acc.inputTokens === 0 &&
+      acc.outputTokens === 0 &&
+      acc.cacheReadTokens === 0 &&
+      acc.cacheCreationTokens === 0
+    ) {
+      return null
+    }
+    return {
+      input_tokens: acc.inputTokens,
+      output_tokens: acc.outputTokens,
+      ...(acc.cacheReadTokens > 0 ? { cache_read_tokens: acc.cacheReadTokens } : {}),
+      ...(acc.cacheCreationTokens > 0
+        ? { cache_creation_tokens: acc.cacheCreationTokens }
+        : {}),
+    }
+  }
+
   async getSubagentTranscriptMessages(
     sessionId: string,
     agentId: string,
@@ -3490,7 +3923,7 @@ export class SessionService {
 
     // Resolve to absolute path. NOTE: path.resolve() uses process.cwd() to
     // expand relative paths — in bundled sidecar mode the server's cwd is
-    // typically '/'. Callers (IM adapters) already send absolute realPath,
+    // typically '/'. Callers already send absolute realPath,
     // but we log here so cwd regressions are caught early.
     const preparedWorkspace = await resolveSessionWorkspaceLaunch(
       resolvedWorkDir,

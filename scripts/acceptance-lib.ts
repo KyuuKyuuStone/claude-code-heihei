@@ -11,6 +11,8 @@
 export type JunitCase = {
   /** 完整用例名（bun junit：describe > test 的 test 部分；vitest：含 describe 前缀） */
   name: string
+  /** 所属 describe/suite（junit 的 classname 属性）——与 name 组成二元组做精确匹配 */
+  classname: string
   /** 所属测试文件（junit 的 file 属性，相对仓库根） */
   file: string
   failed: boolean
@@ -25,6 +27,8 @@ export type ParsedRun = {
   total: number
   durationSec: number
   failures: JunitCase[]
+  /** 全部用例（含通过/跳过）——复跑判绿需要确认目标用例「确实跑到且通过」 */
+  cases: JunitCase[]
 }
 
 export type RerunOutcome = {
@@ -73,17 +77,27 @@ export function parseJunit(xml: string): ParsedRun {
   const failures: JunitCase[] = []
   let pass = 0
   let skipped = 0
+  const cases: JunitCase[] = []
 
   for (const match of xml.matchAll(TESTCASE_RE)) {
     const block = match[0]
     const attrs = extractAttrs(block)
     const name = attrs.name ?? ''
+    const classname = attrs.classname ?? ''
     const file = (attrs.file ?? attrs.classname ?? '').replaceAll('\\', '/')
     if (!name) continue
     const failed = /<(failure|error)\b/.test(block)
     const isSkipped = /<skipped\b/.test(block)
+    const junitCase: JunitCase = {
+      name,
+      classname,
+      file,
+      failed,
+      ...(failed ? { message: firstFailureMessage(block) } : {}),
+    }
+    cases.push(junitCase)
     if (failed) {
-      failures.push({ name, file, failed: true, message: firstFailureMessage(block) })
+      failures.push(junitCase)
     } else if (isSkipped) {
       skipped++
     } else {
@@ -99,7 +113,36 @@ export function parseJunit(xml: string): ParsedRun {
     total: totals.total ?? (pass + failures.length + skipped),
     durationSec: totals.time ?? 0,
     failures,
+    cases,
   }
+}
+
+/**
+ * 复跑判绿（C1，2026-09-29）：**只有 junit 可解析、且目标用例确实出现在结果里
+ * 且未失败**才算绿。半写/崩溃产生的 junit（总数 0 或缺目标用例）一律按红计——
+ * "没跑到"绝不能被当成"跑过了"（Bun 单进程承载全仓时崩溃有实测先例）。
+ */
+export function isRerunGreen(rerun: ParsedRun, failure: JunitCase): boolean {
+  if (rerun.total === 0 || rerun.cases.length === 0) return false
+  const found = rerun.cases.find(
+    (item) =>
+      item.name === failure.name
+      && (failure.classname ? item.classname === failure.classname : true),
+  )
+  if (!found) return false
+  return !found.failed
+}
+
+/**
+ * 复跑分布判类（中1，v1.5.0 审查收紧）：3 次复跑里 **≥2 红 = 真回归（FAIL）**，
+ * 只有**恰好 1 红（其余绿）**才按环境噪声放行——单一偶发窗口可解释 1 红，
+ * 2 红以上说明失败概率已高到不能排除真回归。全自动路线，不设人工裁决档。
+ */
+export function classifyRerunDistribution(
+  greens: number,
+  total = 3,
+): 'env-noise' | 'real-regression' {
+  return total - greens >= 2 ? 'real-regression' : 'env-noise'
 }
 
 function extractTotals(xml: string): { pass?: number; fail?: number; skipped?: number; total?: number; time?: number } {

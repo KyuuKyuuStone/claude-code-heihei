@@ -337,9 +337,6 @@ export type DesktopHost = {
     prepareRestart(): Promise<void>
     restart(): Promise<void>
   }
-  adapters: {
-    restartSidecar(): Promise<void>
-  }
   localModel: {
     start(input: LocalModelStartInput): Promise<LocalModelStatus>
     stop(): Promise<void>

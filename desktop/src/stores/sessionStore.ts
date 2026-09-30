@@ -12,6 +12,11 @@ import type { LocalIndexStatus, SessionListItem } from '../types/session'
 import type { PermissionMode } from '../types/settings'
 import { isPlaceholderSessionTitle } from '../lib/sessionTitle'
 import { invalidateRecentProjectsCache } from '../lib/recentProjectsCache'
+import { subscribeGlobalEvents } from './globalEventsChannel'
+
+/** C12：服务端会话列表失效广播（事件契约 v1.5.0 §3） */
+const SESSION_LIST_INVALIDATED_SUBTYPE = 'session_list_invalidated'
+const SESSION_LIST_INVALIDATED_DEBOUNCE_MS = 300
 
 const SESSION_LIST_LIMIT = 400
 
@@ -33,6 +38,13 @@ type SessionStore = {
   selectedSessionIds: Set<string>
 
   fetchSessions: (project?: string) => Promise<void>
+  /**
+   * C12（事件契约 v1.5.0 §3）：订阅 session_list_invalidated——服务端会话列表
+   * 缓存失效（创建/删除/改标题/转录变更）时广播，前端 300ms 防抖后刷新列表，
+   * 替代高频轮询；重连成功补一次全量刷新（断线窗口事件可能丢失）。
+   * epoch 单调递增，仅用于合并 pending 刷新。返回退订函数。
+   */
+  subscribeSessionListEvents: () => () => void
   createSession: (workDir?: string, options?: CreateSessionOptions) => Promise<string>
   branchSession: (
     sourceSessionId: string,
@@ -95,6 +107,55 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     } catch (err) {
       if (requestId !== get().sessionListRequestId) return
       set({ error: (err as Error).message, isLoading: false })
+    }
+  },
+
+  subscribeSessionListEvents: () => {
+    // 300ms 防抖合并突发事件（服务端自身也有 250ms 合并，这里是第二道）；
+    // 退订时必须清掉 pending 定时器，否则卸载后还会触发一次刷新。
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null
+    let pendingEpoch = -1
+
+    const scheduleRefresh = (epoch: number | null) => {
+      if (epoch !== null && epoch <= pendingEpoch) return
+      if (epoch !== null) pendingEpoch = epoch
+      if (refreshTimer) return
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null
+        void get().fetchSessions()
+      }, SESSION_LIST_INVALIDATED_DEBOUNCE_MS)
+    }
+
+    const unsubscribe = subscribeGlobalEvents(
+      (msg) => {
+        if (msg.type !== 'system_notification' || msg.subtype !== SESSION_LIST_INVALIDATED_SUBTYPE) {
+          return
+        }
+        const epoch =
+          msg.data && typeof msg.data === 'object' &&
+          typeof (msg.data as { epoch?: unknown }).epoch === 'number'
+            ? (msg.data as { epoch: number }).epoch
+            : null
+        scheduleRefresh(epoch)
+      },
+      () => {
+        // 重连全量对齐（断线窗口的失效事件可能丢失）；不刷新防抖 pending，
+        // 立即拉——重连本身就是低频事件。
+        if (refreshTimer) {
+          clearTimeout(refreshTimer)
+          refreshTimer = null
+        }
+        pendingEpoch = -1
+        void get().fetchSessions()
+      },
+    )
+
+    return () => {
+      unsubscribe()
+      if (refreshTimer) {
+        clearTimeout(refreshTimer)
+        refreshTimer = null
+      }
     }
   },
 

@@ -24,10 +24,44 @@ vi.mock('../lib/recentProjectsCache', () => ({
   invalidateRecentProjectsCache: invalidateRecentProjectsCacheMock,
 }))
 
+const wsManagerMock = vi.hoisted(() => {
+  const messageHandlers = new Set<(msg: unknown) => void>()
+  const stateHandlers = new Set<(state: string) => void>()
+  return {
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+    // 普通函数而非 vi.fn：外层 mockReset 会清空 vi.fn 实现
+    onMessage(_id: string, handler: (msg: unknown) => void) {
+      messageHandlers.add(handler)
+      return () => { messageHandlers.delete(handler) }
+    },
+    onConnectionState(_id: string, handler: (state: string) => void) {
+      stateHandlers.add(handler)
+      return () => { stateHandlers.delete(handler) }
+    },
+    emitMessage(msg: unknown) {
+      for (const handler of messageHandlers) handler(msg)
+    },
+    emitState(state: string) {
+      for (const handler of stateHandlers) handler(state)
+    },
+    reset() {
+      messageHandlers.clear()
+      stateHandlers.clear()
+    },
+  }
+})
+
+vi.mock('../api/websocket', () => ({
+  wsManager: wsManagerMock,
+  buildSessionWebSocketUrl: vi.fn(),
+}))
+
 import { useSessionStore } from './sessionStore'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { useSettingsStore } from './settingsStore'
 import { useTabStore } from './tabStore'
+import { resetGlobalEventsChannelForTests } from './globalEventsChannel'
 
 const initialState = useSessionStore.getState()
 
@@ -83,6 +117,8 @@ describe('sessionStore', () => {
     batchDeleteMock.mockReset()
     listMock.mockReset()
     invalidateRecentProjectsCacheMock.mockReset()
+    wsManagerMock.reset()
+    resetGlobalEventsChannelForTests()
     useSessionStore.setState({
       ...initialState,
       sessions: [],
@@ -684,6 +720,87 @@ describe('sessionStore', () => {
       projectPath: '/workspace/repo',
       projectRoot: '/workspace/repo',
       workDir: '/workspace/repo/branches/session-branch-existing',
+    })
+  })
+
+  describe('subscribeSessionListEvents (C12 列表失效推送)', () => {
+    const emitInvalidated = (epoch?: number) => wsManagerMock.emitMessage({
+      type: 'system_notification',
+      subtype: 'session_list_invalidated',
+      data: epoch === undefined ? {} : { epoch },
+    })
+
+    beforeEach(() => {
+      vi.useFakeTimers()
+      listMock.mockResolvedValue({ sessions: [] })
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('refreshes the list 300ms after session_list_invalidated (debounced)', async () => {
+      const unsubscribe = useSessionStore.getState().subscribeSessionListEvents()
+
+      emitInvalidated(1)
+      expect(listMock).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(300)
+      expect(listMock).toHaveBeenCalledTimes(1)
+      unsubscribe()
+    })
+
+    it('merges a burst of invalidations into a single refresh', async () => {
+      const unsubscribe = useSessionStore.getState().subscribeSessionListEvents()
+
+      emitInvalidated(1)
+      emitInvalidated(2)
+      emitInvalidated(3)
+      await vi.advanceTimersByTimeAsync(300)
+      expect(listMock).toHaveBeenCalledTimes(1)
+
+      // 更大的 epoch 再次触发；更小的 epoch（迟到的旧事件）被吞掉
+      emitInvalidated(2)
+      emitInvalidated(4)
+      await vi.advanceTimersByTimeAsync(300)
+      expect(listMock).toHaveBeenCalledTimes(2)
+      unsubscribe()
+    })
+
+    it('unsubscribe cancels a pending debounced refresh', async () => {
+      const unsubscribe = useSessionStore.getState().subscribeSessionListEvents()
+
+      emitInvalidated(1)
+      unsubscribe()
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(listMock).not.toHaveBeenCalled()
+      expect(wsManagerMock.disconnect).toHaveBeenCalledWith('_events')
+    })
+
+    it('refreshes immediately on reconnect without debounce', async () => {
+      const unsubscribe = useSessionStore.getState().subscribeSessionListEvents()
+
+      wsManagerMock.emitState('connected')
+      expect(listMock).not.toHaveBeenCalled()
+
+      // fetchSessions 同步调用 list（第一个 await 之前），无需推进定时器
+      wsManagerMock.emitState('reconnecting')
+      wsManagerMock.emitState('connected')
+      expect(listMock).toHaveBeenCalledTimes(1)
+      unsubscribe()
+    })
+
+    it('ignores unrelated subtypes', async () => {
+      const unsubscribe = useSessionStore.getState().subscribeSessionListEvents()
+
+      wsManagerMock.emitMessage({
+        type: 'system_notification',
+        subtype: 'servant_turn_changed',
+        data: { sessionId: 'x', turnInProgress: true },
+      })
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(listMock).not.toHaveBeenCalled()
+      unsubscribe()
     })
   })
 })

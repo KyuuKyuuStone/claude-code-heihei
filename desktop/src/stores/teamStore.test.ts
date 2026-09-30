@@ -3,15 +3,16 @@ import { mergeMemberTranscriptDelta, useTeamStore } from './teamStore'
 import { useChatStore } from './chatStore'
 import type { UIMessage } from '../types/chat'
 
-const { getMemberTranscriptMock } = vi.hoisted(() => ({
+const { getMemberTranscriptMock, teamsGetMock } = vi.hoisted(() => ({
   getMemberTranscriptMock: vi.fn(),
+  teamsGetMock: vi.fn(),
 }))
 
 vi.mock('../api/teams', () => ({
   teamsApi: {
     getMemberTranscript: getMemberTranscriptMock,
     list: vi.fn(),
-    get: vi.fn(),
+    get: teamsGetMock,
     sendMemberMessage: vi.fn(),
     delete: vi.fn(),
   },
@@ -188,5 +189,38 @@ describe('teamStore incremental transcript polling', () => {
 
     await useTeamStore.getState().refreshMemberSession(sessionId)
     expect(getMemberTranscriptMock.mock.calls[2]?.[2]).toEqual({})
+  })
+})
+
+describe('handleTeamCreated delayed refresh timers', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    teamsGetMock.mockReset()
+    teamsGetMock.mockResolvedValue({ name: 'team-x', members: [] })
+    useTeamStore.getState().clearTeam()
+    useTeamStore.setState({ teams: [] })
+  })
+
+  afterEach(() => {
+    useTeamStore.getState().clearTeam()
+    vi.useRealTimers()
+  })
+
+  it('clearTeam cancels the pending delayed refreshes', async () => {
+    // 低18 回归：切换团队后旧团队的 1.5s/4s/8s 补拉不得再命中
+    useTeamStore.getState().handleTeamCreated('team-x')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(teamsGetMock).toHaveBeenCalledTimes(1)
+
+    useTeamStore.getState().clearTeam()
+    await vi.advanceTimersByTimeAsync(10_000)
+
+    expect(teamsGetMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the 1.5s/4s/8s catch-up refreshes when the team stays active', async () => {
+    useTeamStore.getState().handleTeamCreated('team-x')
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(teamsGetMock).toHaveBeenCalledTimes(4)
   })
 })

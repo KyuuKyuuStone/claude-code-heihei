@@ -15,6 +15,20 @@ export const WORK_ORCHESTRATOR_SKILL_NAME = 'work-orchestrator'
 /** 文件信箱目录（相对会话工作目录）。Bash 不可用时的降级派活/汇报通道。 */
 export const COLLAB_MAILBOX_DIR = '.heihei/dispatch'
 
+/**
+ * 核心（内联）工具清单的统一文案（v1.5.0 低21）。
+ * 以实际会话内联能力为准：Bash/Read/Write/Edit/Glob/Grep/Skill/Agent 无需
+ * ToolSearch 即可直接调用；多处提示词引用同一常量，防漂移。
+ */
+export const CORE_INLINE_TOOLS_TEXT = 'Bash/Read/Write/Edit/Glob/Grep/Skill/Agent'
+
+/**
+ * 端口文件陈旧判定文案（v1.5.0 低-4）：协议正文与员工上岗口袋卡共用同一段，
+ * 防两处漂移（此前只写进协议，员工侧读端口文件时不知道还要对 startedAt）。
+ */
+export const SERVER_ADDRESS_STALENESS_NOTE =
+  '**陈旧判定**：`whoami` 返回的 `startedAt` 与端口文件里的 `startedAt` 不一致 = 端口文件来自上一次启动（陈旧），以 whoami 为准重取地址或向主管要当前地址。'
+
 export const DISPATCH_PROTOCOL_MD = `## 第一步：看花名册（只看本项目的员工）
 
 花名册为空或明显不全时，先等 60 秒重查（最多 5 次）再下结论——员工会话可能正在创建中（主管往往最先被拉起）。
@@ -49,7 +63,7 @@ curl -s "$CC_HEIHEI_DESKTOP_SERVER_URL/api/servant-sessions?forSession=$CC_HEIHE
 2. 提交（**命令与删除分开：先看响应，确认送达才删**）：
 
 \`\`\`bash
-curl -s --max-time 15 -X POST "$CC_HEIHEI_DESKTOP_SERVER_URL/api/session-messages" \\
+curl -s --max-time 15 -X POST "<当前服务地址>/api/session-messages" \\
   -H "Content-Type: application/json" \\
   --data-binary @.dispatch-payload.json
 \`\`\`
@@ -57,7 +71,7 @@ curl -s --max-time 15 -X POST "$CC_HEIHEI_DESKTOP_SERVER_URL/api/session-message
 **成功判据 = 响应体含 \`"messageId"\`**（如 \`{"ok":true,"messageId":"..."}\`）才算送达，此时才可 \`rm -f .dispatch-payload.json\`；响应不含 messageId（连接错误 / 超时 / 空响应）＝**未送达，保留 payload 不要删**，修正后重试一次，仍失败降级「文件信箱」通道。**禁止把 rm 与 curl 用 \`&&\` 连接**——本机 curl 包装器失败时也可能退出码为 0，\`&& rm\` 会把还没发出的 payload 删掉（已有多位员工踩过）。
 
 要点：
-- **服务地址来源优先级**：① 主管派活消息里**显式写出的地址**（主管已验证可用）→ ② 固定端口文件 \`~/.claude/cc-heihei/desktop-server.json\` 的 \`url\` 字段（服务端每次启动更新，内容严格为 \`{ url, port, pid, startedAt }\`，port 为实际绑定端口）→ ③ 环境变量 \`$CC_HEIHEI_DESKTOP_SERVER_URL\`——它是**会话启动时注入**的，app 重启换端口后会失效。**读端口文件必须先校验 \`pid\` 存活再信 \`port\`**（进程被强杀时文件会残留旧值，正常退出才清理）；读到 null / 非法结构 / 死 pid 一律回退 env 或向主管要当前地址。换用新地址前先验身份：\`curl -s --max-time 5 <地址>/api/whoami\` 返回含 \`"app":"cc-heihei"\` 的 JSON 才是本服务，**空 200 或非 JSON 一律不是**（本机存在对任意路径回 200 空 body 的冒名端口）。
+- **服务地址来源优先级**：① 主管派活消息里**显式写出的地址**（主管已验证可用）→ ② 固定端口文件 \`~/.claude/cc-heihei/desktop-server.json\` 的 \`url\` 字段（服务端每次启动更新，内容严格为 \`{ url, port, pid, startedAt }\`，port 为实际绑定端口）→ ③ 环境变量 \`$CC_HEIHEI_DESKTOP_SERVER_URL\`——它是**会话启动时注入**的，app 重启换端口后会失效。**读端口文件必须先校验 \`pid\` 存活再信 \`port\`**（进程被强杀时文件会残留旧值，正常退出才清理）；读到 null / 非法结构 / 死 pid 一律回退 env 或向主管要当前地址。换用新地址前先验身份：\`curl -s --max-time 5 <地址>/api/whoami\` 返回含 \`"app":"cc-heihei"\` 的 JSON 才是本服务，**空 200 或非 JSON 一律不是**（本机存在对任意路径回 200 空 body 的冒名端口）。${SERVER_ADDRESS_STALENESS_NOTE}
 - 员工会话收到消息会自动开始执行（没在运行也会被拉起）。
 - **回邮地址必须是你真实的会话 ID**，员工的汇报才能找到你。
 - 派活后告诉用户：派给了谁（角色）、员工会话 id，用户可在侧边栏点开围观（执行过程实时可见）。
@@ -112,24 +126,23 @@ curl -s "$CC_HEIHEI_DESKTOP_SERVER_URL/api/servant-sessions?forSession=$CC_HEIHE
 \`\`\`
 
 - 员工的 \`lastActivityAt\` 在派活之后有更新 = 已开工，继续等汇报；
-- 一直没更新 = 员工可能卡住（工具缺失/权限等待），**发一条带排障线索的催促**，不要只施压。催促模板要点：① 核心工具（Bash/Read/Write/Glob/Grep）本就内联可用，直接调用即可，不要用 ToolSearch 反复加载（关键词搜索只覆盖 deferred 工具，搜不到核心工具属正常）；② 汇报改用文件信箱（写 JSON 到 \`.heihei/dispatch/report-<序号>.json\`）；③ 汇报命令不要内联中文。
+- 一直没更新 = 员工可能卡住（工具缺失/权限等待），**发一条带排障线索的催促**，不要只施压。催促模板要点：① 核心工具（${CORE_INLINE_TOOLS_TEXT}）本就内联可用，直接调用即可，不要用 ToolSearch 反复加载（关键词搜索只覆盖 deferred 工具，搜不到核心工具属正常）；② 汇报改用文件信箱（写 JSON 到 \`.heihei/dispatch/report-<序号>.json\`）；③ 汇报命令不要内联中文。
 - 员工长期（10 分钟以上）无活动且催促无回应：告知用户该员工会话可能异常，建议用户在 UI 点开该会话查看现场。
 - 派活返回 **404「目标不在册」** = 该员工已被移除（或从未登记）——重新 \`GET /api/servant-sessions\` 核对花名册，改派他人或提示用户重建该角色；**不要对同一目标重试**。
 
 ## 故障自检（派活/汇报失败时按序执行）
 
 1. Bash 输出 \`?????\` 或命令毫无效果 = shell 不可用：放弃 curl，全程改用「文件信箱」通道（只需 Write/Read 工具）。
-2. 工具找不到时（ToolSearch 报 "No matching deferred tools found"）：**关键词搜索只覆盖 deferred 工具**——核心工具（Bash/Read/Write/Glob/Grep/Skill）已直接内联可用，直接调用；确需加载 deferred 工具时用精确名，如 \`select:NotebookEdit,WebFetch\`。
+2. 工具找不到时（ToolSearch 报 "No matching deferred tools found"）：**关键词搜索只覆盖 deferred 工具**——核心工具（${CORE_INLINE_TOOLS_TEXT}）已直接内联可用，直接调用；确需加载 deferred 工具时用精确名，如 \`select:NotebookEdit,WebFetch\`。
 3. 环境变量检查：\`$CC_HEIHEI_DESKTOP_SERVER_URL\` 与 \`$CC_HEIHEI_SESSION_ID\` 应在你的 Bash 里可用（\`echo\` 验证）。HTTP 通道依赖这两个变量；这两个值也写在你的上岗消息里。
 4. 服务地址疑似过期（ECONNREFUSED / 超时）：用 Read 查看固定端口文件 \`~/.claude/cc-heihei/desktop-server.json\`（服务端每次启动更新，字段 \`{ url, port, pid, startedAt }\`），**先校验 \`pid\` 存活再信 \`port\`**——进程被强杀时文件会残留旧值（正常退出才清理）；读到 null / 非法结构 / 死 pid 就回退 env 或向主管要当前地址。确认地址后先验身份：\`curl -s --max-time 5 <url>/api/whoami\` 返回含 \`"app":"cc-heihei"\` 的 JSON 才是本服务（本机存在对任意路径回 200 空 body 的冒名端口，勿轻信 200）。文件信箱通道不依赖端口。
-5. computer-use 系列工具在无人值守的协作会话中不可用（审批需要桌面连接）：**不要尝试**，别在这条路上浪费轮次。
-6. 所有通道都失败时，明确告诉用户"协作环境异常"及失败原因，请用户在应用的「设置 → 诊断」里运行环境体检。
+5. 所有通道都失败时，明确告诉用户"协作环境异常"及失败原因，请用户在应用的「设置 → 诊断」里运行环境体检。
 
 ## 员工管理（都是现成端点，不用猜路径）
 
 - **修改角色特性 / 禁用员工**：用 **PUT**（不是 PATCH）\`/api/servant-sessions/<员工sessionId>\`，body：\`{"description":"补充约束","enabled":true}\`（enabled 必填，带上当前值；\`false\` 即停接新活）。
 - **中断员工正在跑的任务**：POST \`/api/sessions/<员工sessionId>/interrupt\`（保留会话与历史）。⚠️ 不要用 \`DELETE /api/sessions/<id>\`——那会删除整个会话，不可逆。
-- **自动熔断（服务端行为，无需你触发）**：员工**连续调用不存在的工具 3 次**（阈值 N=3）时，服务端会自动**中断该轮次**（保留会话与历史）。⚠️ 该事件**不会向你注入任何会话消息**（v1.2.3 起系统通知一律降为日志级，不再打扰对话流）——需要自查时读诊断日志 \`~/.claude/cc-heihei/diagnostics/diagnostics.jsonl\`，事件名 \`servant_unknown_tool_circuit\`（含会话 ID、工具名、连续次数）：\`grep servant_unknown_tool_circuit ~/.claude/cc-heihei/diagnostics/diagnostics.jsonl\`。员工**任一工具调用成功（含工具自己执行报错，因为它证明该工具存在）或整个轮次成功**都会把该连续计数清零。若你在日志里看到它：多半是员工被 ToolSearch / deferred 工具机制误导，重新派活时把「核心工具（Bash/Read/Write/Glob/Grep）本就内联可用、不要用 ToolSearch 反复加载」与任务要点一并写进消息。
+- **自动熔断（服务端行为，无需你触发）**：员工**连续调用不存在的工具 3 次**（阈值 N=3）时，服务端会自动**中断该轮次**（保留会话与历史）。⚠️ 该事件**不会向你注入任何会话消息**（v1.2.3 起系统通知一律降为日志级，不再打扰对话流）——需要自查时读诊断日志 \`~/.claude/cc-heihei/diagnostics/diagnostics.jsonl\`，事件名 \`servant_unknown_tool_circuit\`（含会话 ID、工具名、连续次数）：\`grep servant_unknown_tool_circuit ~/.claude/cc-heihei/diagnostics/diagnostics.jsonl\`。员工**任一工具调用成功（含工具自己执行报错，因为它证明该工具存在）或整个轮次成功**都会把该连续计数清零。若你在日志里看到它：多半是员工被 ToolSearch / deferred 工具机制误导，重新派活时把「核心工具（${CORE_INLINE_TOOLS_TEXT}）本就内联可用、不要用 ToolSearch 反复加载」与任务要点一并写进消息。
 - **广播**：POST \`/api/session-messages\`，body：\`{"broadcast":true,"content":"停工待命","fromSessionId":"<你的会话ID>"}\`，一条消息发给本项目全部员工。
 - **端点名录**：GET \`$CC_HEIHEI_DESKTOP_SERVER_URL/api\` 可列出全部可用端点，拿不准路径就查它。
 

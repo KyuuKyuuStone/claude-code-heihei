@@ -7,6 +7,7 @@
  */
 
 import * as fs from 'node:fs'
+import * as fsp from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { ProviderService } from './providerService.js'
@@ -43,6 +44,7 @@ import {
   REJECT_MESSAGE,
   REJECT_MESSAGE_WITH_REASON_PREFIX,
 } from '../../constants/messages.js'
+import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { findCanonicalGitRoot } from '../../utils/git.js'
 import { sanitizePath } from '../../utils/path.js'
@@ -1465,8 +1467,21 @@ export class ConversationService {
     if (!session) return false
 
     const line = JSON.stringify(payload) + '\n'
-    if (session.sdkSocket) {
-      session.sdkSocket.send(line)
+    const socket = session.sdkSocket
+    if (socket) {
+      try {
+        socket.send(line)
+      } catch (error) {
+        // C4（v1.5.0）：写入同步异常 = socket 已死（半开/已关闭但 close 事件
+        // 未到达）——主动 detach（内部会 dropActiveTurn 清 turn，避免转圈悬空），
+        // 并按未送达返回，交给上层走失败路径（回执撤回/信箱降级）。
+        logForDiagnosticsNoPII('warn', 'sdk_socket_send_failed', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        this.detachSdkConnection(sessionId, socket)
+        return false
+      }
     } else {
       session.pendingOutbound.push(line)
     }
@@ -1575,7 +1590,7 @@ export class ConversationService {
    */
   private supervisorSessionCache = new Map<
     string,
-    { supervisor: boolean; constraint?: 'readonly' | 'whitelist'; writeDirs?: string[] }
+    { supervisor: boolean; registered: boolean; constraint?: 'readonly' | 'whitelist'; writeDirs?: string[] }
   >()
 
   /** 协作身份变化后调用（任命/卸任/移除），让下次会话启动按最新花名册注入标记 */
@@ -1600,19 +1615,39 @@ export class ConversationService {
       const summary = typeof msg.result === 'string' ? msg.result.slice(0, 300) : ''
       void import('./servantIncidentNotifier.js')
         .then(({ onServantTurnError }) => onServantTurnError({ sessionId, streak, summary }))
-        .catch(() => {})
+        .catch((error) => {
+          // C5（v1.5.0）：通知路径的吞错至少留诊断（此前 .catch(() => {}) 静默，
+          // 通知失效在日志里无迹可查）
+          logForDiagnosticsNoPII('warn', 'servant_incident_notify_failed', {
+            sessionId,
+            hook: 'onServantTurnError',
+            error: error instanceof Error ? error.message : String(error),
+          })
+        })
       return
     }
     if (this.servantTurnErrorStreak.has(sessionId)) {
       this.servantTurnErrorStreak.delete(sessionId)
       void import('./servantIncidentNotifier.js')
         .then(({ clearServantTurnErrors }) => clearServantTurnErrors(sessionId))
-        .catch(() => {})
+        .catch((error) => {
+          logForDiagnosticsNoPII('warn', 'servant_incident_notify_failed', {
+            sessionId,
+            hook: 'clearServantTurnErrors',
+            error: error instanceof Error ? error.message : String(error),
+          })
+        })
     }
     // 轮次成功也清零「连续调用不存在工具」计数（语义见 servantIncidentNotifier）。
     void import('./servantIncidentNotifier.js')
       .then(({ resetUnknownToolStreak }) => resetUnknownToolStreak(sessionId))
-      .catch(() => {})
+      .catch((error) => {
+        logForDiagnosticsNoPII('warn', 'servant_incident_notify_failed', {
+          sessionId,
+          hook: 'resetUnknownToolStreak',
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
   }
 
   /**
@@ -1631,7 +1666,13 @@ export class ConversationService {
       const isError = (block as { is_error?: unknown }).is_error === true
       void import('./servantIncidentNotifier.js')
         .then(({ onServantToolResult }) => onServantToolResult({ sessionId, resultText, isError }))
-        .catch(() => {})
+        .catch((error) => {
+          logForDiagnosticsNoPII('warn', 'servant_incident_notify_failed', {
+            sessionId,
+            hook: 'onServantToolResult',
+            error: error instanceof Error ? error.message : String(error),
+          })
+        })
     }
   }
 
@@ -1651,6 +1692,8 @@ export class ConversationService {
 
   private async isRegisteredSupervisor(sessionId: string): Promise<{
     supervisor: boolean
+    /** 是否花名册在册的协作会话（主管或员工都算；A7 据此不注入 computer-use） */
+    registered: boolean
     constraint?: 'readonly' | 'whitelist'
     writeDirs?: string[]
   }> {
@@ -1658,15 +1701,17 @@ export class ConversationService {
     if (cached !== undefined) return cached
     let info: {
       supervisor: boolean
+      registered: boolean
       constraint?: 'readonly' | 'whitelist'
       writeDirs?: string[]
-    } = { supervisor: false }
+    } = { supervisor: false, registered: false }
     try {
       // v1.3.0 阶段4 · 7a：花名册查询走依赖注入（servantInfoSource），
       // 未注入时 getServantEntry 返回 null = 按非主管处理（原 catch 降级语义）
       const entry = await getServantEntry(sessionId)
       info = {
         supervisor: Boolean(entry?.supervisor),
+        registered: entry !== null,
         ...(entry?.constraint === 'readonly' || entry?.constraint === 'whitelist'
           ? { constraint: entry.constraint }
           : {}),
@@ -1683,6 +1728,7 @@ export class ConversationService {
 
   private async getCollabIdentity(sessionId: string): Promise<{
     supervisor: boolean
+    registered: boolean
     constraint?: 'readonly' | 'whitelist'
     writeDirs?: string[]
   }> {
@@ -1866,6 +1912,11 @@ export class ConversationService {
       // readonly 员工禁改文件、whitelist 员工仅白名单目录内可写；提示词约束会被
       // 延续对话的旧上下文压过，机制兜底见 collaboration/supervisorGuard）
       ...(collabIdentity?.supervisor ? { CC_HEIHEI_SUPERVISOR: '1' } : {}),
+      // A7（v1.5.0）：协作会话（主管/员工，即花名册在册）不注入 computer-use
+      // 系列工具——无人值守场景无人审批桌面权限，工具在场只会诱导模型浪费
+      // 轮次。走上游自带开关（utils/computerUse/gates.ts getChicagoEnabled）；
+      // 普通（非协作）会话不注入，行为不变。
+      ...(collabIdentity?.registered ? { CLAUDE_COMPUTER_USE_ENABLED: '0' } : {}),
       ...(collabIdentity?.constraint === 'readonly'
         ? { CC_HEIHEI_SERVANT_CONSTRAINT: 'readonly' }
         : {}),
@@ -2434,7 +2485,7 @@ export class ConversationService {
         mimeType: attachment.mimeType ?? parsed.mimeType,
       })
       const fileName = this.sanitizeAttachmentName(attachment.name, attachment.type, ext)
-      const outPath = this.writeUploadAttachment(uploadDir, fileName, parsed.payload)
+      const outPath = await this.writeUploadAttachment(uploadDir, fileName, parsed.payload)
       savedPaths.push(outPath)
     }
 
@@ -2481,11 +2532,11 @@ export class ConversationService {
         this.sanitizeAttachmentName(attachment.name, attachment.type, normalizedExt),
         normalizedExt,
       )
-      const sourcePath = source.sourcePath ?? this.writeUploadAttachment(
+      const sourcePath = source.sourcePath ?? (await this.writeUploadAttachment(
         uploadDir,
         storedName,
         resized.buffer,
-      )
+      ))
       const metadataText = resized.dimensions
         ? createImageMetadataText(resized.dimensions, sourcePath)
         : sourcePath
@@ -2551,10 +2602,15 @@ export class ConversationService {
     return /\.(png|jpe?g|gif|webp)$/i.test(candidate)
   }
 
-  private writeUploadAttachment(uploadDir: string, fileName: string, payload: Buffer): string {
-    fs.mkdirSync(uploadDir, { recursive: true })
+  /**
+   * C6（v1.5.0）：改异步写——附件可达数 MB，同步 writeFileSync 阻塞事件循环，
+   * 表现为「发带图消息时整个服务端卡一下」（多人协作时放大）。
+   */
+  private async writeUploadAttachment(uploadDir: string, fileName: string, payload: Buffer): Promise<string> {
+    // 注意用 fs/promises：本文件顶部的 `fs` 是 node:fs（回调 API）
+    await fsp.mkdir(uploadDir, { recursive: true })
     const outPath = path.join(uploadDir, `${crypto.randomUUID()}-${fileName}`)
-    fs.writeFileSync(outPath, payload)
+    await fsp.writeFile(outPath, payload)
     return outPath
   }
 

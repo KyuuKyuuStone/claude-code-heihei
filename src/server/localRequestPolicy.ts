@@ -178,7 +178,7 @@ function isSameOriginFilesystemAsset(
  * us without an `Origin` header, so it would otherwise be indistinguishable
  * from a genuine local navigation. Fetch Metadata is what tells them apart:
  * a top-level navigation carries `Sec-Fetch-Mode: navigate`, a subresource
- * does not. Clients that send no Fetch Metadata at all (curl, adapters, the
+ * does not. Clients that send no Fetch Metadata at all (curl, the
  * CLI subprocess) stay trusted — they are not a browser CSRF vector.
  */
 function isCrossSiteSubresource(headers: Headers): boolean {
@@ -201,7 +201,7 @@ function isLocalDesktopOrNavigationOrigin(
 
   // A configured process credential distinguishes the Electron renderer from
   // arbitrary pages served by another loopback process. Keep tokenless
-  // navigation, OAuth callbacks and CLI/adapters working above, but never
+  // navigation, OAuth callbacks and CLI clients working above, but never
   // grant an Origin-bearing browser page that credential by locality alone.
   if (context.localAccessTokenConfigured) return false
 
@@ -219,7 +219,7 @@ function isLocalTrustedRequest(
   origin: string | null,
 ): boolean {
   // The process token the desktop shell injects is the strongest credential we
-  // have: it identifies the app's own components (renderer, adapters, the CLI
+  // have: it identifies the app's own components (renderer, the CLI
   // subprocess) regardless of how they reach us.
   if (context.localAccessAuthorized === true) return true
   if (isSameOriginFilesystemAsset(request, url, origin)) return true

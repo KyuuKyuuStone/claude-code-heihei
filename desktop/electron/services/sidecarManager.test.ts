@@ -20,10 +20,8 @@ import {
   appendHostDiagnostic,
   buildSidecarEnv,
   clearProxyEnv,
-  createAdapterPlan,
   createServerPlan,
   electronHostDiagnosticsFile,
-  httpToWebSocketUrl,
   HOST_DIAGNOSTICS_BYTE_LIMIT,
   HOST_DIAGNOSTICS_LINE_LIMIT,
   killSidecar,
@@ -41,7 +39,6 @@ import {
   SYSTEM_PROXY_ERROR_ENV,
   spawnSidecar,
   waitForServer,
-  withAdapterProxyBridgeEnv,
   withSystemProxyBridgeEnv,
   withSystemProxyErrorEnv,
   windowsPowerShellOverride,
@@ -152,15 +149,6 @@ describe('Electron sidecar manager', () => {
       expect(pathValue?.split(path.delimiter)).toContain(
         path.dirname(bundledRipgrep),
       )
-
-      const adapter = createAdapterPlan({
-        desktopRoot,
-        appRoot: '/app',
-        serverUrl: 'http://127.0.0.1:49321',
-        flag: '--telegram',
-        env: {},
-      })
-      expect(adapter.env[RIPGREP_PATH_ENV]).toBe(bundledRipgrep)
     } finally {
       rmSync(desktopRoot, { recursive: true, force: true })
     }
@@ -185,31 +173,47 @@ describe('Electron sidecar manager', () => {
     }
   })
 
-  it('passes portable config and adapter server URL through the sidecar env', () => {
+  it('passes portable config and app version through the sidecar env', () => {
     const configDir = mkdtempSync(path.join(tmpdir(), 'cc-heihei-config-'))
     try {
-      const env = buildSidecarEnv({ CLAUDE_CONFIG_DIR: configDir }, '/app/dist')
+      const env = buildSidecarEnv({ CLAUDE_CONFIG_DIR: configDir }, '1.5.0-test')
       expect(env.CLAUDE_CONFIG_DIR).toBe(configDir)
       expect(env.XDG_CACHE_HOME).toBe(path.join(configDir, 'Cache'))
+      expect(env.CC_HEIHEI_APP_VERSION).toBe('1.5.0-test')
 
-      const adapter = createAdapterPlan({
+      const plan = createServerPlan({
         desktopRoot: '/app/desktop',
         appRoot: '/app',
-        serverUrl: 'http://127.0.0.1:4567',
-        flag: '--telegram',
+        port: 49321,
+        appVersion: '1.5.0-test',
         env: { CLAUDE_CONFIG_DIR: configDir },
       })
-      expect(adapter.env.ADAPTER_SERVER_URL).toBe('ws://127.0.0.1:4567')
-      expect(adapter.args).toEqual(['adapters', '--app-root', '/app', '--telegram'])
+      expect(plan.env.CC_HEIHEI_APP_VERSION).toBe('1.5.0-test')
 
-      const whatsappAdapter = createAdapterPlan({
+      const unversioned = buildSidecarEnv({ CLAUDE_CONFIG_DIR: configDir })
+      expect(unversioned.CC_HEIHEI_APP_VERSION).toBeUndefined()
+    } finally {
+      rmSync(configDir, { recursive: true, force: true })
+    }
+  })
+
+  // v1.5.0：正式 sidecar 标记——只有带标记的实例才写/清端口文件。
+  // 没有它，测试/脚本启动的实例会覆盖 ~/.claude/cc-heihei/desktop-server.json，
+  // 把正在服务的桌面 app 从端口文件上挤掉（2026-09-29 实测事故）。
+  it('marks every sidecar plan as a desktop sidecar', () => {
+    const configDir = mkdtempSync(path.join(tmpdir(), 'cc-heihei-config-'))
+    try {
+      const env = buildSidecarEnv({ CLAUDE_CONFIG_DIR: configDir }, '1.5.0-test')
+      expect(env.CC_HEIHEI_DESKTOP_SIDECAR).toBe('1')
+
+      const plan = createServerPlan({
         desktopRoot: '/app/desktop',
         appRoot: '/app',
-        serverUrl: 'http://127.0.0.1:4567',
-        flag: '--whatsapp',
+        port: 49321,
+        appVersion: '1.5.0-test',
         env: { CLAUDE_CONFIG_DIR: configDir },
       })
-      expect(whatsappAdapter.args).toEqual(['adapters', '--app-root', '/app', '--whatsapp'])
+      expect(plan.env.CC_HEIHEI_DESKTOP_SIDECAR).toBe('1')
     } finally {
       rmSync(configDir, { recursive: true, force: true })
     }
@@ -255,23 +259,6 @@ describe('Electron sidecar manager', () => {
     expect(env[SYSTEM_PROXY_ERROR_ENV]).toContain('https://[REDACTED]@proxy.example/path')
     expect(env[SYSTEM_PROXY_ERROR_ENV]).not.toContain('password')
     expect(env[SYSTEM_PROXY_ERROR_ENV]).not.toContain('sk-secret')
-  })
-
-  it('routes adapter sidecars explicitly through the dynamic bridge', () => {
-    const bridgeUrl = 'http://127.0.0.1:49123'
-    const env = withAdapterProxyBridgeEnv({
-      HTTPS_PROXY: 'http://stale.example:8080',
-      ALL_PROXY: 'socks5://stale.example:1080',
-      [SYSTEM_PROXY_BRIDGE_ENV]: bridgeUrl,
-    }, bridgeUrl)
-
-    expect(env.HTTP_PROXY).toBe(bridgeUrl)
-    expect(env.HTTPS_PROXY).toBe(bridgeUrl)
-    expect(env.http_proxy).toBe(bridgeUrl)
-    expect(env.https_proxy).toBe(bridgeUrl)
-    expect(env.ALL_PROXY).toBe(bridgeUrl)
-    expect(env.all_proxy).toBe(bridgeUrl)
-    expect(env.NO_PROXY).toContain('127.0.0.1')
   })
 
   it('keeps startup logs bounded', () => {
@@ -462,11 +449,6 @@ describe('Electron sidecar manager', () => {
       errorSpy.mockRestore()
       rmSync(dir, { recursive: true, force: true })
     }
-  })
-
-  it('maps http urls to adapter websocket urls', () => {
-    expect(httpToWebSocketUrl('http://127.0.0.1:3456')).toBe('ws://127.0.0.1:3456')
-    expect(httpToWebSocketUrl('https://example.com')).toBe('wss://example.com')
   })
 
   it('kills non-Windows sidecars with a signal', () => {

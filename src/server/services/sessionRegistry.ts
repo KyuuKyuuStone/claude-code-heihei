@@ -1,6 +1,12 @@
 /**
- * sessionRegistry —— 会话生命周期 / 回合 / 权限状态的单一权威源
- * （v1.3.0 地基重构 · 阶段 0 骨架：纯加法零接线，API 全量落地，尚无存量调用方）。
+ * sessionRegistry —— 会话生命周期 / 回合 / 权限状态的单一权威源。
+ *
+ * 状态（v1.5.0 低20：接线已全面完成，本注释如实反映现状）：v1.3.0 起各阶段
+ * 已把所有 lifecycle/turn/permission 写入方全部收敛到本模块（conversationService
+ * 的进程链、ws/handler 的 WS 路径、sessionMessenger 的注入路径、dispatchReceipt
+ * 的观察流、api 层），旧机制（activeUserTurns / deletedSessions / messageSent
+ * 字段）已从代码本体删除，仅在本文件保留新旧语义映射注释供考古。没有绕过本
+ * 模块直接读写会话生命周期/回合状态的路径（v1.4.0 架构只读核查确认）。
  *
  * 分层（架构方案 §1 / §7）：registry 属 L1，只依赖 types/utils（本文件仅依赖
  * utils/diagLogs 与兄弟模块 sessionEvents）；其余全部模块是它的写入者/订阅者。
@@ -10,15 +16,15 @@
  * - C5 先改状态后发事件；事件载荷只带 sessionId + 状态字段（防环）。
  * - C7 无 mock.module；提供 resetRegistryForTests。
  *
- * ── 双输入源交错规则（架构方案 §4 阶段 1 合同补充 2；本阶段先在 API 设计留口）──
- * turn 字段未来有两个写入者：
+ * ── 双输入源交错规则（观察流只降不升）──
+ * turn 有两个写入者：
  *   1. 注入路径 beginTurn —— 唯一的预登记入口；
- *   2. dispatchReceipt 观察流（SDK 消息流，阶段 1/2 接线）。
+ *   2. dispatchReceipt 观察流（SDK 消息流，v1.3.0 阶段1/2 已接线）。
  * 规则：**观察流只降不升** —— 观察到的「进行中」信号在无 turn 时**丢弃**
  * （不得新建 turn）；观察到的 result 清除**任何** turn（观察流是 CLI 事实的
- * 最终裁决者）。阶段 0 不开放观察流写入入口（避免半成品 API）；接线时按此
- * 规则补一个 `observeTurnResult` 类 API（命名阶段 1 定），语义等价于
- * 「无条件按身份豁免的清 turn」，并配三组时序交错测试（观察先行/注入先行/双清竞争）。
+ * 最终裁决者）。另有两个**无条件清**入口：dropActiveTurn（观察通道失联的
+ * 预防性清除，v1.4.0 阶段2）与 markCrashed/tombstone 等生命周期清除。
+ * 交错时序交替测试见 __tests__/session-registry.test.ts 与 dispatch-receipts.test.ts。
  */
 import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 import { assertNotReentrant, emitSessionEvent } from './sessionEvents.js'
@@ -304,6 +310,32 @@ export function dropActiveTurn(id: string, meta?: Record<string, unknown>): void
   if (!state) return
   if (state.turn === 'none') return
   clearTurnInternal(id, state, { reason: 'observation_blind', ...(meta ?? {}) })
+}
+
+/**
+ * 替换式建回合（v1.5.0 低7：原子化）：同一会话的 WS user_message 语义是
+ * 「新回合无条件顶掉旧回合」（旧 handler 的 activeUserTurns.set 覆盖语义，
+ * WS 测试锁定）；而 beginTurn 是幂等拒绝语义。本函数在**一次** registry
+ * 调用内完成「按快照 owner 结束旧回合 → 建新回合」，消除调用方（ws/handler
+ * 的本地 beginTurnReplacing）先读快照再 settle 再 begin 的三步非原子窗口
+ * （并发双消息下两个调用方读到同一 prevOwner、后到者 beginTurn 返回 null、
+ * 该请求 turn 记账缺位）。
+ *
+ * 与注入路径 beginInjectedUserTurn 的幂等语义不冲突：那条路径继续直接用
+ * beginTurn（v1.2.6 测试锁定），不要换成本函数。
+ */
+export function beginTurnReplacing(id: string, opts: { awaitSend: boolean }): TurnHandle | null {
+  assertNotReentrant()
+  const prevOwner = getState(id)?.turnOwner ?? null
+  if (prevOwner !== null) {
+    // 直接 clearTurnInternal（不绕 settleTurnByIdentity 的二次守卫入口；
+    // clearTurnInternal 自身不做 reentrancy 检查，本函数入口已查过）
+    const state = getState(id)
+    if (state && state.turnOwner === prevOwner && state.turn !== 'none') {
+      clearTurnInternal(id, state, { reason: 'replaced_by_new_turn' })
+    }
+  }
+  return beginTurn(id, opts)
 }
 
 /** 内部：身份比对 + 清回合（先改状态后发）。 */

@@ -13,6 +13,13 @@ export type SessionsResponse = {
 type MessagesResponse = {
   messages: MessageEntry[]
   taskNotifications?: AgentTaskNotification[]
+  /**
+   * v1.5.0 窗口化读取（?limit=&before=）才带的分页元数据。旧服务端忽略
+   * limit、返回全量且不带这些字段——调用方按 hasMore=false 处理即可。
+   */
+  total?: number
+  hasMore?: boolean
+  nextBefore?: number
 }
 type CreateSessionResponse = { sessionId: string; workDir?: string }
 export type BatchDeleteSessionsResponse = {
@@ -329,8 +336,12 @@ export const sessionsApi = {
     return api.get<SessionsResponse>(`/api/sessions${qs ? `?${qs}` : ''}`)
   },
 
-  getMessages(sessionId: string) {
-    return api.get<MessagesResponse>(`/api/sessions/${sessionId}/messages`)
+  getMessages(sessionId: string, params?: { limit?: number; before?: number }) {
+    const query = new URLSearchParams()
+    if (typeof params?.limit === 'number') query.set('limit', String(params.limit))
+    if (typeof params?.before === 'number') query.set('before', String(params.before))
+    const qs = query.toString()
+    return api.get<MessagesResponse>(`/api/sessions/${sessionId}/messages${qs ? `?${qs}` : ''}`)
   },
 
   getTrace(sessionId: string) {

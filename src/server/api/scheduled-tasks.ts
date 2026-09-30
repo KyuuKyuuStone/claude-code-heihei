@@ -10,7 +10,7 @@
  * DELETE /api/scheduled-tasks/:id       — 删除任务
  */
 
-import { CronService, type CronTask } from '../services/cronService.js'
+import { CronService } from '../services/cronService.js'
 import { cronScheduler } from '../services/cronScheduler.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 
@@ -110,7 +110,8 @@ export async function handleScheduledTasksApi(
         providerId: body.providerId as string | null | undefined,
         folderPath: body.folderPath as string | undefined,
         useWorktree: body.useWorktree as boolean | undefined,
-        notification: body.notification as CronTask['notification'],
+        // v1.5.0：notification（IM 适配器渠道配置）随适配器移除——请求体里
+        // 若仍有该字段，直接忽略（不再透传到任务模型）
       })
       return Response.json({ task }, { status: 201 })
     }

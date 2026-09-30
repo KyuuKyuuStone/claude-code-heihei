@@ -1,7 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useTaskStore } from '../../stores/taskStore'
 import { useSessionStore } from '../../stores/sessionStore'
-import { useAdapterStore } from '../../stores/adapterStore'
 import { Modal } from '@/components/ui/Modal'
 import { Badge } from '@/components/ui/Badge'
 import { Card } from '@/components/ui/Card'
@@ -15,7 +14,8 @@ import { useTranslation } from '../../i18n'
 import { describeCron, isValidCron, parseCron, type FrequencyKey } from '../../lib/cronDescribe'
 import type { CronTask } from '../../types/task'
 
-type NotificationChannel = 'desktop' | 'telegram' | 'feishu'
+// v1.5.0：外部 IM 适配器（飞书/Telegram 等）已移除，通知渠道只剩桌面通知。
+type NotificationChannel = 'desktop'
 
 type Props = {
   open: boolean
@@ -65,17 +65,6 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const activeSession = sessions.find((s) => s.id === activeSessionId)
   const defaultWorkDir = activeSession?.workDir || ''
-  const adapterConfig = useAdapterStore((s) => s.config)
-  const fetchAdapterConfig = useAdapterStore((s) => s.fetchConfig)
-
-  useEffect(() => {
-    if (open) fetchAdapterConfig()
-  }, [open])
-
-  const isFeishuConfigured = !!(adapterConfig.feishu?.appId && adapterConfig.feishu?.appSecret
-    && ((adapterConfig.feishu?.pairedUsers?.length ?? 0) > 0 || (adapterConfig.feishu?.allowedUsers?.length ?? 0) > 0))
-  const isTelegramConfigured = !!(adapterConfig.telegram?.botToken
-    && ((adapterConfig.telegram?.pairedUsers?.length ?? 0) > 0 || (adapterConfig.telegram?.allowedUsers?.length ?? 0) > 0))
 
   const isEdit = !!editTask
   const parsed = editTask ? parseCron(editTask.cron) : null
@@ -100,7 +89,10 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
   const [folderPath, setFolderPath] = useState(editTask?.folderPath || defaultWorkDir)
   const [useWorktree, setUseWorktree] = useState(editTask?.useWorktree || false)
   const [notifyEnabled, setNotifyEnabled] = useState(editTask?.notification?.enabled || false)
-  const [notifyChannels, setNotifyChannels] = useState<NotificationChannel[]>(editTask?.notification?.channels || [])
+  // 存量任务可能带着已移除的 IM 渠道（telegram/feishu）——只保留仍受支持的桌面渠道
+  const [notifyChannels, setNotifyChannels] = useState<NotificationChannel[]>(
+    (editTask?.notification?.channels ?? []).filter((c): c is NotificationChannel => c === 'desktop'),
+  )
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   // Enhanced scheduling state
@@ -348,38 +340,6 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
                   onChange={(e) => {
                     setNotifyChannels((prev) =>
                       e.target.checked ? [...prev, 'desktop'] : prev.filter((c) => c !== 'desktop'),
-                    )
-                  }}
-                />
-                <Checkbox
-                  size="sm"
-                  label={
-                    <span className="inline-flex items-center gap-1.5">
-                      {t('settings.adapters.feishu')}
-                      {!isFeishuConfigured && <Badge tone="warning">{t('newTask.notConfigured')}</Badge>}
-                    </span>
-                  }
-                  checked={notifyChannels.includes('feishu')}
-                  disabled={!isFeishuConfigured}
-                  onChange={(e) => {
-                    setNotifyChannels((prev) =>
-                      e.target.checked ? [...prev, 'feishu'] : prev.filter((c) => c !== 'feishu'),
-                    )
-                  }}
-                />
-                <Checkbox
-                  size="sm"
-                  label={
-                    <span className="inline-flex items-center gap-1.5">
-                      {t('settings.adapters.telegram')}
-                      {!isTelegramConfigured && <Badge tone="warning">{t('newTask.notConfigured')}</Badge>}
-                    </span>
-                  }
-                  checked={notifyChannels.includes('telegram')}
-                  disabled={!isTelegramConfigured}
-                  onChange={(e) => {
-                    setNotifyChannels((prev) =>
-                      e.target.checked ? [...prev, 'telegram'] : prev.filter((c) => c !== 'telegram'),
                     )
                   }}
                 />

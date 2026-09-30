@@ -10,6 +10,7 @@ import {
   assertLocalIndexSchemaSupported,
   migrateLocalIndexDatabase,
 } from './migrations.js'
+import { configureLocalIndexConnection } from './pragmas.js'
 
 export type LocalIndexBinding =
   | bigint
@@ -89,12 +90,9 @@ function consumeIfThenable(value: unknown): boolean {
 }
 
 function configureConnection(database: Database): void {
-  database.exec(`PRAGMA busy_timeout = ${LOCAL_INDEX_BUSY_TIMEOUT_MS}`)
-  database.exec('PRAGMA journal_mode = WAL')
-  database.exec('PRAGMA synchronous = NORMAL')
-  database.exec('PRAGMA foreign_keys = ON')
-  database.exec('PRAGMA wal_autocheckpoint = 1000')
-  database.exec(`PRAGMA journal_size_limit = ${16 * 1024 * 1024}`)
+  // v1.5.0 低11：连接配置统一到 pragmas.ts 共享实现（与 scheduledRunIndex 同源；
+  // 此前两处各写一份且已漂移——那边漏了 journal_size_limit）
+  configureLocalIndexConnection(database, LOCAL_INDEX_BUSY_TIMEOUT_MS)
 }
 
 function fileSize(path: string): number {

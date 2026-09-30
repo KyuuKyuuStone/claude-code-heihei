@@ -19,6 +19,7 @@ import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import * as crypto from 'node:crypto'
 import { COLLAB_MAILBOX_DIR } from '../../collaboration/dispatchProtocol.js'
+import { diagnosticsService } from './diagnosticsService.js'
 import { forgetReceipt, recordDelivery } from './dispatchReceiptService.js'
 import { servantService, type ServantInfo } from './servantService.js'
 import { sessionService } from './sessionService.js'
@@ -279,6 +280,13 @@ export class DispatchMailboxService {
     try {
       if (!isDispatchPayloadName(name)) return { ok: false, reason: 'not a dispatch payload name' }
 
+      // C2（v1.5.0）幂等护栏：同名前次消费成功的回执（<name>.ack）已存在 →
+      // 该投递早已送达，直接跳过。防「投递成功但 unlink 失败、文件残留」被
+      // 45s 周期 rescan 再次投递（重复派活）。
+      if (await this.ackExists(dir, name)) {
+        return { ok: true }
+      }
+
       let raw: string | null
       try {
         raw = await this.readPayloadWithRetry(filePath)
@@ -332,14 +340,31 @@ export class DispatchMailboxService {
         return { ok: false, reason }
       }
 
-      await fs.unlink(filePath).catch(() => {})
+      // C2（v1.5.0，主管裁决）：unlink 失败（Windows 锁）时**仍然写 ack**——
+      // 投递已成功，ack 就是幂等护栏：入口见 ack 即跳过，重复投递彻底闭死
+      // （此前「unlink 失败不写 ack」会让下轮 rescan 重投一次）。unlink 失败的
+      // 事实经 ack 的 unlinkFailed:true 字段 + 一条 warn 诊断留痕，便于排查残留。
+      let removed = true
+      await fs.unlink(filePath).catch(() => {
+        removed = false
+      })
+      if (!removed) {
+        void diagnosticsService
+          .recordEvent({
+            type: 'dispatch_mailbox_unlink_failed',
+            severity: 'warn',
+            summary: `信箱文件删除失败（已投递成功，ack 已写入并带 unlinkFailed 标记；文件残留需人工清理）：${name}`,
+            details: { dir, name, targetSessionId: payload.targetSessionId, messageId },
+          })
+          .catch(() => {})
+      }
 
       // 消费回执（v1.4.0 阶段1-A ③，信箱一等化）：原文件删除后同目录回写
       // `<原文件名>.ack`，员工可 Read 确认送达，不必等主管口头确认。
       // 协议：内容为 { ack: true, file, targetSessionId, fromSessionId?,
-      // messageId, deliveredAt(ISO8601) }；.ack 后缀不匹配
-      // isDispatchPayloadName（非 .json 结尾），不会被再次消费；写入失败
-      // 仅影响送达确认，不得影响投递主链路（静默吞掉）。
+      // messageId, deliveredAt(ISO8601), unlinkFailed?(仅删除失败时出现) }；
+      // .ack 后缀不匹配 isDispatchPayloadName（非 .json 结尾），不会被再次
+      // 消费；写入失败仅影响送达确认，不得影响投递主链路（静默吞掉）。
       await fs.writeFile(
         path.join(dir, `${name}.ack`),
         JSON.stringify(
@@ -350,16 +375,44 @@ export class DispatchMailboxService {
             ...(payload.fromSessionId ? { fromSessionId: payload.fromSessionId } : {}),
             messageId,
             deliveredAt: new Date().toISOString(),
+            ...(removed ? {} : { unlinkFailed: true }),
           },
           null,
           2,
         ),
         'utf-8',
-      ).catch(() => {})
+      ).catch((error) => {
+        // 低-1（v1.5.0）：ack 写失败也必须留痕——ack 是幂等护栏，写不进去意味着
+        // 下次 rescan 会重投（且员工看不到送达回执）。与 unlinkFailed 留痕对称。
+        void diagnosticsService
+          .recordEvent({
+            type: 'dispatch_mailbox_ack_write_failed',
+            severity: 'warn',
+            summary: `信箱 .ack 回执写入失败（投递已成功，但幂等护栏与送达确认缺失）：${name}`,
+            details: {
+              dir,
+              name,
+              targetSessionId: payload.targetSessionId,
+              messageId,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          })
+          .catch(() => {})
+      })
 
       return { ok: true }
     } finally {
       this.inFlight.delete(key)
+    }
+  }
+
+  /** C2（v1.5.0）：该文件的消费回执是否已存在（幂等护栏，任何 IO 异常按不存在处理） */
+  private async ackExists(dir: string, name: string): Promise<boolean> {
+    try {
+      await fs.access(path.join(dir, `${name}.ack`))
+      return true
+    } catch {
+      return false
     }
   }
 

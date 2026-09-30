@@ -92,6 +92,32 @@ const diffStyles = {
       diffViewerTitleColor: 'var(--color-diff-title-color)',
       diffViewerTitleBorderColor: 'var(--color-diff-title-border)',
     },
+    dark: {
+      diffViewerBackground: 'var(--color-code-bg)',
+      diffViewerColor: 'var(--color-code-fg)',
+      addedBackground: 'var(--color-diff-added-bg)',
+      addedColor: 'var(--color-code-fg)',
+      removedBackground: 'var(--color-diff-removed-bg)',
+      removedColor: 'var(--color-code-fg)',
+      wordAddedBackground: 'var(--color-diff-added-word)',
+      wordRemovedBackground: 'var(--color-diff-removed-word)',
+      addedGutterBackground: 'var(--color-diff-added-gutter)',
+      removedGutterBackground: 'var(--color-diff-removed-gutter)',
+      gutterBackground: 'var(--color-surface-container-low)',
+      gutterBackgroundDark: 'var(--color-surface-container)',
+      highlightBackground: 'var(--color-diff-highlight-bg)',
+      highlightGutterBackground: 'var(--color-diff-highlight-gutter)',
+      codeFoldGutterBackground: 'var(--color-surface-container-high)',
+      codeFoldBackground: 'var(--color-surface-container-highest)',
+      emptyLineBackground: 'var(--color-surface-container-low)',
+      gutterColor: 'var(--color-text-tertiary)',
+      addedGutterColor: 'var(--color-diff-added-text)',
+      removedGutterColor: 'var(--color-diff-removed-text)',
+      codeFoldContentColor: 'var(--color-text-tertiary)',
+      diffViewerTitleBackground: 'var(--color-diff-title-bg)',
+      diffViewerTitleColor: 'var(--color-diff-title-color)',
+      diffViewerTitleBorderColor: 'var(--color-diff-title-border)',
+    },
   },
   diffContainer: {
     borderRadius: '0',
@@ -133,7 +159,7 @@ export function DiffViewer({ filePath, oldString, newString }: Props) {
         <CopyButton
           text={`--- ${filePath}\n+++ ${filePath}`}
           label={t('chat.copyPath')}
-          className="shrink-0 rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3 py-1 text-[12.5px] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+          className="shrink-0 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3 py-1 text-[12.5px] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
         />
       </div>
 

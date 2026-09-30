@@ -2,7 +2,7 @@
   "name": "claude-code-desktop",
   "private": true,
   "packageManager": "bun@1.3.14",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "Desktop coding agent workbench for Claude Code Heihei.",
   "type": "module",
   "main": "electron-dist/main.cjs",
@@ -29,23 +29,6 @@
       "src-tauri/resources/preview-agent.js",
       "package.json"
     ],
-    "mac": {
-      "category": "public.app-category.developer-tools",
-      "target": [
-        "dmg",
-        "zip"
-      ],
-      "icon": "src-tauri/icons/icon.icns",
-      "hardenedRuntime": true,
-      "gatekeeperAssess": false,
-      "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
-      "signIgnore": [
-        "/Contents/Frameworks/.+\\.(?:pak|bin|dat|nib)$",
-        "/Contents/Resources/.+\\.(?:asar|pak|bin|dat|icns|png|jpg|jpeg|gif|svg|ttf|woff|woff2)$"
-      ],
-      "notarize": true
-    },
     "win": {
       "target": "nsis",
       "icon": "src-tauri/icons/icon.ico"
@@ -54,15 +37,6 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "include": "build/installer.nsh"
-    },
-    "linux": {
-      "target": [
-        "AppImage",
-        "deb"
-      ],
-      "icon": "src-tauri/icons",
-      "category": "Development",
-      "maintainer": "KyuuKyuuStone <511829667@qq.com>"
     },
     "publish": [
       {
@@ -74,7 +48,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "bun run build:preview-agent && node ./node_modules/typescript/bin/tsc -b && node ./node_modules/vite/bin/vite.js build",
+    "build": "bun run build:preview-agent && bun ./node_modules/typescript/bin/tsc -b && bun ./node_modules/vite/bin/vite.js build",
     "prepare:node-pty": "bun run ./scripts/prepare-node-pty.ts",
     "build:electron": "bun run prepare:node-pty && bun build ./electron/main.ts --outfile ./electron-dist/main.cjs --target node --format cjs --external electron --external node-pty && bun build ./electron/preload.ts --outfile ./electron-dist/preload.cjs --target node --format cjs --external electron && bun build ./electron/preview-preload.ts --outfile ./electron-dist/preview-preload.cjs --target node --format cjs --external electron",
     "build:preview-agent": "bun run ./scripts/build-preview-agent.ts",
@@ -82,20 +56,17 @@
     "build:sidecars": "bun run ./scripts/build-sidecars.ts",
     "test:compiled-sidecar-smoke": "CC_HEIHEI_RUN_COMPILED_SIDECAR_SMOKE=1 bun run test -- --run scripts/build-sidecars.test.ts",
     "clean:electron-output": "bun run ./scripts/clean-electron-output.ts",
-    "build:macos-arm64": "bash ./scripts/build-macos-arm64.sh",
     "build:windows-x64": "powershell -ExecutionPolicy Bypass -File ./scripts/build-windows-x64.ps1",
     "test:windows-storage-recovery": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ./build/recover-legacy-install-data.ps1 -SelfTest",
-    "build:linux-x64": "bash ./scripts/build-linux.sh",
-    "build:linux-arm64": "LINUX_ARCH=arm64 bash ./scripts/build-linux.sh",
     "electron:dev": "bun run build:electron && bun run ./scripts/electron-dev.ts",
     "electron:build": "bun run build:sidecars && bun run build && bun run build:electron",
-    "electron:package": "bun run clean:electron-output && bun run electron:build && node ./node_modules/electron-builder/out/cli/cli.js --publish never",
-    "electron:package:dir": "bun run clean:electron-output && bun run electron:build && node ./node_modules/electron-builder/out/cli/cli.js --dir --publish never",
-    "check:electron": "node ./node_modules/typescript/bin/tsc -p electron/tsconfig.json && bun test ./electron && bun run build:electron",
+    "electron:package": "bun run clean:electron-output && bun run electron:build && bun ./node_modules/electron-builder/out/cli/cli.js --publish never",
+    "electron:package:dir": "bun run clean:electron-output && bun run electron:build && bun ./node_modules/electron-builder/out/cli/cli.js --dir --publish never",
+    "check:electron": "bun ./node_modules/typescript/bin/tsc -p electron/tsconfig.json && bun test ./electron && bun run build:electron",
     "preview": "vite preview",
     "test": "vitest",
     "test:ui": "vitest --ui",
-    "lint": "node ./node_modules/typescript/bin/tsc --noEmit"
+    "lint": "bun ./node_modules/typescript/bin/tsc --noEmit"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

@@ -2061,6 +2061,37 @@ describe('chatStore history mapping', () => {
     expect(setTasksFromTodosMock).toHaveBeenCalledWith(todos, TEST_SESSION_ID)
   })
 
+  it('does not overwrite polled tasks with a stale history snapshot', async () => {
+    // 低16：轮询已落地新值时，历史回放的 TodoWrite 快照不得覆盖
+    const todos = [{ content: 'Stale history task', status: 'in_progress' }]
+    vi.mocked(sessionsApi.getMessages).mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'assistant-todo',
+          type: 'assistant',
+          timestamp: '2026-04-06T00:00:00.000Z',
+          content: [
+            { type: 'tool_use', name: 'TodoWrite', id: 'todo-1', input: { todos } },
+          ],
+        },
+      ],
+    })
+    cliTaskStoreSnapshot.sessionId = TEST_SESSION_ID
+    cliTaskStoreSnapshot.tasks = [
+      { id: '1', subject: 'Fresh polled task', status: 'in_progress' },
+    ]
+
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({ messages: [] }),
+      },
+    })
+
+    await useChatStore.getState().loadHistory(TEST_SESSION_ID)
+
+    expect(setTasksFromTodosMock).not.toHaveBeenCalled()
+  })
+
   it('marks history task completion dismissed when the user already continued', async () => {
     vi.mocked(sessionsApi.getMessages).mockResolvedValueOnce({
       messages: [
@@ -2089,12 +2120,15 @@ describe('chatStore history mapping', () => {
 
     await useChatStore.getState().loadHistory(TEST_SESSION_ID)
 
-    expect(setTasksFromTodosMock).toHaveBeenCalledWith([], TEST_SESSION_ID)
+    // 低16：历史窗口内没有 TodoWrite 时不再回写清空——轮询才是任务面板真值
+    expect(setTasksFromTodosMock).not.toHaveBeenCalled()
     expect(markCompletedAndDismissedMock).toHaveBeenCalledWith(TEST_SESSION_ID)
   })
 
   it('reloads history task state for the requested session', async () => {
     const todos = [{ content: 'Reloaded task', status: 'pending' }]
+    cliTaskStoreSnapshot.sessionId = TEST_SESSION_ID
+    cliTaskStoreSnapshot.tasks = []
     vi.mocked(sessionsApi.getMessages).mockResolvedValueOnce({
       messages: [
         {
@@ -2147,7 +2181,8 @@ describe('chatStore history mapping', () => {
 
     await useChatStore.getState().reloadHistory(TEST_SESSION_ID)
 
-    expect(setTasksFromTodosMock).toHaveBeenCalledWith([], TEST_SESSION_ID)
+    // 低16：reload 同样只播种不清空，任务面板的清空由轮询负责
+    expect(setTasksFromTodosMock).not.toHaveBeenCalled()
     expect(markCompletedAndDismissedMock).toHaveBeenCalledWith(TEST_SESSION_ID)
   })
 
@@ -2666,7 +2701,7 @@ describe('chatStore history mapping', () => {
     useChatStore.getState().connectToSession(TEST_SESSION_ID)
     await Promise.resolve()
 
-    expect(sessionsApi.getMessages).toHaveBeenCalledWith(TEST_SESSION_ID)
+    expect(sessionsApi.getMessages).toHaveBeenCalledWith(TEST_SESSION_ID, expect.any(Object))
     expect(sendMock).not.toHaveBeenCalledWith(TEST_SESSION_ID, { type: 'prewarm_session' })
   })
 
@@ -4213,6 +4248,127 @@ describe('chatStore history mapping', () => {
     vi.useRealTimers()
   })
 
+  it('clears the turn clock when a reconnect snapshot settles an already-finished turn (C7)', () => {
+    vi.useFakeTimers()
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval')
+
+    const staleTimer = setInterval(() => {}, 1000)
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          chatState: 'streaming',
+          turnStartedAt: Date.now() - 30_000,
+          elapsedTimer: staleTimer as unknown as ReturnType<typeof setInterval>,
+        }),
+      },
+    })
+
+    // 断连窗口内回合已结束：重连快照无待批权限且 turnActive=false → 归 idle。
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'permission_requests_snapshot',
+      toolRequestIds: [],
+      computerUseRequestIds: [],
+      turnActive: false,
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.chatState).toBe('idle')
+    // C7：必须镜像 clearTurnClock——否则残留时间戳会让下回合 ensureTurnStartedAt
+    // 幂等跳过，StreamingIndicator 读秒从上一回合的陈旧时间戳起跳。
+    expect(session?.turnStartedAt).toBeNull()
+    expect(session?.elapsedTimer).toBeNull()
+    expect(clearIntervalSpy).toHaveBeenCalledWith(staleTimer)
+
+    clearIntervalSpy.mockRestore()
+    vi.useRealTimers()
+  })
+
+  it('loads earlier history pages via cursor and prepends them (v1.5.0 pagination)', async () => {
+    const pageMessage = (id: string, text: string, timestamp: string) => ({
+      id,
+      type: 'user',
+      timestamp,
+      content: [{ type: 'text', text }],
+    } as unknown as MessageEntry)
+
+    vi.mocked(sessionsApi.getMessages).mockResolvedValueOnce({
+      messages: [
+        pageMessage('m3', 'third', '2026-04-06T00:00:02.000Z'),
+        pageMessage('m4', 'fourth', '2026-04-06T00:00:03.000Z'),
+      ],
+      total: 4,
+      hasMore: true,
+      nextBefore: 2,
+    })
+
+    useChatStore.setState({
+      sessions: { [TEST_SESSION_ID]: makeSession({ messages: [] }) },
+    })
+    await useChatStore.getState().loadHistory(TEST_SESSION_ID)
+
+    let session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    const textsOf = (s: typeof session) =>
+      s?.messages.map((m) => (m.type === 'user_text' ? m.content : ''))
+    expect(textsOf(session)).toEqual(['third', 'fourth'])
+    expect(session?.historyHasMore).toBe(true)
+    expect(session?.historyNextBefore).toBe(2)
+
+    vi.mocked(sessionsApi.getMessages).mockResolvedValueOnce({
+      messages: [
+        pageMessage('m1', 'first', '2026-04-06T00:00:00.000Z'),
+        pageMessage('m2', 'second', '2026-04-06T00:00:01.000Z'),
+      ],
+      total: 4,
+      hasMore: false,
+      nextBefore: 0,
+    })
+    await useChatStore.getState().loadEarlierHistory(TEST_SESSION_ID)
+
+    // 向前翻页走窗口参数：limit + before 游标
+    expect(vi.mocked(sessionsApi.getMessages).mock.lastCall?.[1]).toEqual({ limit: 200, before: 2 })
+    session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(textsOf(session)).toEqual(['first', 'second', 'third', 'fourth'])
+    expect(session?.historyHasMore).toBe(false)
+    expect(session?.historyNextBefore).toBe(0)
+    expect(session?.earlierHistoryStatus).toBe('idle')
+  })
+
+  it('loadEarlierHistory is a no-op when there is no earlier page', async () => {
+    vi.mocked(sessionsApi.getMessages).mockClear()
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          messages: [],
+          historyHasMore: false,
+          historyNextBefore: null,
+        }),
+      },
+    })
+
+    await useChatStore.getState().loadEarlierHistory(TEST_SESSION_ID)
+    expect(sessionsApi.getMessages).not.toHaveBeenCalled()
+  })
+
+  it('treats a legacy full response (no hasMore field) as the only page', async () => {
+    vi.mocked(sessionsApi.getMessages).mockResolvedValueOnce({
+      messages: [{
+        id: 'only',
+        type: 'user',
+        timestamp: '2026-04-06T00:00:00.000Z',
+        content: [{ type: 'text', text: 'legacy full payload' }],
+      } as unknown as MessageEntry],
+    })
+
+    useChatStore.setState({
+      sessions: { [TEST_SESSION_ID]: makeSession({ messages: [] }) },
+    })
+    await useChatStore.getState().loadHistory(TEST_SESSION_ID)
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(session?.historyHasMore).toBe(false)
+    expect(session?.historyNextBefore).toBeNull()
+  })
+
   it('reloads authoritative history when a reconnect finds the turn already idle', async () => {
     vi.mocked(sessionsApi.getMessages).mockClear()
     vi.mocked(sessionsApi.getMessages).mockResolvedValueOnce({
@@ -4323,7 +4479,7 @@ describe('chatStore history mapping', () => {
       turnState: 'running',
     })
     await vi.waitFor(() => {
-      expect(sessionsApi.getMessages).toHaveBeenCalledWith(TEST_SESSION_ID)
+      expect(sessionsApi.getMessages).toHaveBeenCalledWith(TEST_SESSION_ID, expect.any(Object))
     })
 
     expect(useChatStore.getState().sessions[TEST_SESSION_ID]).toMatchObject({

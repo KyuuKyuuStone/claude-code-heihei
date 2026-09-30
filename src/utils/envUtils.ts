@@ -6,8 +6,11 @@ import { join } from 'path'
 // tests that change the env var get a fresh value without explicit cache.clear.
 export const getClaudeConfigHomeDir = memoize(
   (): string => {
+    // v1.6.0：空串视为未设置。原用 ?? —— 空串会被放行成 ''，path.resolve('') = cwd，
+    // sessionService 于是去 cwd/projects 找 transcript，而 servantService 走
+    // ~/.claude：两边看不同世界，花名册被误判「会话全删」而清空（2026-09-30 事故）。
     return (
-      process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude')
+      process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude')
     ).normalize('NFC')
   },
   () => process.env.CLAUDE_CONFIG_DIR,

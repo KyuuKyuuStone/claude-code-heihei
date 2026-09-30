@@ -45,9 +45,9 @@ function renderPopover(overrides: Partial<React.ComponentProps<typeof ReasoningE
 }
 
 describe('ReasoningEffortPopover', () => {
-  // Sizes come from §3 of docs/redesign-paper-ink-seal.md: a 300px panel with
-  // 19/22px padding, the serif level name over a 14px-tall track, and a 24px
-  // knob. They replace the earlier 240px panel and 24px track.
+  // Sizes: a 300px panel with 19/22px padding, the serif level name over a
+  // 14px-tall track, and a 24px knob. They replace the earlier 240px panel and
+  // 24px track（原设计稿 docs/redesign-paper-ink-seal.md 已删除，规格以此为准）。
   it('keeps the effort visual compact without non-functional icon controls', () => {
     renderPopover()
 

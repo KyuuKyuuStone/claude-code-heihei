@@ -200,13 +200,6 @@ export class DoctorService {
         'user',
         path.join(this.configDir, 'cc-heihei', 'settings.json'),
       ),
-      this.jsonTarget('adapters', 'Adapters config', 'user', path.join(this.configDir, 'adapters.json')),
-      this.jsonTarget(
-        'adapter-sessions',
-        'Adapter sessions',
-        'user',
-        path.join(this.configDir, 'adapter-sessions.json'),
-      ),
       this.directoryTarget('user-skills', 'User skills', 'user', path.join(this.configDir, 'skills')),
       // Skipped entirely when cross-client discovery is off: reporting a
       // directory the loader ignores — with an entry count, no less — reads as

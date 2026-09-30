@@ -13,6 +13,7 @@ import { createHash } from 'crypto'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import type { CuPermissionRequest } from '../../vendor/computer-use-mcp/types.js'
+import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
 import { detectPythonRuntime, isPythonVersionAtLeast } from './computer-use-python.js'
 import { buildPipInstallAttempts } from '../../utils/computerUse/pipInstall.js'
@@ -234,7 +235,15 @@ async function checkStatus(): Promise<EnvStatus> {
   let accessibility: boolean | null = null
   let screenRecording: boolean | null = null
   if (supported && effectiveVenvCreated && depsInstalled) {
-    try { await ensureRuntimeFiles() } catch {}
+    try {
+      await ensureRuntimeFiles()
+    } catch (error) {
+      // C5（v1.5.0）：运行时文件准备失败不应中断体检，但要留痕（此前空 catch
+      // 让「权限检查为何一直 null」无迹可查）
+      logForDiagnosticsNoPII('debug', 'computer_use_runtime_files_failed', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
     const helperPath = getHelperPath()
     if (await pathExists(helperPath)) {
       const permResult = await runCommand(venvPython, [helperPath, 'check_permissions'])
@@ -245,7 +254,11 @@ async function checkStatus(): Promise<EnvStatus> {
             accessibility = parsed.result.accessibility ?? null
             screenRecording = parsed.result.screenRecording ?? null
           }
-        } catch {}
+        } catch (error) {
+          logForDiagnosticsNoPII('debug', 'computer_use_permission_parse_failed', {
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
       }
     }
   }

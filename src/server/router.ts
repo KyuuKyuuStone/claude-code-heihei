@@ -97,11 +97,6 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     case 'providers':
       return handleProvidersApi(req, url, segments)
 
-    case 'adapters':
-      // Adapter protocols pull in platform SDKs that are unnecessary for the
-      // core server path. Load them only when this API is actually used.
-      return (await import('./api/adapters.js')).handleAdaptersApi(req, url, segments)
-
     case 'skills':
       return handleSkillsApi(req, url, segments)
 

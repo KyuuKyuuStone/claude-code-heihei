@@ -293,6 +293,56 @@ describe('ServantStallWatcher', () => {
     expect(deliveredTo(EMP)[1]).toContain(`自动重推 1/${MAX_AUTO_REPUSH}`)
   })
 
+  // ── v1.5.0 C4：投递连续失败达阈值 → 升级上报 ──
+  test('consecutive nudge delivery failures escalate to an error report (C4)', async () => {
+    const last = nowMs
+    nowMs = last + 11 * MIN
+    listServantsMock.mockImplementation(async () => roster({ lastActivityAt: iso(last) }))
+    const watcher = makeWatcher()
+    deliverMock.mockImplementation(async (target: string) => target !== EMP)
+
+    // 前两次：仍是 warn 级 nudge-failed（计数 1/3、2/3）
+    await watcher.watch()
+    await watcher.watch()
+    expect(actionsLogged().filter((a) => a === 'nudge-failed')).toHaveLength(2)
+    expect(actionsLogged()).not.toContain('nudge-deliver-failed-streak')
+
+    // 第三次：升级为 error 级「连续 3 次投递失败」
+    await watcher.watch()
+    expect(actionsLogged()).toContain('nudge-deliver-failed-streak')
+    const escalated = recordEventMock.mock.calls.find(
+      (call) => (call[0].details as { action?: string } | undefined)?.action === 'nudge-deliver-failed-streak',
+    )
+    expect(escalated?.[0].severity).toBe('error')
+    expect(escalated?.[0].sessionId).toBe(EMP)
+
+    // 升级后计数清零：再来两次仍是 warn，不是每轮都报 error
+    const errorCountBefore = actionsLogged().filter((a) => a === 'nudge-deliver-failed-streak').length
+    await watcher.watch()
+    await watcher.watch()
+    expect(actionsLogged().filter((a) => a === 'nudge-deliver-failed-streak')).toHaveLength(errorCountBefore)
+  })
+
+  test('a successful nudge delivery resets the failure streak (C4)', async () => {
+    const last = nowMs
+    nowMs = last + 11 * MIN
+    listServantsMock.mockImplementation(async () => roster({ lastActivityAt: iso(last) }))
+    const watcher = makeWatcher()
+
+    deliverMock.mockImplementation(async (target: string) => target !== EMP)
+    await watcher.watch()
+    await watcher.watch()
+    expect(actionsLogged().filter((a) => a === 'nudge-failed')).toHaveLength(2)
+
+    // 投递恢复一次 → 计数清零；之后两次失败不应立刻升级
+    deliverMock.mockImplementation(async () => true)
+    await watcher.watch()
+    deliverMock.mockImplementation(async (target: string) => target !== EMP)
+    await watcher.watch()
+    await watcher.watch()
+    expect(actionsLogged()).not.toContain('nudge-deliver-failed-streak')
+  })
+
   test('the supervisor session is exempt', async () => {
     const last = nowMs
     nowMs = last + 30 * MIN

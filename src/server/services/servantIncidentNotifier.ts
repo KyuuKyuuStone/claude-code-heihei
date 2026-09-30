@@ -12,6 +12,7 @@
  * 调用）保持动态导入，静态初始化环不存在。
  */
 
+import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 import { diagnosticsService } from './diagnosticsService.js'
 import { onSessionEvent, type SessionEvent } from './sessionEvents.js'
 import { ProviderService } from './providerService.js'
@@ -97,10 +98,21 @@ const defaultDeps: ServantIncidentDeps = {
       .then(({ conversationService }) => {
         conversationService.sendInterrupt(sessionId)
       })
-      .catch(() => {})
+      .catch((error) => {
+        // 低12（v1.5.0）：通知路径 catch-all 至少留诊断——中断通道失效此前完全静默
+        logForDiagnosticsNoPII('warn', 'servant_interrupt_delivery_failed', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
   },
   recordEvent: (input) => {
-    void diagnosticsService.recordEvent(input).catch(() => {})
+    void diagnosticsService.recordEvent(input).catch((error) => {
+      // 低12：诊断写失败也要留痕（走 console，避免递归回诊断系统）
+      console.warn(
+        `[ServantIncident] recordEvent failed: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    })
   },
 }
 
@@ -170,7 +182,13 @@ function crashObserverHandler(event: SessionEvent): void {
   if (meta.startup === true) return
   if (cliExitSeverityLocal(meta.exitCode ?? null) !== 'error') return
   void notifyServantCrash({ sessionId: event.sessionId, exitCode: meta.exitCode ?? null })
-    .catch(() => {})
+    .catch((error) => {
+      // 低12（v1.5.0）：崩溃通知失败必须留痕——「崩溃通知观察者失效」曾整类静默
+      logForDiagnosticsNoPII('warn', 'servant_crash_notify_failed', {
+        sessionId: event.sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    })
 }
 
 /**

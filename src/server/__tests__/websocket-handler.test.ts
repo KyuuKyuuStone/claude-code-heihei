@@ -22,9 +22,12 @@ import { computerUseApprovalService } from '../services/computerUseApprovalServi
 import { sessionService } from '../services/sessionService.js'
 // R4a/R4b（v1.3.1 整批复核）：rebind 触发时序测试 + 两处顶层订阅的 ensure 活性
 import {
+  ensureCollabPushBroadcastSubscribed,
   ensureRebindOnRunningSubscribed,
   ensureTurnChangeBroadcastSubscribed,
+  resetCollabPushBroadcastForTests,
 } from '../ws/handler.js'
+import { emitCollabPush } from '../../collaboration/collabPushSignals.js'
 import { GLOBAL_EVENTS_SESSION_ID } from '../ws/handler.js'
 import {
   markRunning,
@@ -1090,5 +1093,58 @@ describe('rebind on phase_changed(→running) (7b, R4a/R4b)', () => {
       .filter((m) => m.subtype === 'servant_turn_changed' && m.data?.sessionId === sessionId)
     expect(turns.length).toBe(1)
     expect(turns[0].data?.turnInProgress).toBe(true)
+  })
+
+  // ── v1.5.0 A6/C12：协作推送广播 ──
+  it('broadcasts servant_roster_changed for roster signals (A6)', () => {
+    ensureCollabPushBroadcastSubscribed()
+    const eventsSocket = makeClientSocket(GLOBAL_EVENTS_SESSION_ID)
+    handleWebSocket.open(eventsSocket)
+    eventsSocket.sent.length = 0
+
+    emitCollabPush({
+      kind: 'roster',
+      sessionId: 'roster-s1',
+      change: 'updated',
+      fields: ['running'],
+    })
+
+    const pushed = eventsSocket.sent
+      .map((payload) => JSON.parse(payload) as {
+        type: string
+        subtype?: string
+        data?: { sessionId?: string; change?: string; fields?: string[] }
+      })
+      .filter((m) => m.subtype === 'servant_roster_changed')
+    expect(pushed.length).toBe(1)
+    expect(pushed[0].data).toMatchObject({
+      sessionId: 'roster-s1',
+      change: 'updated',
+      fields: ['running'],
+    })
+  })
+
+  it('merges bursty session_list signals into one epoch broadcast (C12)', async () => {
+    ensureCollabPushBroadcastSubscribed()
+    const eventsSocket = makeClientSocket(GLOBAL_EVENTS_SESSION_ID)
+    handleWebSocket.open(eventsSocket)
+    eventsSocket.sent.length = 0
+
+    emitCollabPush({ kind: 'session_list', epoch: 3 })
+    emitCollabPush({ kind: 'session_list', epoch: 5 })
+    emitCollabPush({ kind: 'session_list', epoch: 4 })
+
+    // 250ms 合并窗口内不应有即时广播
+    expect(
+      eventsSocket.sent.filter((p) => p.includes('session_list_invalidated')),
+    ).toHaveLength(0)
+
+    await new Promise((resolve) => setTimeout(resolve, 350))
+    const invalidations = eventsSocket.sent
+      .map((payload) => JSON.parse(payload) as { subtype?: string; data?: { epoch?: number } })
+      .filter((m) => m.subtype === 'session_list_invalidated')
+    expect(invalidations).toHaveLength(1)
+    expect(invalidations[0].data?.epoch).toBe(5) // 窗口内最大 epoch
+    resetCollabPushBroadcastForTests()
   })
 })

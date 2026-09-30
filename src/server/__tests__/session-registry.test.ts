@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import {
   beginTurn,
+  beginTurnReplacing,
   clearSession,
   dropActiveTurn,
   exists,
@@ -270,6 +271,44 @@ describe('beginTurn / TurnHandle', () => {
     expect(second).toBeNull()
     expect(events).toHaveLength(0)
     expect(getSessionSnapshot(id)?.turn).toBe('awaiting_send')
+  })
+
+  // ── v1.5.0 低7：beginTurnReplacing 原子替换语义 ──
+  test('beginTurnReplacing：无 turn 时等价 beginTurn', () => {
+    const id = 's1'
+    PATH_TO.running(id)
+    const handle = beginTurnReplacing(id, { awaitSend: true })
+    expect(handle).not.toBeNull()
+    expect(getSessionSnapshot(id)?.turn).toBe('awaiting_send')
+  })
+
+  test('beginTurnReplacing：已有 turn 时顶掉旧回合建新回合（旧 owner 作废）', () => {
+    const id = 's1'
+    PATH_TO.running(id)
+    const first = beginTurn(id, { awaitSend: true })!
+    events = []
+
+    const second = beginTurnReplacing(id, { awaitSend: false })
+
+    expect(second).not.toBeNull()
+    expect(second!.identity).not.toBe(first.identity)
+    expect(getSessionSnapshot(id)?.turnOwner).toBe(second!.identity)
+    expect(getSessionSnapshot(id)?.turn).toBe('turn_in_progress')
+    // 旧回合被清（turn_changed none/替换原因），再建新回合——两次事件同批可见
+    const cleared = events.find(
+      (e) => e.type === 'turn_changed' && e.meta?.['reason'] === 'replaced_by_new_turn',
+    )
+    expect(cleared).toBeDefined()
+    // 旧 handle 的 settle 不再生效（身份已作废）
+    first.settle({ isError: false })
+    expect(getSessionSnapshot(id)?.turnOwner).toBe(second!.identity)
+  })
+
+  test('beginTurnReplacing：未登记/deleted 会话返回 null（与 beginTurn 同）', () => {
+    expect(beginTurnReplacing('ghost', { awaitSend: false })).toBeNull()
+    const id = 's1'
+    PATH_TO.deleted(id)
+    expect(beginTurnReplacing(id, { awaitSend: false })).toBeNull()
   })
 
   test('abort：清回合并记 lastTurnEndedAt', () => {

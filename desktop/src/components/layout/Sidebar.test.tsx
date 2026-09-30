@@ -1657,7 +1657,8 @@ describe('Sidebar', () => {
     expect(fetchSessions).toHaveBeenCalledTimes(2)
 
     await act(async () => {
-      vi.advanceTimersByTime(30_000)
+      // v1.5.0：会话列表轮询已降为 120s（session_list_invalidated 事件接管实时性）
+      vi.advanceTimersByTime(120_000)
       await Promise.resolve()
     })
     expect(fetchSessions).toHaveBeenCalledTimes(3)
@@ -1790,22 +1791,15 @@ describe('Sidebar', () => {
       })
     }
 
-    it('wraps a busy servant in a spinning ring around the green dot', () => {
+    it('marks a busy servant with the shared brand pulse dot', () => {
       seedSessionWithServant(true)
 
       render(<Sidebar />)
 
+      // P0-1/§3.1：忙碌 = StatusDot brand + pulse，不再自绘绿环
       const marker = screen.getByTitle('Servant busy')
-      const [ring, dot] = Array.from(marker.children)
-      // Same spinner idiom as SessionActivityPanel: a soft track with one
-      // accented arc, spinning only when motion is allowed.
-      expect(ring).toHaveClass(
-        'motion-safe:animate-spin',
-        'motion-reduce:animate-none',
-        'border-[var(--color-success-container)]',
-        'border-t-[var(--color-success)]',
-      )
-      expect(dot).toHaveClass('rounded-full', 'bg-[var(--color-success)]')
+      const dot = marker.querySelector('[role="status"]')
+      expect(dot).toHaveClass('bg-[var(--color-brand)]', 'animate-pulse-dot')
     })
 
     it('keeps a non-busy servant as a static muted dot without the ring', () => {
@@ -1813,9 +1807,11 @@ describe('Sidebar', () => {
 
       render(<Sidebar />)
 
+      // 待命：实心灰点（StatusDot neutral），无脉冲
       const marker = screen.getByTitle('Servant waiting')
-      expect(marker).toHaveClass('h-2', 'w-2', 'rounded-full', 'bg-[var(--color-text-tertiary)]')
-      expect(marker.children).toHaveLength(0)
+      const dot = marker.querySelector('[role="status"]')
+      expect(dot).toHaveClass('h-2', 'w-2', 'rounded-full', 'bg-[var(--color-text-tertiary)]')
+      expect(dot).not.toHaveClass('animate-pulse-dot')
     })
   })
 

@@ -268,11 +268,6 @@ export const browserHost: DesktopHost = {
       unsupported('Desktop app restart')
     },
   },
-  adapters: {
-    async restartSidecar() {
-      unsupported('Adapter sidecar restart')
-    },
-  },
   localModel: {
     async start() {
       unsupported('Local model engine')

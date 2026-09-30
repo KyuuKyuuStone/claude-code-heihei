@@ -102,16 +102,18 @@ describe('stage4 · 7a servantInfoSource injection contract', () => {
       return (svc as unknown as {
         isRegisteredSupervisor: (id: string) => Promise<{
           supervisor: boolean
+          registered: boolean
           constraint?: 'readonly' | 'whitelist'
           writeDirs?: string[]
         }>
       }).isRegisteredSupervisor('session-x')
     }
 
-    // 未注入：非主管（原 catch 行为等价）
-    expect(await call()).toEqual({ supervisor: false })
+    // 未注入：非主管、非在册（原 catch 行为等价）
+    // v1.5.0 A7：返回值新增 registered（花名册在册即协作会话，据此禁 computer-use）
+    expect(await call()).toEqual({ supervisor: false, registered: false })
 
-    // 注入主管：收权生效（constraint/writeDirs 透传）
+    // 注入主管：收权生效（constraint/writeDirs 透传）+ 在册标记
     registerServantInfoSource(async () => ({
       sessionId: 'session-x',
       supervisor: true,
@@ -120,17 +122,18 @@ describe('stage4 · 7a servantInfoSource injection contract', () => {
     }))
     expect(await call()).toEqual({
       supervisor: true,
+      registered: true,
       constraint: 'whitelist',
       writeDirs: ['C:/proj/src'],
     })
 
-    // 注入只读员工：非主管但 constraint 透传
+    // 注入只读员工：非主管但 constraint 透传（registered=true：在册即协作会话）
     registerServantInfoSource(async () => ({
       sessionId: 'session-x',
       supervisor: false,
       constraint: 'readonly',
     }))
-    expect(await call()).toEqual({ supervisor: false, constraint: 'readonly' })
+    expect(await call()).toEqual({ supervisor: false, registered: true, constraint: 'readonly' })
   })
 })
 

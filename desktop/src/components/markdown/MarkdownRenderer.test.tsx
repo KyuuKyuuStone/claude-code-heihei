@@ -16,7 +16,7 @@ vi.mock('../chat/MermaidRenderer', () => ({
   ),
 }))
 
-import { MarkdownRenderer, __markdownParseCacheInternals } from './MarkdownRenderer'
+import { MarkdownRenderer, __markdownParseCacheInternals, findSafeStreamingCut } from './MarkdownRenderer'
 import { CODE_LINK_CLASS } from '../../lib/markdownAutolink'
 import { useSettingsStore } from '../../stores/settingsStore'
 
@@ -532,5 +532,72 @@ describe('MarkdownRenderer bare-URL autolink', () => {
     const root = container.firstChild as HTMLDivElement
     expect(root.className).toContain(`[&_a.${CODE_LINK_CLASS}]:no-underline`)
     expect(container.querySelector('a')?.className).toContain(CODE_LINK_CLASS)
+  })
+})
+
+describe('findSafeStreamingCut (v1.5.0 流式分段)', () => {
+  it('cuts after the last blank line outside fences', () => {
+    const text = '第一段\n\n第二段\n\n正在输入'
+    // 切点落在第二个空行之后，"正在输入"留给尾部
+    expect(text.slice(0, findSafeStreamingCut(text))).toBe('第一段\n\n第二段\n\n')
+  })
+
+  it('does not cut inside an open code fence', () => {
+    const text = '前文\n\n```ts\nconst a = 1\n\nconst b = 2\n```\n\n后文'
+    // 围栏内的空行不是安全边界；围栏闭合后的空行才是
+    const cut = findSafeStreamingCut(text)
+    expect(text.slice(0, cut)).toBe('前文\n\n```ts\nconst a = 1\n\nconst b = 2\n```\n\n')
+    expect(text.slice(cut)).toBe('后文')
+  })
+
+  it('does not cut while a code fence is still open', () => {
+    const text = '前文\n\n```ts\nconst a = 1\n\n仍在写代码'
+    expect(findSafeStreamingCut(text)).toBe('前文\n\n'.length)
+  })
+
+  it('does not cut inside display math', () => {
+    const text = '前文\n\n$$\na=1\n\nb=2\n$$\n\n后文'
+    const cut = findSafeStreamingCut(text)
+    expect(text.slice(cut)).toBe('后文')
+  })
+
+  it('returns 0 when there is no safe boundary', () => {
+    expect(findSafeStreamingCut('一整段还没写完的正文')).toBe(0)
+  })
+})
+
+describe('streaming segmented rendering (v1.5.0)', () => {
+  it('parses the committed prefix once (finalized cache) while only the tail re-parses', () => {
+    __markdownParseCacheInternals.reset()
+    const prefix = '已经写完的第一段。\n\n'
+    const { rerender } = render(<MarkdownRenderer content={`${prefix}正在输`} streaming />)
+    expect(__markdownParseCacheInternals.hasFinalized(prefix)).toBe(true)
+
+    // 继续流入：前缀不离开 finalized 缓存，也不产生重复 parse
+    rerender(<MarkdownRenderer content={`${prefix}正在输入更多内容`} streaming />)
+    expect(__markdownParseCacheInternals.hasFinalized(prefix)).toBe(true)
+    expect(__markdownParseCacheInternals.finalizedSize()).toBe(1)
+
+    // 新段落封顶：第二个空行后前缀推进；分段是增量提交的，缓存里存的是
+    // 两个独立段（prefix 与第二段），不是拼接前缀。
+    const grown = `${prefix}第二段也写完了。\n\n第三段开头`
+    rerender(<MarkdownRenderer content={grown} streaming />)
+    expect(__markdownParseCacheInternals.hasFinalized('第二段也写完了。\n\n')).toBe(true)
+    expect(__markdownParseCacheInternals.finalizedSize()).toBe(2)
+  })
+
+  it('renders the same text content as a single-pass parse', () => {
+    const full = '标题段\n\n- 列表一\n- 列表二\n\n```ts\nconst x = 1\n```\n\n收尾段带 `行内码`。'
+    const { container: streamed } = render(<MarkdownRenderer content={full} streaming />)
+    const { container: finalized } = render(<MarkdownRenderer content={full} />)
+    expect(streamed.textContent).toBe(finalized.textContent)
+  })
+
+  it('resets segmentation when a new turn replaces the text', () => {
+    __markdownParseCacheInternals.reset()
+    const { rerender } = render(<MarkdownRenderer content={'旧回合第一段\n\n旧尾部'} streaming />)
+    rerender(<MarkdownRenderer content={'全新回合'} streaming />)
+    expect(screen.getByText('全新回合')).toBeInTheDocument()
+    expect(screen.queryByText(/旧回合/)).not.toBeInTheDocument()
   })
 })

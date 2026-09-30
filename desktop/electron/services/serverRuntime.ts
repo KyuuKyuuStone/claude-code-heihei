@@ -2,7 +2,6 @@ import { randomBytes } from 'node:crypto'
 import {
   appendHostDiagnostic,
   clearProxyEnv,
-  createAdapterPlan,
   createServerPlan,
   ELECTRON_DIAGNOSTICS_FILE_ENV,
   formatStartupError,
@@ -17,7 +16,6 @@ import {
   SERVER_STARTUP_TIMEOUT_MS,
   spawnSidecar,
   waitForServer,
-  withAdapterProxyBridgeEnv,
   withSystemProxyBridgeEnv,
   withSystemProxyErrorEnv,
   windowsPowerShellOverride,
@@ -33,6 +31,8 @@ import {
 type ServerRuntimeOptions = {
   desktopRoot: string
   appRoot?: string
+  /** 注入 sidecar env 的 CC_HEIHEI_APP_VERSION（/api/whoami 版本号自报；main.ts 传 app.getVersion()） */
+  appVersion?: string
   diagnosticsFile?: string
   env?: NodeJS.ProcessEnv
   deps?: Partial<ServerRuntimeDeps>
@@ -99,6 +99,7 @@ function createServerStartState(child: SidecarChild): ServerStartState {
 export class ElectronServerRuntime {
   private readonly desktopRoot: string
   private readonly appRoot: string
+  private readonly appVersion?: string
   private readonly diagnosticsFile?: string
   private readonly baseEnv: NodeJS.ProcessEnv
   private readonly deps: ServerRuntimeDeps
@@ -107,17 +108,16 @@ export class ElectronServerRuntime {
   private sidecarEnvPromise: Promise<NodeJS.ProcessEnv> | null = null
   private systemProxyBridge: SystemProxyBridgeLike | null = null
   private server: ActiveServer | null = null
-  private adapters: SidecarChild[] = []
   private startupError: string | null = null
   private restartAfterExit = false
   private startPromise: Promise<string> | null = null
   private lifecycleGeneration = 0
   private startingServer: ServerStartState | null = null
-  private adapterRestartPromise: Promise<void> | null = null
 
   constructor(options: ServerRuntimeOptions) {
     this.desktopRoot = options.desktopRoot
     this.appRoot = options.appRoot ?? options.desktopRoot
+    this.appVersion = options.appVersion
     this.diagnosticsFile = options.diagnosticsFile
     this.baseEnv = options.env ?? process.env
     this.deps = { ...DEFAULT_SERVER_RUNTIME_DEPS, ...options.deps }
@@ -153,22 +153,13 @@ export class ElectronServerRuntime {
     return this.server?.url ?? null
   }
 
+  /**
+   * IPC 兼容入口（desktop:adapters:restart-sidecar）：IM adapter sidecar 已随
+   * v1.5.0 C10 移除，保留通道避免前端/preload 引用断裂；行为退化为 no-op。
+   */
   restartAdaptersSidecars(): Promise<void> {
-    if (this.adapterRestartPromise) return this.adapterRestartPromise
-    const operation = this.restartAdaptersSidecarsOnce()
-    const tracked = operation.finally(() => {
-      if (this.adapterRestartPromise === tracked) this.adapterRestartPromise = null
-    })
-    this.adapterRestartPromise = tracked
-    return tracked
-  }
-
-  private async restartAdaptersSidecarsOnce(): Promise<void> {
-    const serverUrl = await this.getServerUrl()
-    const server = this.server
-    if (!server || server.url !== serverUrl) return
-    this.stopAdapterChildren(server.adapterChildren)
-    await this.startAdaptersSidecars(serverUrl, undefined, server)
+    console.log('[desktop] adapter sidecars removed (v1.5.0 C10); restart request ignored')
+    return Promise.resolve()
   }
 
   stopAll(sync = false) {
@@ -176,7 +167,6 @@ export class ElectronServerRuntime {
     const starting = this.startingServer
     if (starting) {
       this.startingServer = null
-      this.stopAdaptersForStart(starting, sync)
       if (this.server?.child === starting.child) this.server = null
       starting.fail(new Error('server startup stopped'))
       if (!starting.childStopped) {
@@ -184,7 +174,6 @@ export class ElectronServerRuntime {
         killSidecar(starting.child, sync)
       }
     }
-    this.stopAdaptersSidecars(sync)
     if (this.server) {
       killSidecar(this.server.child, sync)
       this.server = null
@@ -208,6 +197,7 @@ export class ElectronServerRuntime {
       desktopRoot: this.desktopRoot,
       appRoot: this.appRoot,
       port,
+      appVersion: this.appVersion,
       env: this.diagnosticsFile
         ? { ...env, [ELECTRON_DIAGNOSTICS_FILE_ENV]: this.diagnosticsFile }
         : env,
@@ -229,18 +219,11 @@ export class ElectronServerRuntime {
       if (startState.failure) throw startState.failure
       this.deps.writeLastServerPort(port, this.baseEnv)
       this.server = { url, child, adapterChildren: startState.adapterChildren }
-      const activeServer = this.server
       this.startupError = null
-      this.stopAdaptersSidecars()
-      await Promise.race([
-        this.startAdaptersSidecars(url, startState, activeServer),
-        startState.failurePromise,
-      ])
       if (startState.failure) throw startState.failure
       return url
     } catch (error) {
       if (startState) {
-        this.stopAdaptersForStart(startState)
         if (this.server?.child === startState.child) this.server = null
         if (!startState.childStopped) {
           startState.childStopped = true
@@ -263,78 +246,11 @@ export class ElectronServerRuntime {
     if (generation !== this.lifecycleGeneration) throw new Error('server startup stopped')
   }
 
-  private async startAdaptersSidecars(
-    serverUrl: string,
-    startState?: ServerStartState,
-    activeServer?: ActiveServer,
-  ): Promise<void> {
-    const baseEnv = this.withLocalAccessToken(await this.resolveSidecarBaseEnv())
-    const bridgeUrl = baseEnv.CC_HEIHEI_SYSTEM_PROXY_URL
-    const env = bridgeUrl
-      ? withAdapterProxyBridgeEnv(baseEnv, bridgeUrl)
-      : baseEnv
-    const isCurrentGeneration = () => {
-      if (startState?.failure) return false
-      if (activeServer && this.server !== activeServer) return false
-      return true
-    }
-    if (!isCurrentGeneration()) return
-    const ownedAdapters = startState?.adapterChildren
-      ?? activeServer?.adapterChildren
-    for (const [label, flag] of [
-      ['feishu', '--feishu'],
-      ['telegram', '--telegram'],
-      ['wechat', '--wechat'],
-      ['dingtalk', '--dingtalk'],
-      ['whatsapp', '--whatsapp'],
-    ] as const) {
-      if (!isCurrentGeneration()) break
-      try {
-        const child = this.deps.spawnSidecar(createAdapterPlan({
-          desktopRoot: this.desktopRoot,
-          appRoot: this.appRoot,
-          serverUrl,
-          flag,
-          env,
-        }))
-        if (!isCurrentGeneration()) {
-          killSidecar(child)
-          break
-        }
-        this.captureLogs(child, `claude-adapters:${label}`)
-        this.adapters.push(child)
-        ownedAdapters?.push(child)
-      } catch (error) {
-        console.error(`[desktop] failed to start ${label} adapter sidecar`, error)
-      }
-    }
-  }
-
-  private stopAdaptersSidecars(sync = false) {
-    const children = this.adapters.splice(0)
-    this.removeOwnedAdapters(this.server?.adapterChildren, children)
-    this.removeOwnedAdapters(this.startingServer?.adapterChildren, children)
-    for (const child of children) {
-      killSidecar(child, sync)
-    }
-  }
-
   private withLocalAccessToken(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     return {
       ...env,
       CC_HEIHEI_LOCAL_ACCESS_TOKEN: this.localAccessToken,
     }
-  }
-
-  private removeOwnedAdapters(owned: SidecarChild[] | undefined, removed: SidecarChild[]) {
-    if (!owned?.length || !removed.length) return
-    const removedSet = new Set(removed)
-    const retained = owned.filter(child => !removedSet.has(child))
-    owned.splice(0, owned.length, ...retained)
-  }
-
-  private stopAdaptersForStart(startState: ServerStartState, sync = false) {
-    this.stopAdapterChildren(startState.adapterChildren, sync)
   }
 
   private captureLogs(
@@ -454,8 +370,7 @@ export class ElectronServerRuntime {
   }
 
   // On Windows, forward the user's chosen PowerShell to the agent sidecar so its
-  // PowerShellTool honors the same shell as the UI terminal (regression from the
-  // Tauri build, where this lived in src-tauri/src/lib.rs). Best-effort: never
+  // PowerShellTool honors the same shell as the UI terminal. Best-effort: never
   // block sidecar startup, and never override an explicitly set env var.
   private applyPowerShellOverride(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     if (process.platform !== 'win32' || env[POWERSHELL_PATH_OVERRIDE_ENV]) return env

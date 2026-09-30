@@ -21,6 +21,7 @@
 
 import * as path from 'node:path'
 import { sessionService } from '../services/sessionService.js'
+import { servantService } from '../services/servantService.js'
 import { conversationService } from '../services/conversationService.js'
 import { getSessionSnapshot } from '../services/sessionRegistry.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
@@ -38,7 +39,6 @@ import {
   previewSessionRewind,
   type RewindTargetSelector,
 } from '../services/sessionRewindService.js'
-import { SessionStore } from '../../../adapters/common/session-store.js'
 import {
   createSessionBranch,
   SessionBranchingError,
@@ -336,19 +336,55 @@ async function getSession(sessionId: string): Promise<Response> {
 }
 
 async function getSessionMessages(sessionId: string, url?: URL): Promise<Response> {
+  // v1.5.0 大会话首开：?limit=&before= 走窗口化读取——服务端只解析窗口内条目
+  // （旧路径把整份 jsonl 全量 parse，127MB 会话首开内存/CPU 双高）。
+  // 无 limit 参数时行为完全不变（全量返回），旧调用方兼容。
+  const limitRaw = url?.searchParams.get('limit')
+  const limit = limitRaw !== null ? parseInt(limitRaw, 10) : NaN
+  if (Number.isInteger(limit) && limit > 0) {
+    const beforeRaw = url?.searchParams.get('before')
+    const before = beforeRaw !== null ? parseInt(beforeRaw, 10) : undefined
+    const [window, taskNotifications] = await Promise.all([
+      sessionService.getSessionMessagesWindow(sessionId, {
+        limit,
+        ...(before !== undefined && Number.isFinite(before) ? { before } : {}),
+      }),
+      sessionService.getSessionTaskNotifications(sessionId),
+    ])
+    return Response.json({
+      messages: window.messages,
+      total: window.total,
+      hasMore: window.hasMore,
+      nextBefore: window.nextBefore,
+      taskNotifications,
+      // v1.5.0 窗口模式配套：窗口只映射一页历史，前端据窗口累加的 token 用量
+      // 会偏小；这里给出**全文件**口径的合计（null = 没有任何带 usage 的消息）。
+      usageTotals: window.usageTotals,
+    })
+  }
+
+  // ?tail=N 尾部读取（低3，v1.5.0 第二批）：改走**流式窗口**——单遍扫描、内存
+  // O(N)、不 parse 全文，语义与旧实现（全量读取后 slice(-N)）同源同序
+  // （同一 entriesToMessages + 子代理注入路径）。主管巡检员工进度不必再拉全量
+  // （长会话单次可达数百 KB）。响应形状保持不变。
+  // 注意：limit 分支在前且已 return，故 limit 与 tail 同给时仍 limit 优先。
+  const tailRaw = url?.searchParams.get('tail')
+  const tail = tailRaw !== null ? parseInt(tailRaw, 10) : NaN
+  if (Number.isInteger(tail) && tail > 0) {
+    const [window, taskNotifications] = await Promise.all([
+      sessionService.getSessionMessagesWindow(sessionId, { limit: tail }),
+      sessionService.getSessionTaskNotifications(sessionId),
+    ])
+    return Response.json({
+      messages: window.messages,
+      taskNotifications: taskNotifications.slice(-tail),
+    })
+  }
+
   const [messages, taskNotifications] = await Promise.all([
     sessionService.getSessionMessages(sessionId),
     sessionService.getSessionTaskNotifications(sessionId),
   ])
-  // ?tail=N 尾部读取：主管巡检员工进度不必拉全量（长会话单次可达数百 KB）
-  const tailRaw = url?.searchParams.get('tail')
-  const tail = tailRaw !== null ? parseInt(tailRaw, 10) : NaN
-  if (Number.isInteger(tail) && tail > 0) {
-    return Response.json({
-      messages: messages.slice(-tail),
-      taskNotifications: taskNotifications.slice(-tail),
-    })
-  }
   return Response.json({ messages, taskNotifications })
 }
 
@@ -545,7 +581,9 @@ async function deleteSession(sessionId: string): Promise<Response> {
     throw error
   }
   closeSessionConnection(sessionId, 'session deleted')
-  cleanupAdapterSessionMappings(sessionId)
+  // v1.5.0 花名册高危修复：只有明确的会话删除才清理对应协作身份（含 N→0 兜底，
+  // 见 servantService.pruneForDeletedSessions）。读路径不再做这件事。
+  await servantService.pruneForDeletedSessions([sessionId])
   recentProjectsCache = null
   return Response.json({ ok: true })
 }
@@ -568,10 +606,11 @@ async function batchDeleteSessions(req: Request): Promise<Response> {
 
   for (const sessionId of result.successes) {
     closeSessionConnection(sessionId, 'session deleted')
-    cleanupAdapterSessionMappings(sessionId)
   }
   if (result.successes.length > 0) {
     recentProjectsCache = null
+    // 同 deleteSession：只清真正删成功的会话（批量 ≥2 条会被兜底防线拦截并记 warn）
+    await servantService.pruneForDeletedSessions(result.successes)
   }
 
   return Response.json({
@@ -599,13 +638,6 @@ function normalizeSessionIds(value: unknown): string[] {
   }
 
   return [...new Set(sessionIds)]
-}
-
-function cleanupAdapterSessionMappings(sessionId: string): void {
-  const removedChatIds = new SessionStore().deleteBySessionId(sessionId)
-  if (removedChatIds.length > 0) {
-    console.log(`[Sessions API] Removed ${removedChatIds.length} adapter session mapping(s) for ${sessionId}`)
-  }
 }
 
 function mergeSessionSlashCommands(

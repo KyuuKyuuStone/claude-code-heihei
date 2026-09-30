@@ -88,16 +88,11 @@ describe('Electron output guard', () => {
     }])).not.toThrow()
   })
 
-  it('guards both direct cleanup and the macOS build before deleting artifacts', () => {
+  it('guards direct cleanup before deleting artifacts', () => {
     const cleanSource = readFileSync(path.join(scriptsDir, 'clean-electron-output.ts'), 'utf8')
-    const macBuildSource = readFileSync(path.join(scriptsDir, 'build-macos-arm64.sh'), 'utf8')
 
     expect(cleanSource.indexOf('assertElectronOutputIdle(')).toBeLessThan(
       cleanSource.indexOf('await rm('),
     )
-    expect(macBuildSource).toContain(
-      'bun run ./scripts/assert-electron-output-idle.ts "${ELECTRON_OUTPUT_DIR}" "${CANONICAL_OUTPUT_DIR}"',
-    )
-    expect(macBuildSource).not.toContain('rm -rf "${ELECTRON_OUTPUT_DIR}"')
   })
 })

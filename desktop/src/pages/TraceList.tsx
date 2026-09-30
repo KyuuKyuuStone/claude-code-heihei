@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { ExternalLink, RefreshCw, Trash2, Workflow } from 'lucide-react'
 import { tracesApi } from '../api/traces'
@@ -85,16 +85,25 @@ export function TraceList() {
     void load()
   }, [load])
 
+  // 低19：轮询 effect 不能依赖整个 state —— 每次轮询写回新 data 都会
+  // 重建 interval，等于永远走不满一个周期。只依赖「是否启用轮询」这个
+  // 布尔量，traces 长度改走 ref。
+  const pollingEnabled = state.status === 'ready' && state.data.settings.enabled
+  const tracesCountRef = useRef(0)
   useEffect(() => {
-    if (state.status !== 'ready' || !state.data.settings.enabled) return
+    if (state.status === 'ready') tracesCountRef.current = state.data.traces.length
+  }, [state])
+
+  useEffect(() => {
+    if (!pollingEnabled) return
     const timer = window.setInterval(() => {
       void load({
-        limit: Math.max(PAGE_SIZE, state.data.traces.length),
+        limit: Math.max(PAGE_SIZE, tracesCountRef.current),
         silent: true,
       })
     }, POLL_MS)
     return () => window.clearInterval(timer)
-  }, [load, state])
+  }, [load, pollingEnabled])
 
   const summary = useMemo(() => {
     if (state.status !== 'ready') return { apiCalls: 0, failedCalls: 0, models: 0 }

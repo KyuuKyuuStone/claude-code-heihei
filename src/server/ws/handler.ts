@@ -23,6 +23,7 @@ import {
 import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
 import {
   beginTurn,
+  beginTurnReplacing as registryBeginTurnReplacing,
   clearSession,
   getSessionSnapshot,
   hasActiveTurn,
@@ -34,6 +35,8 @@ import {
   settleTurnIfOwner,
   type TurnHandle,
 } from '../services/sessionRegistry.js'
+import { onCollabPush, type CollabPushSignal } from '../../collaboration/collabPushSignals.js'
+import { servantService } from '../services/servantService.js'
 import { onSessionEvent, type SessionEvent } from '../services/sessionEvents.js'
 import {
   sessionService,
@@ -126,7 +129,7 @@ const sessionTitleState = new Map<string, {
   hasCustomTitle: boolean
   firstUserMessage: string
   completedTurns: TitleConversationTurn[]
-  activeTurn?: TitleConversationTurn & { count: number }
+  titleDraftTurn?: TitleConversationTurn & { count: number }
   startedGenerationKeys: Set<string>
   generationSeq: number
 }>()
@@ -155,16 +158,11 @@ function ensureSessionRegistered(sessionId: string): void {
  * 替换式建回合（WS user_message 语义保真）：旧行为是 activeUserTurns.set 直接
  * 覆盖——同 session 并发第二条 user_message 会让新 turn 顶掉旧 turn，且旧
  * handler 的收尾比对随之失效（websocket-handler 测试锁定的 replacement 语义）。
- * registry 的 beginTurn 是幂等拒绝语义，故先按快照 owner 结束旧回合再建新回合，
- * 等价还原「无条件 set 覆盖」。注入路径（beginInjectedUserTurn）不受此影响——
- * 其幂等语义由 v1.2.6 测试锁定，保持 beginTurn 原样。
+ * v1.5.0 低7：读-清-建合并进 registry 的原子导出（此前三步在 handler 侧非原子，
+ * 并发双消息存在后到者 beginTurn 返回 null 的窄窗口）。
  */
 function beginTurnReplacing(sessionId: string, awaitSend: boolean): TurnHandle | null {
-  const prevOwner = getSessionSnapshot(sessionId)?.turnOwner ?? null
-  if (prevOwner !== null) {
-    settleTurnIfOwner(sessionId, { identity: prevOwner, abort: () => {}, settle: () => {} })
-  }
-  return beginTurn(sessionId, { awaitSend })
+  return registryBeginTurnReplacing(sessionId, { awaitSend })
 }
 
 export type SessionChatActivityState =
@@ -371,8 +369,8 @@ export type WebSocketData = {
   serverHost: string
 }
 
-// Active WebSocket clients, grouped by session. Desktop windows and IM adapters
-// can legitimately watch the same running session at the same time.
+// Active WebSocket clients, grouped by session. Multiple desktop windows can
+// legitimately watch the same running session at the same time.
 const activeSessions = new Map<string, Set<ServerWebSocket<WebSocketData>>>()
 
 /**
@@ -497,7 +495,7 @@ export const handleWebSocket = {
               failSessionChatActivity(sessionId)
               settleTurnIfOwner(sessionId, handle)
               const titleState = sessionTitleState.get(sessionId)
-              if (titleState) titleState.activeTurn = undefined
+              if (titleState) titleState.titleDraftTurn = undefined
               sendMessage(ws, {
                 type: 'error',
                 message: 'The request could not be started. Please retry.',
@@ -682,7 +680,7 @@ async function handleUserMessage(
   if (titleInput) {
     titleState.userMessageCount++
     titleTurnNumber = titleState.userMessageCount
-    titleState.activeTurn = {
+    titleState.titleDraftTurn = {
       count: titleTurnNumber,
       userText: titleInput,
       assistantText: '',
@@ -1539,19 +1537,19 @@ function bindTitleSessionOutput(
 }
 
 function appendAssistantTextForTitle(sessionId: string, cliMsg: any): void {
-  const activeTurn = sessionTitleState.get(sessionId)?.activeTurn
-  if (!activeTurn) return
+  const titleDraftTurn = sessionTitleState.get(sessionId)?.titleDraftTurn
+  if (!titleDraftTurn) return
 
   const streamText = extractAssistantStreamTextForTitle(cliMsg)
   if (streamText) {
-    activeTurn.assistantText = `${activeTurn.assistantText ?? ''}${streamText}`
+    titleDraftTurn.assistantText = `${titleDraftTurn.assistantText ?? ''}${streamText}`
     return
   }
 
   const assistantText = extractAssistantMessageTextForTitle(cliMsg)
   if (assistantText) {
-    activeTurn.assistantText = activeTurn.assistantText
-      ? `${activeTurn.assistantText}\n${assistantText}`
+    titleDraftTurn.assistantText = titleDraftTurn.assistantText
+      ? `${titleDraftTurn.assistantText}\n${assistantText}`
       : assistantText
     return
   }
@@ -1559,10 +1557,10 @@ function appendAssistantTextForTitle(sessionId: string, cliMsg: any): void {
   if (
     cliMsg?.type === 'result' &&
     !cliMsg.is_error &&
-    !activeTurn.assistantText &&
+    !titleDraftTurn.assistantText &&
     typeof cliMsg.result === 'string'
   ) {
-    activeTurn.assistantText = cliMsg.result
+    titleDraftTurn.assistantText = cliMsg.result
   }
 }
 
@@ -1599,22 +1597,22 @@ function extractAssistantMessageTextForTitle(cliMsg: any): string | null {
 
 function completeActiveTitleTurn(sessionId: string): number | null {
   const state = sessionTitleState.get(sessionId)
-  const activeTurn = state?.activeTurn
-  if (!state || !activeTurn) return null
+  const titleDraftTurn = state?.titleDraftTurn
+  if (!state || !titleDraftTurn) return null
 
   state.completedTurns.push({
-    userText: activeTurn.userText,
-    assistantText: activeTurn.assistantText?.trim(),
+    userText: titleDraftTurn.userText,
+    assistantText: titleDraftTurn.assistantText?.trim(),
   })
-  state.activeTurn = undefined
-  return activeTurn.count
+  state.titleDraftTurn = undefined
+  return titleDraftTurn.count
 }
 
 function discardActiveTitleTurn(sessionId: string, count: number | null): void {
   if (count === null) return
   const state = sessionTitleState.get(sessionId)
-  if (state?.activeTurn?.count === count) {
-    state.activeTurn = undefined
+  if (state?.titleDraftTurn?.count === count) {
+    state.titleDraftTurn = undefined
   }
 }
 
@@ -3525,6 +3523,83 @@ export function ensureTurnChangeBroadcastSubscribed(): void {
 }
 
 ensureTurnChangeBroadcastSubscribed()
+
+// ── v1.5.0 A6/C12：协作推送（花名册变化 + 会话列表失效）─────────────────────
+// 信号来自下层（collaboration/collabPushSignals 零依赖缝），出口仍是
+// _events 通道。契约见 D:\xxw_p\cc-heihei-plan\事件契约_v1.5.0.md。
+
+/** session_list_invalidated 的突发合并窗口（契约 §3） */
+const SESSION_LIST_MERGE_MS = 250
+let pendingListEpoch: number | null = null
+let listMergeTimer: ReturnType<typeof setTimeout> | null = null
+
+function broadcastCollabPush(signal: CollabPushSignal): void {
+  if (signal.kind === 'roster') {
+    broadcastGlobalEvent({
+      type: 'system_notification',
+      subtype: 'servant_roster_changed',
+      data: {
+        sessionId: signal.sessionId,
+        change: signal.change,
+        fields: signal.fields,
+      },
+    })
+    return
+  }
+  // 会话列表失效：250ms 窗口合并，只广播窗口内最大 epoch（突发变更不刷屏）
+  pendingListEpoch = Math.max(pendingListEpoch ?? 0, signal.epoch)
+  if (listMergeTimer) return
+  listMergeTimer = setTimeout(() => {
+    listMergeTimer = null
+    const epoch = pendingListEpoch
+    pendingListEpoch = null
+    if (epoch === null) return
+    broadcastGlobalEvent({
+      type: 'system_notification',
+      subtype: 'session_list_invalidated',
+      data: { epoch },
+    })
+  }, SESSION_LIST_MERGE_MS)
+  listMergeTimer.unref?.()
+}
+
+/**
+ * phase_changed → 花名册 running 推送。只对在册会话广播：普通（非协作）会话的
+ * 进程起停与花名册无关，广播只会给前端制造噪音。判定走花名册查询（异步 IO，
+ * 在 emit 回调外完成后再广播——回调内不做任何 registry 写，符合 sessionEvents
+ * 的 reentrancy 约束）。
+ */
+function handleRosterRunningChange(event: SessionEvent): void {
+  if (event.type !== 'phase_changed') return
+  void servantService
+    .getServant(event.sessionId)
+    .then((entry) => {
+      if (!entry) return
+      broadcastGlobalEvent({
+        type: 'system_notification',
+        subtype: 'servant_roster_changed',
+        data: { sessionId: event.sessionId, change: 'updated', fields: ['running'] },
+      })
+    })
+    .catch(() => {
+      // 花名册读失败：丢一轮推送，前端重连/轮询兜底
+    })
+}
+
+/** ensure 模式（同 ensureTurnChangeBroadcastSubscribed）：被 reset 清空后可重调恢复 */
+export function ensureCollabPushBroadcastSubscribed(): void {
+  onCollabPush(broadcastCollabPush)
+  onSessionEvent(handleRosterRunningChange, { types: ['phase_changed'] })
+}
+
+ensureCollabPushBroadcastSubscribed()
+
+/** 测试隔离：清空待合并的 session_list 信号与定时器 */
+export function resetCollabPushBroadcastForTests(): void {
+  if (listMergeTimer) clearTimeout(listMergeTimer)
+  listMergeTimer = null
+  pendingListEpoch = null
+}
 
 export function updateSessionSlashCommands(
   sessionId: string,

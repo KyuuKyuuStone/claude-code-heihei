@@ -28,6 +28,7 @@ import { IconButton } from '@/components/ui/IconButton'
 import { Badge, StatusDot } from '@/components/ui/Badge'
 import { Card } from '@/components/ui/Card'
 import { Spinner } from '@/components/ui/Spinner'
+import { EmptyState } from '@/components/ui/EmptyState'
 import {
   SettingsPageHeader,
   SettingsPill,
@@ -446,6 +447,18 @@ function ProviderSettings() {
       {isLoading && providers.length === 0 ? (
         <div className="flex justify-center py-8">
           <Spinner size={20} tone="brand" label={t('common.loading')} />
+        </div>
+      ) : !isLoading && providers.length === 0 ? (
+        <div className="py-4">
+          <EmptyState
+            title={t('settings.providers.emptyTitle')}
+            description={t('settings.providers.emptyDescription')}
+            action={{
+              label: t('settings.providers.add'),
+              onClick: () => setShowCreateModal(true),
+              variant: 'primary',
+            }}
+          />
         </div>
       ) : null}
 
@@ -2478,38 +2491,10 @@ export function GeneralSettings() {
   }
 
   const uiZoomSection = (
-    <div className="mt-8">
-      <div className="mb-3 flex items-end justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.uiZoom')}</h2>
-          <p className="text-sm text-[var(--color-text-tertiary)]">{t('settings.general.uiZoomDescription')}</p>
-          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[var(--color-text-tertiary)]">
-            <span>{t('settings.general.uiZoomShortcutHint')}</span>
-            <span className="inline-flex items-center gap-1">
-              <span className="font-medium text-[var(--color-text-secondary)]">{t('settings.general.uiZoomShortcutMac')}</span>
-              <kbd className="settings-zoom-kbd">⌘</kbd>
-              <kbd className="settings-zoom-kbd">+</kbd>
-              <span>/</span>
-              <kbd className="settings-zoom-kbd">⌘</kbd>
-              <kbd className="settings-zoom-kbd">-</kbd>
-              <span>/</span>
-              <kbd className="settings-zoom-kbd">⌘</kbd>
-              <kbd className="settings-zoom-kbd">0</kbd>
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <span className="font-medium text-[var(--color-text-secondary)]">{t('settings.general.uiZoomShortcutWindows')}</span>
-              <kbd className="settings-zoom-kbd">Ctrl</kbd>
-              <kbd className="settings-zoom-kbd">+</kbd>
-              <span>/</span>
-              <kbd className="settings-zoom-kbd">Ctrl</kbd>
-              <kbd className="settings-zoom-kbd">-</kbd>
-              <span>/</span>
-              <kbd className="settings-zoom-kbd">Ctrl</kbd>
-              <kbd className="settings-zoom-kbd">0</kbd>
-            </span>
-            <span>{t('settings.general.uiZoomShortcutResetHint')}</span>
-          </div>
-        </div>
+    <SettingsSection
+      title={t('settings.general.uiZoom')}
+      description={t('settings.general.uiZoomDescription')}
+      action={(
         <div className="flex flex-shrink-0 items-center gap-2">
           <span className="min-w-[48px] rounded-[var(--radius-md)] bg-[var(--color-surface-container-low)] px-2 py-1 text-center text-sm font-medium text-[var(--color-text-secondary)]">
             {uiZoomPercent}%
@@ -2529,6 +2514,33 @@ export function GeneralSettings() {
             100%
           </Button>
         </div>
+      )}
+    >
+      <div className="mt-1 mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[var(--color-text-tertiary)]">
+        <span>{t('settings.general.uiZoomShortcutHint')}</span>
+        <span className="inline-flex items-center gap-1">
+          <span className="font-medium text-[var(--color-text-secondary)]">{t('settings.general.uiZoomShortcutMac')}</span>
+          <kbd className="settings-zoom-kbd">⌘</kbd>
+          <kbd className="settings-zoom-kbd">+</kbd>
+          <span>/</span>
+          <kbd className="settings-zoom-kbd">⌘</kbd>
+          <kbd className="settings-zoom-kbd">-</kbd>
+          <span>/</span>
+          <kbd className="settings-zoom-kbd">⌘</kbd>
+          <kbd className="settings-zoom-kbd">0</kbd>
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="font-medium text-[var(--color-text-secondary)]">{t('settings.general.uiZoomShortcutWindows')}</span>
+          <kbd className="settings-zoom-kbd">Ctrl</kbd>
+          <kbd className="settings-zoom-kbd">+</kbd>
+          <span>/</span>
+          <kbd className="settings-zoom-kbd">Ctrl</kbd>
+          <kbd className="settings-zoom-kbd">-</kbd>
+          <span>/</span>
+          <kbd className="settings-zoom-kbd">Ctrl</kbd>
+          <kbd className="settings-zoom-kbd">0</kbd>
+        </span>
+        <span>{t('settings.general.uiZoomShortcutResetHint')}</span>
       </div>
       <div
         className={`settings-zoom-control flex items-center gap-3 ${isUiZoomDragging ? 'is-dragging' : ''}`}
@@ -2575,7 +2587,7 @@ export function GeneralSettings() {
         </div>
         <span className="w-9 text-xs text-[var(--color-text-tertiary)]">{Math.round(UI_ZOOM_MAX * 100)}%</span>
       </div>
-    </div>
+    </SettingsSection>
   )
 
   return (
@@ -2588,7 +2600,7 @@ export function GeneralSettings() {
         title={t('settings.general.appearanceTitle')}
         description={t('settings.general.appearanceDescription')}
       >
-        <div className="mb-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
+        <div className="mb-4 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
           <Switch
             checked={followSystemTheme}
             onChange={setFollowSystemTheme}
@@ -2667,38 +2679,38 @@ export function GeneralSettings() {
       </SettingsSection>
 
       {/* Response Language */}
-      <h2
-        className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1"
-        style={{ fontFamily: 'var(--font-headline)' }}
+      <SettingsSection
+        title={t('settings.general.responseLangTitle')}
+        description={t('settings.general.responseLangDescription')}
       >
-        {t('settings.general.responseLangTitle')}
-      </h2>
-      <p className="text-[13px] leading-5 text-[var(--color-text-tertiary)] mb-3">{t('settings.general.responseLangDescription')}</p>
-      <Dropdown<string>
-        items={RESPONSE_LANGUAGES}
-        value={responseLanguage}
-        onChange={(value) => void setResponseLanguage(value)}
-        width="100%"
-        maxHeight={320}
-        className="mb-8 block w-full"
-        trigger={
-          <Button
-            variant="secondary"
-            size="md"
-            block
-            className="h-10 gap-3"
-            aria-label={t('settings.general.responseLangTitle')}
-          >
-            <span className="min-w-0 flex-1 truncate text-left">{selectedResponseLanguageLabel}</span>
-            <span className="material-symbols-outlined flex-shrink-0 text-[18px] text-[var(--color-text-secondary)]">expand_more</span>
-          </Button>
-        }
-      />
+        <Dropdown<string>
+          items={RESPONSE_LANGUAGES}
+          value={responseLanguage}
+          onChange={(value) => void setResponseLanguage(value)}
+          width="100%"
+          maxHeight={320}
+          className="block w-full"
+          trigger={
+            <Button
+              variant="secondary"
+              size="md"
+              block
+              className="h-10 gap-3"
+              aria-label={t('settings.general.responseLangTitle')}
+            >
+              <span className="min-w-0 flex-1 truncate text-left">{selectedResponseLanguageLabel}</span>
+              <span className="material-symbols-outlined flex-shrink-0 text-[18px] text-[var(--color-text-secondary)]">expand_more</span>
+            </Button>
+          }
+        />
+      </SettingsSection>
 
       {/* Output style */}
-      <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.outputStyleTitle')}</h2>
-      <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.outputStyleDescription')}</p>
-      <Card radius="xl" surface="low" padding="none" className="mb-8 px-4 py-4">
+      <SettingsSection
+        title={t('settings.general.outputStyleTitle')}
+        description={t('settings.general.outputStyleDescription')}
+      >
+        <Card radius="xl" surface="low" padding="none" className="px-4 py-4">
         <Dropdown<string>
           items={outputStyleItems}
           value={outputStyle}
@@ -2752,10 +2764,12 @@ export function GeneralSettings() {
           </p>
         )}
       </Card>
+      </SettingsSection>
 
-      <div className="mt-8">
-        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.defaultPermissionTitle')}</h2>
-        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.defaultPermissionDescription')}</p>
+      <SettingsSection
+        title={t('settings.general.defaultPermissionTitle')}
+        description={t('settings.general.defaultPermissionDescription')}
+      >
         <Card radius="xl" surface="low" padding="none" className="px-4 py-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
@@ -2774,11 +2788,12 @@ export function GeneralSettings() {
             />
           </div>
         </Card>
-      </div>
+      </SettingsSection>
 
-      <div className="mt-8">
-        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.thinkingTitle')}</h2>
-        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.thinkingDescription')}</p>
+      <SettingsSection
+        title={t('settings.general.thinkingTitle')}
+        description={t('settings.general.thinkingDescription')}
+      >
         <label className="relative flex items-start gap-3 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3 cursor-pointer hover:border-[var(--color-border-focus)] transition-colors">
           <input
             type="checkbox"
@@ -2797,11 +2812,12 @@ export function GeneralSettings() {
             </div>
           </div>
         </label>
-      </div>
+      </SettingsSection>
 
-      <div className="mt-8">
-        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.autoDreamTitle')}</h2>
-        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.autoDreamDescription')}</p>
+      <SettingsSection
+        title={t('settings.general.autoDreamTitle')}
+        description={t('settings.general.autoDreamDescription')}
+      >
         <label className="relative flex items-start gap-3 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3 cursor-pointer hover:border-[var(--color-border-focus)] transition-colors">
           <input
             type="checkbox"
@@ -2822,11 +2838,12 @@ export function GeneralSettings() {
             </div>
           </div>
         </label>
-      </div>
+      </SettingsSection>
 
-      <div className="mt-8">
-        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.traceTitle')}</h2>
-        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.traceDescription')}</p>
+      <SettingsSection
+        title={t('settings.general.traceTitle')}
+        description={t('settings.general.traceDescription')}
+      >
         <label className="relative flex items-start gap-3 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3 cursor-pointer hover:border-[var(--color-border-focus)] transition-colors">
           <input
             type="checkbox"
@@ -2850,11 +2867,12 @@ export function GeneralSettings() {
             )}
           </div>
         </label>
-      </div>
+      </SettingsSection>
 
-      <div className="mt-8">
-        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.notificationsTitle')}</h2>
-        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.notificationsDescription')}</p>
+      <SettingsSection
+        title={t('settings.general.notificationsTitle')}
+        description={t('settings.general.notificationsDescription')}
+      >
         <Card radius="xl" surface="low" padding="none" className="px-4 py-3">
           <label className="relative flex items-start gap-3 cursor-pointer">
             <input
@@ -2897,11 +2915,12 @@ export function GeneralSettings() {
             </div>
           )}
         </Card>
-      </div>
+      </SettingsSection>
 
-      <div className="mt-8">
-        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.chatSendBehaviorTitle')}</h2>
-        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.chatSendBehaviorDescription')}</p>
+      <SettingsSection
+        title={t('settings.general.chatSendBehaviorTitle')}
+        description={t('settings.general.chatSendBehaviorDescription')}
+      >
         <Card radius="xl" surface="low" padding="none" className="grid grid-cols-2 gap-2 p-2">
           {CHAT_SEND_BEHAVIORS.map((option) => (
             <button
@@ -2922,13 +2941,14 @@ export function GeneralSettings() {
             </button>
           ))}
         </Card>
-      </div>
+      </SettingsSection>
 
       {uiZoomSection}
 
-      <div className="mt-8">
-        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.networkTitle')}</h2>
-        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.networkDescription')}</p>
+      <SettingsSection
+        title={t('settings.general.networkTitle')}
+        description={t('settings.general.networkDescription')}
+      >
         <Card radius="xl" surface="low" padding="none" className="px-4 py-4">
           <div className="grid grid-cols-2 gap-2">
             {NETWORK_PROXY_MODES.map((mode) => (
@@ -3074,11 +3094,12 @@ export function GeneralSettings() {
             </p>
           )}
         </Card>
-      </div>
+      </SettingsSection>
 
-      <div className="mt-8">
-        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.webFetchPreflightTitle')}</h2>
-        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.webFetchPreflightDescription')}</p>
+      <SettingsSection
+        title={t('settings.general.webFetchPreflightTitle')}
+        description={t('settings.general.webFetchPreflightDescription')}
+      >
         <label className="relative flex items-start gap-3 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3 cursor-pointer hover:border-[var(--color-border-focus)] transition-colors">
           <input
             type="checkbox"
@@ -3097,11 +3118,12 @@ export function GeneralSettings() {
             </div>
           </div>
         </label>
-      </div>
+      </SettingsSection>
 
-      <div className="mt-8">
-        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.webSearchTitle')}</h2>
-        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.webSearchDescription')}</p>
+      <SettingsSection
+        title={t('settings.general.webSearchTitle')}
+        description={t('settings.general.webSearchDescription')}
+      >
         <Card radius="xl" surface="low" padding="none" className="px-4 py-4">
           <div className="grid grid-cols-5 gap-1.5 mb-4">
             {WEB_SEARCH_MODES.map(({ value, label }) => (
@@ -3190,7 +3212,7 @@ export function GeneralSettings() {
             </div>
           </div>
         </Card>
-      </div>
+      </SettingsSection>
 
       {isDesktopRuntime() && (
         <div className="mt-8 border-t border-[var(--color-border)] pt-8">

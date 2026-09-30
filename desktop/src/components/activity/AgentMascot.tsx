@@ -1,4 +1,5 @@
 import type { ActivityStatus } from './sessionActivityModel'
+import { Spinner } from '@/components/ui/Spinner'
 import mascotBuild from '../../assets/agent-mascots/agent-mascot-build.png'
 import mascotCheck from '../../assets/agent-mascots/agent-mascot-check.png'
 import mascotCode from '../../assets/agent-mascots/agent-mascot-code.png'
@@ -106,11 +107,10 @@ export function AgentMascot({ seed, status }: { seed: string; status: ActivitySt
       aria-hidden="true"
     >
       {isActive ? (
-        <span
-          data-testid="agent-mascot-motion-ring"
-          className="absolute -inset-0.5 rounded-[var(--radius-lg)] border border-transparent border-t-[var(--color-brand)] opacity-80 motion-safe:animate-spin motion-reduce:animate-none"
-          aria-hidden="true"
-        />
+        // P0-5：旋转唯一出口是共享 Spinner（reduced-motion 减速策略随之统一）
+        <span data-testid="agent-mascot-motion-ring" className="absolute -inset-0.5 grid place-items-center opacity-80" aria-hidden="true">
+          <Spinner size={34} tone="brand" />
+        </span>
       ) : null}
       <img
         src={imageSrc}

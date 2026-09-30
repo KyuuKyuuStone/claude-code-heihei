@@ -1,4 +1,4 @@
-import { memo, useMemo, useCallback } from 'react'
+import { memo, useMemo, useCallback, useRef } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import DOMPurify from 'dompurify'
 import katex from 'katex'
@@ -547,7 +547,113 @@ function getProseClasses(variant: 'default' | 'document' | 'compact', className?
     .join(' ')
 }
 
-export const MarkdownRenderer = memo(function MarkdownRenderer({ content, variant = 'default', className, cache = true, streaming = false, onLinkClick }: Props) {
+/**
+ * v1.5.0 流式分段：返回 text 中可"封顶"的安全前缀长度——最后一个位于
+ * 代码围栏与块级数学（$$ / \[ \]）之外的空行之后的位置。流式文本只增不改，
+ * 空行是 Markdown 块级边界，前缀 parse 一次即永久稳定（走 finalized 缓存），
+ * 每帧只需重 parse 尾部当前段落——把原来"每 50ms 全文重算"的 O(n²) 降为 O(n)。
+ *
+ * 已知取舍：跨段的链接引用定义（[id]: url 在前段、[id] 用在后段）在后段会
+ * 按字面文本渲染——assistant 输出几乎只用内联链接，风险可接受。
+ */
+export function findSafeStreamingCut(text: string): number {
+  let inFence: string | null = null
+  let inDisplayMath: '$$' | '\\[' | null = null
+  let lastSafeCut = 0
+  let offset = 0
+  const lines = text.match(/[^\n]*\n|[^\n]+/g) ?? []
+
+  for (const line of lines) {
+    if (!inDisplayMath) {
+      const fenceMatch = CODE_FENCE_START.exec(line)
+      if (fenceMatch) {
+        const marker = fenceMatch[1]!.charAt(0)
+        if (!inFence) {
+          inFence = marker
+        } else if (inFence === marker) {
+          inFence = null
+        }
+      }
+    }
+    if (!inFence) {
+      // 块级数学定界（未转义出现即翻转状态）；行内 $...$ 不允许含换行，
+      // 天然不会跨越空行切点，无需跟踪。
+      if (inDisplayMath !== '\\[') {
+        for (const match of line.matchAll(/(?<!\\)\$\$/g)) {
+          void match
+          inDisplayMath = inDisplayMath === '$$' ? null : '$$'
+        }
+      }
+      if (inDisplayMath !== '$$') {
+        if (/\\\[/.test(line)) inDisplayMath = '\\['
+        if (/\\\]/.test(line) && inDisplayMath === '\\[') inDisplayMath = null
+      }
+    }
+    offset += line.length
+    if (!inFence && !inDisplayMath && line.trim() === '') {
+      lastSafeCut = offset
+    }
+  }
+  return lastSafeCut
+}
+
+type StreamingSegmentState = {
+  committedText: string
+  segments: string[]
+}
+
+/**
+ * 流式渲染的分段视图：已封顶段走 finalized 缓存（每段全程只 parse 一次），
+ * 尾部当前段落每次合帧重 parse（体量在段落级，亚毫秒）。
+ * 段数只增不减、段内容不变，key 用下标即稳定。
+ * 注意：段与尾部都必须走 MarkdownCore——再回 MarkdownRenderer 会因
+ * streaming=true 重新委托回本组件，无限递归（v1.5.0 实测 OOM 教训）。
+ */
+const StreamingMarkdown = memo(function StreamingMarkdown(props: Props) {
+  const { content } = props
+  const segmentStateRef = useRef<StreamingSegmentState>({ committedText: '', segments: [] })
+  const state = segmentStateRef.current
+
+  // 新回合 / 文本被重置（content 不再以已封顶前缀开头）时从头分段。
+  if (!content.startsWith(state.committedText)) {
+    state.committedText = ''
+    state.segments = []
+  }
+
+  let rest = content.slice(state.committedText.length)
+  for (;;) {
+    const cut = findSafeStreamingCut(rest)
+    if (cut <= 0) break
+    const segment = rest.slice(0, cut)
+    state.segments.push(segment)
+    state.committedText += segment
+    rest = rest.slice(cut)
+  }
+
+  return (
+    <>
+      {state.segments.map((segment, index) => (
+        // 封顶段内容不变：parse 走 finalized 缓存命中，不重算不重绘。
+        <MarkdownCore key={index} {...props} content={segment} streaming={false} />
+      ))}
+      {rest.trim() && (
+        <MarkdownCore key="streaming-tail" {...props} content={rest} streaming />
+      )}
+    </>
+  )
+})
+
+/**
+ * 流式入口只是一层分发：streaming → StreamingMarkdown 分段视图；
+ * 否则直达 MarkdownCore。本组件不放 hooks，streaming 翻转（回合结束
+ * true→false）时两个子树各自整体挂载/卸载，无 hook 顺序问题。
+ */
+export const MarkdownRenderer = memo(function MarkdownRenderer(props: Props) {
+  if (props.streaming) return <StreamingMarkdown {...props} />
+  return <MarkdownCore {...props} />
+})
+
+const MarkdownCore = memo(function MarkdownCore({ content, variant = 'default', className, cache = true, streaming = false, onLinkClick }: Props) {
   const { html, codeBlocks, mathBlocks } = useMemo(
     () => cache ? getCachedMarkdownParse(content, streaming) : parseMarkdown(content),
     [cache, content, streaming],
@@ -657,6 +763,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, varian
             <CodeViewer
               code={part.block.code}
               language={part.block.language}
+              streaming={streaming}
             />
           </div>
         )

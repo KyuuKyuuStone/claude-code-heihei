@@ -37,7 +37,6 @@ import {
   getAppMode,
   setAppMode,
 } from './services/appMode'
-import { installMacOsChromiumKeychainPromptGuard } from './services/keychain'
 import { installStdioWriteFailureGuards } from './services/stdioGuards'
 import { applyWindowsAppUserModelId } from './services/appIdentity'
 import { installMainWindowNavigationGuards, installPreviewNavigationGuards } from './services/navigationGuards'
@@ -86,7 +85,6 @@ let trayController: TrayController | null = null
 // Must run before anything logs: a Finder/Dock launch inherits unreadable
 // stdio, and an unguarded write failure there surfaces as a crash dialog.
 installStdioWriteFailureGuards()
-installMacOsChromiumKeychainPromptGuard(app)
 
 function appRoot() {
   return app.isPackaged ? app.getAppPath() : process.cwd()
@@ -213,6 +211,7 @@ function getServerRuntime() {
   serverRuntime ??= new ElectronServerRuntime({
     desktopRoot: unpackedRoot(),
     appRoot: appRoot(),
+    appVersion: app.getVersion(),
     diagnosticsFile: electronHostDiagnosticsFile(process.env),
     resolveSystemProxy: (url) => session.defaultSession.resolveProxy(url),
   })
@@ -504,7 +503,6 @@ function registerIpcHandlers() {
     app.relaunch()
     app.quit()
   })
-  registerHandler(ELECTRON_IPC_CHANNELS.adaptersRestartSidecar, () => getServerRuntime().restartAdaptersSidecars())
   registerHandler(ELECTRON_IPC_CHANNELS.localModelStart, (_event, payload) => {
     const input = payload as LocalModelStartInput
     return startLocalModelWithGpuGuard(input)

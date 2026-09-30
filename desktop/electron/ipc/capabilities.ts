@@ -212,7 +212,6 @@ export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.appModeSet]: optionalRecord,
   [ELECTRON_IPC_CHANNELS.appModePrepareRestart]: noPayload,
   [ELECTRON_IPC_CHANNELS.appModeRestart]: noPayload,
-  [ELECTRON_IPC_CHANNELS.adaptersRestartSidecar]: noPayload,
   [ELECTRON_IPC_CHANNELS.localModelStart]: localModelStart,
   [ELECTRON_IPC_CHANNELS.localModelStop]: noPayload,
   [ELECTRON_IPC_CHANNELS.localModelStatus]: noPayload,

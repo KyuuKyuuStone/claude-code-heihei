@@ -107,10 +107,54 @@ describe('DispatchMailboxService', () => {
     expect(ack.fromSessionId).toBe('session-b')
     expect(typeof ack.messageId).toBe('string')
     expect(Number.isNaN(Date.parse(ack.deliveredAt as string))).toBe(false)
+    // v1.5.0 C2 裁决：unlink 成功时不带 unlinkFailed 字段（只在删除失败时出现）
+    expect(ack.unlinkFailed).toBeUndefined()
   })
 
   test('an .ack file is itself not treated as a dispatch payload (idempotent protocol)', () => {
     expect(isDispatchPayloadName('report-ack-1.json.ack')).toBe(false)
+  })
+
+  // ── v1.5.0 C2：重复投递护栏 ──
+  test('skips a file whose .ack already exists (C2 no-duplicate guard)', async () => {
+    // 场景：上次投递成功但 unlink 失败、文件残留 + .ack 已写 → 周期 rescan
+    // 再次扫到同名文件时必须跳过，不得重复投递
+    await writePayload('report-dup.json', {
+      targetSessionId: 'session-a',
+      content: '【汇报】内容',
+      fromSessionId: 'session-b',
+    })
+    await fs.writeFile(
+      mailboxPath('report-dup.json.ack'),
+      JSON.stringify({ ack: true, file: 'report-dup.json' }),
+      'utf-8',
+    )
+    const { service, calls } = buildService()
+
+    const result = await service.handleMailboxFile(
+      path.join(tmpDir, COLLAB_MAILBOX_DIR),
+      'report-dup.json',
+    )
+
+    expect(result.ok).toBe(true)
+    expect(calls).toHaveLength(0) // 投递未被触发 = 幂等跳过生效
+  })
+
+  test('without a pre-existing .ack the same file delivers normally (guard is scoped)', async () => {
+    await writePayload('report-fresh.json', {
+      targetSessionId: 'session-a',
+      content: '【汇报】正常',
+      fromSessionId: 'session-b',
+    })
+    const { service, calls } = buildService()
+
+    const result = await service.handleMailboxFile(
+      path.join(tmpDir, COLLAB_MAILBOX_DIR),
+      'report-fresh.json',
+    )
+
+    expect(result.ok).toBe(true)
+    expect(calls).toHaveLength(1)
   })
 
   test('a failed delivery writes no .ack receipt', async () => {

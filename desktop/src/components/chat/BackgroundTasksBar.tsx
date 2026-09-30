@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, CircleStop, LoaderCircle, X, XCircle } from 'lucide-react'
+import { CheckCircle2, CircleStop, X, XCircle } from 'lucide-react'
 import { StatusDot } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { IconButton } from '@/components/ui/IconButton'
+import { Spinner } from '@/components/ui/Spinner'
 import { useTranslation } from '../../i18n'
 import { createBackgroundTaskDismissKey, formatDurationMs } from '../../lib/backgroundTasks'
 import type { BackgroundAgentTask } from '../../types/chat'
@@ -84,7 +85,8 @@ export function BackgroundTasksBar({
               aria-controls="background-tasks-drawer"
               onClick={() => setOpen(true)}
               icon={runningCount > 0 ? (
-                <LoaderCircle size={16} strokeWidth={2.2} className="animate-spin text-[var(--color-warning)]" aria-hidden="true" />
+                // P0-1/P0-5：运行中一律 brand，转圈统一共享 Spinner
+                <Spinner size={16} tone="brand" />
               ) : (
                 <CheckCircle2 size={16} strokeWidth={2.2} className="text-[var(--color-success)]" aria-hidden="true" />
               )}
@@ -189,7 +191,7 @@ function BackgroundTaskRow({ task }: { task: BackgroundAgentTask }) {
     <div
       data-testid="background-task-row"
       data-status={task.status}
-      className="rounded-[8px] bg-[var(--color-surface-container-low)] px-3 py-2.5"
+      className="rounded-[var(--radius-md)] bg-[var(--color-surface-container-low)] px-3 py-2.5"
     >
       <div className="flex min-w-0 items-start gap-2">
         <StatusDot
@@ -219,7 +221,7 @@ function BackgroundTaskRow({ task }: { task: BackgroundAgentTask }) {
 
 function getTaskStatusIcon(status: BackgroundAgentTask['status']) {
   if (status === 'running') {
-    return <LoaderCircle size={13} strokeWidth={2.2} className="animate-spin" aria-hidden="true" />
+    return <Spinner size={13} tone="brand" />
   }
   if (status === 'failed') {
     return <XCircle size={13} strokeWidth={2.2} className="text-[var(--color-error)]" aria-hidden="true" />
