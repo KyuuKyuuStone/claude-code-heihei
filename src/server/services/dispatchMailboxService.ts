@@ -81,10 +81,16 @@ function projectRootFromMailboxDir(mailboxDir: string): string {
   return path.resolve(mailboxDir, ...Array.from({ length: depth }, () => '..'))
 }
 
-function parsePayload(raw: string): DispatchPayload {  const parsed = JSON.parse(raw) as Record<string, unknown>
+function parsePayload(raw: string): DispatchPayload {
+  const parsed = JSON.parse(raw) as Record<string, unknown>
   const targetSessionId = typeof parsed.targetSessionId === 'string' ? parsed.targetSessionId.trim() : ''
   const content = typeof parsed.content === 'string' ? parsed.content : ''
   const fromSessionId = typeof parsed.fromSessionId === 'string' ? parsed.fromSessionId.trim() : ''
+  // CLI 契约：taskId 由客户端预生成，HTTP 与信箱两通道同 ID、重试幂等。
+  // 信箱载荷里的 taskId 必须原样透传给 recordDispatch，否则补投会另建一条任务，
+  // 页脚 ID 与台账对不上、重发还会重复建账。title 同理，丢了会写空标题。
+  const title = typeof parsed.title === 'string' ? parsed.title.trim() : ''
+  const taskId = typeof parsed.taskId === 'string' ? parsed.taskId.trim() : ''
   if (!targetSessionId) throw new Error('Field "targetSessionId" is required')
   if (!content.trim()) throw new Error('Field "content" is required')
   if (content.length > MAX_CONTENT_LENGTH) {
@@ -95,6 +101,8 @@ function parsePayload(raw: string): DispatchPayload {  const parsed = JSON.parse
     targetSessionId,
     content,
     ...(fromSessionId ? { fromSessionId } : {}),
+    ...(title ? { title } : {}),
+    ...(taskId ? { taskId } : {}),
     ...(report ? { report } : {}),
   }
 }

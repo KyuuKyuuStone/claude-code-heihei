@@ -287,6 +287,90 @@ describe('DispatchMailboxService', () => {
     }
   })
 
+  test('信箱载荷的 taskId 是权威 ID：补投后台账任务 ID 与载荷逐字一致', async () => {
+    const original = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = tmpDir
+    try {
+      const sender = await registerWorker({ role: '主管', supervisor: true })
+      const worker = await registerWorker({ role: '后端' })
+      const { collabTaskService } = await import('../services/collabTaskService.js')
+      const { service, calls } = buildService()
+      // 缺陷复现里的那个 ID：曾经落盘是它、台账却变成了另一个随机 UUID
+      const payloadTaskId = '5b8e27c2-a75d-4338-a97d-7a844f0bad54'
+      await writePayload('dispatch-id-1.json', {
+        targetSessionId: worker,
+        fromSessionId: sender,
+        content: '派活：带预生成 taskId 的补投',
+        title: '补投标题',
+        taskId: payloadTaskId,
+      })
+
+      const result = await service.handleMailboxFile(
+        path.join(tmpDir, COLLAB_MAILBOX_DIR),
+        'dispatch-id-1.json',
+      )
+
+      expect(result).toEqual({ ok: true })
+      const task = await collabTaskService.getTask(payloadTaskId)
+      expect(task).not.toBeNull()
+      expect(task?.id).toBe(payloadTaskId)
+      expect(task?.toSessionId).toBe(worker)
+      expect(task?.fromSessionId).toBe(sender)
+      expect(task?.status).toBe('dispatched')
+      expect(task?.title).toBe('补投标题')
+      // 页脚引用的 taskId 必须与台账同源，否则主管按页脚 review 会 404
+      expect(calls[0].content).toContain(`【系统】任务 ID：${payloadTaskId}`)
+    } finally {
+      if (original === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = original
+    }
+  })
+
+  test('同一 taskId 重复经信箱投递 → 台账只留一条，不重复建账、不重置状态', async () => {
+    const original = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = tmpDir
+    try {
+      const sender = await registerWorker({ role: '主管', supervisor: true })
+      const worker = await registerWorker({ role: '后端' })
+      const { collabTaskService } = await import('../services/collabTaskService.js')
+      const { service } = buildService()
+      const payloadTaskId = 'a6bf7ec2-1111-4222-8333-444455556666'
+      const dir = path.join(tmpDir, COLLAB_MAILBOX_DIR)
+
+      await writePayload('dispatch-dup-1.json', {
+        targetSessionId: worker,
+        fromSessionId: sender,
+        content: '派活：重试同一条',
+        taskId: payloadTaskId,
+      })
+      expect(await service.handleMailboxFile(dir, 'dispatch-dup-1.json')).toEqual({ ok: true })
+
+      const first = await collabTaskService.getTask(payloadTaskId)
+      expect(first?.id).toBe(payloadTaskId)
+      expect(first?.status).toBe('dispatched')
+
+      // 模拟重试：同名 ID 再投一次（不同文件，等价于 ack 丢失后的补投）
+      await writePayload('dispatch-dup-2.json', {
+        targetSessionId: worker,
+        fromSessionId: sender,
+        content: '派活：重试同一条',
+        taskId: payloadTaskId,
+      })
+      expect(await service.handleMailboxFile(dir, 'dispatch-dup-2.json')).toEqual({ ok: true })
+
+      const matching = (await collabTaskService.listTasks({ projectDir: tmpDir })).filter(
+        (task) => task.id === payloadTaskId,
+      )
+      expect(matching).toHaveLength(1)
+      // 幂等键命中已有任务：复用同一条，不重建（createdAt/history 都不变）
+      expect(matching[0]!.createdAt).toBe(first!.createdAt)
+      expect(matching[0]!.history).toHaveLength(1)
+    } finally {
+      if (original === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = original
+    }
+  })
+
   test('delivers a valid payload and deletes the file', async () => {
     const filePath = await writePayload('report-1.json', {
       targetSessionId: 'session-a',

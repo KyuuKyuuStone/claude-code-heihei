@@ -118,7 +118,7 @@
 
 ### 构建和运行
 - 开发：`cd desktop && bun run electron:dev`
-- 打包：`cd desktop && bun run electron:build && node ./node_modules/electron-builder/out/cli/cli.js --publish never -c.directories.output=D:/xxw_p/cc-heihei-dist`
+- 打包：`cd desktop && bun run electron:build && bun ./node_modules/electron-builder/out/cli/cli.js --publish never -c.directories.output=D:/xxw_p/cc-heihei-dist/<版本号>`（统一产物父目录，每版本一个子目录，目录名即版本号；测试包另加 `-c.extraMetadata.version=<版本>`，见 D:/xxw_p/cc-heihei-dist/.keep.json）
   - **输出目录必须在 ZCode 工作区外**（工作区内会被 ZCode 索引锁死 app.asar）
   - ⚠️ **本机 node 24.19.0 跑大型 JS 负载会 JIT 崩溃**（SIGILL 132 / SIGSEGV 139，且零输出、小任务正常）——v1.3.0 曾因此「外层 exit=0 但产物缺失」。**改走 bun 直跑四步**（`build:preview-agent` / `tsc -b` / `vite build` / `electron-builder`）已实测兼容；症状特征是 node 链 exit 29/132/139 但 win-unpacked 缺 `resources/app.asar`
 - 发布：`bun run scripts/release.ts <版本号>`（改版本号 + commit + tag，**不改 package.json 之外的版本**）
