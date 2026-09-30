@@ -27,6 +27,7 @@ import {
   WORK_ORCHESTRATOR_SKILL_NAME,
 } from '../../collaboration/dispatchProtocol.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
+import { collabTaskService } from '../services/collabTaskService.js'
 
 export async function handleServantsApi(
   req: Request,
@@ -45,7 +46,8 @@ export async function handleServantsApi(
         includeAll: url.searchParams.get('all') === '1',
         forSessionId: url.searchParams.get('forSession') || undefined,
       })
-      return Response.json({ servants })
+      // rosterTable：与 JSON 同源的渲染表，供便宜模型直接照表选人（v1.6.0）
+      return Response.json({ servants, rosterTable: renderRosterTable(servants) })
     }
 
     // ── PUT /api/servant-sessions/:sessionId ────────────────────────────
@@ -62,8 +64,9 @@ export async function handleServantsApi(
         runtimeProviderId: body.runtimeProviderId as string | null | undefined,
         runtimeModelId: body.runtimeModelId as string | undefined,
         effortLevel: body.effortLevel as string | undefined,
-        // 约束档位：readonly=只读观察；whitelist=目录白名单（writeDirs 必填，真校验在 service 层）
-        constraint: body.constraint as 'readonly' | 'whitelist' | undefined,
+        // 约束档位：readonly=只读观察；whitelist=目录白名单（writeDirs 必填，真校验在 service 层）。
+        // 三态透传（v1.6.0）：传值设档 / null 清除约束（恢复完全执行，writeDirs 一并清空）/ 不传继承旧档。
+        constraint: body.constraint as 'readonly' | 'whitelist' | null | undefined,
         writeDirs: body.writeDirs as string[] | undefined,
       })
       const host = req.headers.get('host') || '127.0.0.1'
@@ -250,6 +253,18 @@ export async function handleSessionMessagesApi(
         forgetReceipt(messageId)
         throw ApiError.internal('Message could not be delivered to the session')
       }
+      // v1.6.0：派活投递成功 → 任务台账 dispatched（规划 3.1「投递成功→dispatched」）。
+      // 只对「目标是 enabled 员工」生效——员工向主管汇报不是派活，不入台账。
+      // 幂等键 = body.taskId；不带则自动建任务。台账失败不阻塞投递（投递是主线）。
+      const trackedTaskId = rosterTarget.enabled
+        ? await collabTaskService.recordDispatch({
+            toSessionId: targetSessionId,
+            ...(fromSessionId ? { fromSessionId } : {}),
+            content: String(body.content ?? ''),
+            ...(typeof body.title === 'string' ? { title: body.title } : {}),
+            ...(typeof body.taskId === 'string' ? { taskId: body.taskId } : {}),
+          })
+        : null
       // 撞车提醒：目标忙（运行中且最近 3 分钟有活动）时在响应里声明，
       // 主管 AI 可据此决定排队等待或改派他人
       const targetState = await describeTargetState(targetSessionId)
@@ -259,6 +274,8 @@ export async function handleSessionMessagesApi(
           // 消费回执：投递成功 ≠ 目标已消费。用 GET /api/session-messages?messageId=<id>
           // 轮询 consumed 字段，确认目标是否真的接住了活（不必只靠等汇报）。
           messageId,
+          // 派活场景回传 taskId：主管可据此 ReviewTask/查台账；汇报场景为 undefined
+          ...(trackedTaskId ? { taskId: trackedTaskId } : {}),
           target: { sessionId: targetSessionId, ...targetState },
         },
         { status: 201 },
@@ -352,6 +369,26 @@ export type SupervisorOrientationEnv = {
   /** 注入消息的随身档案：会话 ID 与服务端地址（环境变量缺失时模型无手段获取） */
   sessionId?: string
   serverUrl?: string
+  /** 渲染好的花名册表（角色 → 会话 ID → 角色特性）；履新时若已有员工则内联 */
+  rosterTable?: string
+}
+
+/**
+ * 花名册 → Markdown 表（v1.6.0）。
+ * 便宜模型看 JSON 容易漏字段（尤其 description 埋在长对象里），表格能显著降低
+ * 「不按角色特性选人」的概率。管道符与换行会破坏表格，先转义。
+ */
+export function renderRosterTable(
+  servants: readonly { sessionId: string; role?: string; description?: string }[],
+): string {
+  if (servants.length === 0) return '（花名册为空）'
+  const rows = servants.map((entry) => {
+    const role = (entry.role?.trim() || '（未设角色）').replace(/\|/g, '\\|')
+    const rawDesc = (entry.description?.trim() || '—').replace(/\|/g, '\\|').replace(/\s*\n\s*/g, ' ')
+    const desc = rawDesc.length > 80 ? `${rawDesc.slice(0, 80)}…` : rawDesc
+    return `| ${role} | ${entry.sessionId} | ${desc} |`
+  })
+  return ['| 角色 | 会话 ID | 角色特性摘要 |', '| --- | --- | --- |', ...rows].join('\n')
 }
 
 /** 随身档案 + 两条硬规则：环境变量/Bash 不可用时，模型凭消息文本本身就能完成汇报与自救 */
@@ -395,6 +432,7 @@ export function buildSupervisorOrientation(env: SupervisorOrientationEnv): strin
     '',
     '现在请立即执行第一步——查看你的员工花名册（角色与角色特性）：',
     'curl -s "$CC_HEIHEI_DESKTOP_SERVER_URL/api/servant-sessions?forSession=$CC_HEIHEI_SESSION_ID"',
+    '返回 JSON 里的 rosterTable 字段就是渲染好的表（**优先看它**，比读 servants 数组省事）。',
     '',
     '看完后用一两句话向用户报告你有哪些员工可用，然后等待用户命令。',
     '',
@@ -402,6 +440,15 @@ export function buildSupervisorOrientation(env: SupervisorOrientationEnv): strin
       '若花名册为空或明显不全，等待约 60 秒后重跑上面的查询（最多重试 5 次）；' +
       '仍为空才向用户报告「暂无员工」，不要凭一次空结果下结论，也不要自己代劳员工的活。',
   ]
+
+  if (env.rosterTable) {
+    lines.push(
+      '',
+      '当前花名册（角色 → 会话 ID → 角色特性）——**每次派活前对照这张表选人**：',
+      '',
+      env.rosterTable,
+    )
+  }
 
   if (env.skillAvailable) {
     lines.push(
@@ -431,15 +478,19 @@ export function buildSupervisorOrientation(env: SupervisorOrientationEnv): strin
 
 /** 组装履新消息前的环境实测：结果只影响消息文案，失败不阻塞任命。 */
 async function buildSupervisorOrientationAfterEnvCheck(sessionId: string, serverUrl: string): Promise<string> {
-  const [skill, shell] = await Promise.all([
+  const [skill, shell, servants] = await Promise.all([
     collabEnvironmentService.checkWorkOrchestratorSkill().catch(() => ({ available: null as boolean | null })),
     Promise.resolve(collabEnvironmentService.checkShell()),
+    // 履新时花名册常为空（主管先被拉起，员工晚 1~3 分钟）——查不到就不内联表格，
+    // 消息里已有「等 60 秒重查」的指引；查到则直接给表，省掉便宜模型看 JSON 的漏看。
+    servantService.listServants({ forSessionId: sessionId }).catch(() => []),
   ])
   return buildSupervisorOrientation({
     skillAvailable: skill.available,
     shellOk: shell.ok,
     sessionId,
     serverUrl,
+    ...(servants.length > 0 ? { rosterTable: renderRosterTable(servants) } : {}),
   })
 }
 

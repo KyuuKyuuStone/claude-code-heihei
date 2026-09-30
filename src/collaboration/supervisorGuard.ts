@@ -21,8 +21,16 @@
  */
 
 import { realpathSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 
 export const SUPERVISOR_SESSION_ENV = 'CC_HEIHEI_SUPERVISOR'
+
+/**
+ * 会话工作目录（绝对路径）——由服务端在拉起 CLI 时注入（conversationService
+ * .buildChildEnv）。守卫用它判断「写入是否在工作目录之外」，避免依赖
+ * process.cwd()：后者会被 preload 的 chdir、CLI 内部切换、resume 复用等改变。
+ */
+export const WORK_DIR_ENV = 'CC_HEIHEI_WORK_DIR'
 
 /** 员工约束档位：full=完全执行（现状）；readonly=只读观察（禁改文件，信箱汇报放行）；whitelist=目录白名单（仅白名单目录内可写） */
 export const SERVANT_CONSTRAINT_ENV = 'CC_HEIHEI_SERVANT_CONSTRAINT'
@@ -53,6 +61,18 @@ const DISPATCH_PAYLOAD_BASENAMES = new Set(['.dispatch-payload.json', 'report-pa
 /** 文件信箱目录片段（跨平台分隔符） */
 const MAILBOX_SEGMENTS = ['.heihei', 'dispatch']
 
+/**
+ * 是否位于系统临时目录内（v1.6.0）。
+ *
+ * 协议承诺「写派活 payload 到临时目录…直接用 Write 完成」（见 DISPATCH_PROTOCOL_MD
+ * 的「主管通道」），但代码里没有对应放行——只有当 tmpdir 恰好不在 workDir 内时
+ * 才被「工作目录之外」那条兜住。补上显式放行：临时目录不属于项目代码，不涉及
+ * 「主管顺手改项目」的风险面。
+ */
+function isInsideTempDir(normalizedPath: string, platform: NodeJS.Platform): boolean {
+  return isInsideDir(normalizedPath, normalizeForMatch(tmpdir(), platform))
+}
+
 function isInsideMailboxDir(normalizedPath: string): boolean {
   const parts = normalizedPath.split(/[/\\]/)
   for (let i = 0; i + 1 < parts.length; i++) {
@@ -78,9 +98,17 @@ export function supervisorWriteDeniedReason(
 ): string | null {
   if (!isSupervisorSession(env)) return null
   const platform = options?.platform ?? process.platform
-  const cwdNorm = normalizeForMatch(options?.cwd ?? process.cwd(), platform)
+  // 工作目录来源优先级（v1.6.0）：显式注入的会话 workDir > process.cwd()。
+  // process.cwd() 受 preload chdir / CLI 内部切换 / resume 复用影响，实测出现过
+  // 「会话 workDir=A，但写 A 的兄弟目录被判成 A 之内而拒绝」（2026-09-30）。
+  const cwdNorm = normalizeForMatch(
+    options?.cwd ?? env[WORK_DIR_ENV] ?? process.cwd(),
+    platform,
+  )
   const targetNorm = normalizeForMatch(filePath, platform)
   if (!isAbsoluteNormalized(targetNorm, platform)) return SUPERVISOR_DISPATCH_ONLY_REASON
+  // 临时目录内的写一律放行（协议承诺的 payload 落地位置；不属于项目代码）
+  if (isInsideTempDir(targetNorm, platform)) return null
   if (!isInsideDir(targetNorm, cwdNorm)) return null
   const basename = targetNorm.split('/').pop() ?? ''
   if (DISPATCH_PAYLOAD_BASENAMES.has(basename)) return null

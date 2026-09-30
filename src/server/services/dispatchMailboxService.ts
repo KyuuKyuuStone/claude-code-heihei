@@ -24,11 +24,15 @@ import { forgetReceipt, recordDelivery } from './dispatchReceiptService.js'
 import { servantService, type ServantInfo } from './servantService.js'
 import { sessionService } from './sessionService.js'
 import { sessionMessenger } from './sessionMessenger.js'
+import { collabTaskService } from './collabTaskService.js'
 
 export type DispatchPayload = {
   targetSessionId: string
   content: string
   fromSessionId?: string
+  /** v1.6.0：派活可选带标题与幂等键（不带给自动建任务） */
+  title?: string
+  taskId?: string
 }
 
 export type MailboxDeliveryResult =
@@ -338,6 +342,21 @@ export class DispatchMailboxService {
         const reason = error instanceof Error ? error.message : String(error)
         await this.markFailed(dir, name, reason)
         return { ok: false, reason }
+      }
+
+      // v1.6.0：派活投递成功 → 任务台账 dispatched。与 HTTP 派活同一实现、
+      // 同一幂等键（taskId）；只对 enabled 员工记账（员工→主管的汇报不入台账）。
+      const targetServant = await servantService
+        .getServant(payload.targetSessionId)
+        .catch(() => null)
+      if (targetServant?.enabled) {
+        await collabTaskService.recordDispatch({
+          toSessionId: payload.targetSessionId,
+          ...(payload.fromSessionId ? { fromSessionId: payload.fromSessionId } : {}),
+          content: payload.content,
+          ...(payload.title ? { title: payload.title } : {}),
+          ...(payload.taskId ? { taskId: payload.taskId } : {}),
+        })
       }
 
       // C2（v1.5.0，主管裁决）：unlink 失败（Windows 锁）时**仍然写 ack**——

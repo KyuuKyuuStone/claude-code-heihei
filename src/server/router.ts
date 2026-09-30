@@ -26,6 +26,7 @@ import { handleMemoryApi } from './api/memory.js'
 import { handleDesktopUiApi } from './api/desktop-ui.js'
 import { handleTracesApi } from './api/traces.js'
 import { handleServantsApi, handleSessionMessagesApi } from './api/servants.js'
+import { handleCollabTasksApi } from './api/collabTasks.js'
 import { getServerIdentity } from './services/serverIdentity.js'
 
 export async function handleApiRequest(req: Request, url: URL): Promise<Response> {
@@ -77,6 +78,10 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
 
     case 'servant-sessions':
       return handleServantsApi(req, url, segments)
+
+    // v1.6.0 协作任务台账（与上游 CLI 的 'tasks'（handleAgentsApi）分开路由）
+    case 'collab-tasks':
+      return handleCollabTasksApi(req, url, segments)
 
     case 'session-messages':
       return handleSessionMessagesApi(req, url, segments)

@@ -251,8 +251,14 @@ export class ServantService {
       runtimeProviderId?: string | null
       runtimeModelId?: string
       effortLevel?: string
-      /** 约束档位：readonly=只读观察；whitelist=目录白名单（需 writeDirs） */
-      constraint?: 'readonly' | 'whitelist'
+      /**
+       * 约束档位：readonly=只读观察；whitelist=目录白名单（需 writeDirs）。
+       * 三态语义（v1.6.0，前端协作设置弹窗契约）：
+       * - 传值   → 设为该档位
+       * - null   → 清除约束（恢复完全执行），writeDirs 一并清空
+       * - undefined（不传）→ 继承旧值
+       */
+      constraint?: 'readonly' | 'whitelist' | null
       /** whitelist 档可写目录（绝对路径数组；服务端规范化） */
       writeDirs?: string[]
     },
@@ -265,10 +271,11 @@ export class ServantService {
     }
     if (
       input.constraint !== undefined &&
+      input.constraint !== null &&
       input.constraint !== 'readonly' &&
       input.constraint !== 'whitelist'
     ) {
-      throw ApiError.badRequest('Field "constraint" must be "readonly" or "whitelist"')
+      throw ApiError.badRequest('Field "constraint" must be "readonly", "whitelist" or null')
     }
     if (
       input.writeDirs !== undefined &&
@@ -316,11 +323,19 @@ export class ServantService {
       const previousConstraint = index !== -1 ? data.servants[index].constraint : undefined
       const previousWriteDirs = index !== -1 ? data.servants[index].writeDirs : undefined
 
-      // 约束档位与白名单目录一起归一（未传档位时沿用旧档位）
-      const nextConstraint =
-        input.constraint !== undefined ? input.constraint : previousConstraint
+      // 约束档位归一（v1.6.0 三态）：显式 null = 清除约束（含白名单），
+      // 传值 = 设档，undefined = 继承旧档。清除是「恢复完全执行」的唯一入口，
+      // 否则受限档一旦设置，前端无从撤销。
+      const clearingConstraint = input.constraint === null
+      const nextConstraint = clearingConstraint
+        ? undefined
+        : input.constraint !== undefined
+          ? input.constraint
+          : previousConstraint
       let nextWriteDirs: string[] | undefined
-      if (nextConstraint === 'whitelist') {
+      if (clearingConstraint) {
+        nextWriteDirs = undefined
+      } else if (nextConstraint === 'whitelist') {
         nextWriteDirs = input.writeDirs !== undefined ? normalizeWriteDirs(input.writeDirs) : previousWriteDirs
         if (!nextWriteDirs || nextWriteDirs.length === 0) {
           throw ApiError.badRequest('whitelist constraint requires at least one write directory')

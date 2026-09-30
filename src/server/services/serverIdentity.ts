@@ -66,6 +66,17 @@ export function isDesktopSidecarProcess(): boolean {
   return process.env[DESKTOP_SIDECAR_ENV_MARKER] === '1'
 }
 
+/**
+ * 门控说明（v1.5.0 起）：只有桌面 app 拉起的正式 sidecar 才允许占用端口文件槽位。
+ *
+ * v1.6.0 补充：该标记是**环境变量，会被子进程继承**——任何从 app 派生的进程
+ * （e2e 测试 import index 起服务、员工 Bash 里起的 dev sidecar）都带着它。
+ * 2026-09-30 实测：一个已死的实例（pid 5264 / port 57094）覆盖了用户正在用的
+ * 实例（pid 18908 / 56923），所有按端口文件寻址的会话投递失败。
+ * 因此 `startServer`（index.ts）在 NODE_ENV=test 时**整体跳过**端口文件写入与
+ * 自愈巡检——bun test 恒为 test，e2e 正是走那条路径起的服务。
+ */
+
 /** 模块加载即定格的启动时间（ISO8601）；端口文件与 whoami 共用同一值 */
 const STARTED_AT = new Date().toISOString()
 
@@ -150,6 +161,56 @@ export async function writeDesktopServerInfo(
   const tmpPath = `${finalPath}.${process.pid}.tmp`
   await fs.writeFile(tmpPath, JSON.stringify(info, null, 2), 'utf-8')
   await renameWithRetry(fs, tmpPath, finalPath)
+}
+
+/** 端口文件巡检周期（v1.6.0 自愈；只做一次文件读 + 必要时一次写，成本可忽略） */
+export const PORT_FILE_GUARD_INTERVAL_MS = 60_000
+
+/**
+ * 端口文件自愈（v1.6.0）。
+ *
+ * 场景：端口文件被**别的实例**覆盖——最典型的是一个已死进程留下的残值
+ * （2026-09-30：死实例 pid 5264 / port 57094 覆盖了在用的 18908 / 56923，
+ * 所有按端口文件寻址的会话投递失败；读方虽有「先校验 pid 存活」的规则，
+ * 但那是让每个人都踩一次坑再自救）。
+ *
+ * 规则：仅当文件里的 pid **已死**、或文件缺失/损坏时夺回并重写；对**活着**的
+ * 他人实例一律不抢（多实例同时运行时不互相刷写）。测试/非正式进程不启动巡检。
+ *
+ * @returns 停止函数
+ */
+export function startDesktopServerInfoGuard(
+  port: number,
+  opts?: { home?: string; intervalMs?: number },
+): () => void {
+  if (!isDesktopSidecarProcess()) return () => {}
+  const timer = setInterval(() => {
+    void reclaimPortFileIfStale(port, opts).catch((error) => {
+      logForDiagnosticsNoPII('debug', 'server_info_guard_failed', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    })
+  }, opts?.intervalMs ?? PORT_FILE_GUARD_INTERVAL_MS)
+  timer.unref?.()
+  return () => clearInterval(timer)
+}
+
+async function reclaimPortFileIfStale(port: number, opts?: { home?: string }): Promise<void> {
+  const filePath = desktopServerInfoPath(opts?.home)
+  let parsed: Partial<DesktopServerInfo> | null = null
+  try {
+    parsed = JSON.parse(await fs.readFile(filePath, 'utf-8')) as Partial<DesktopServerInfo>
+  } catch {
+    parsed = null
+  }
+  if (parsed && parsed.pid === process.pid && parsed.port === port) return
+  if (parsed && typeof parsed.pid === 'number' && isPidAlive(parsed.pid)) return
+  logForDiagnosticsNoPII('warn', 'server_info_stale_reclaimed', {
+    port,
+    stalePid: typeof parsed?.pid === 'number' ? parsed.pid : null,
+    stalePort: typeof parsed?.port === 'number' ? parsed.port : null,
+  })
+  await writeDesktopServerInfo(port, opts)
 }
 
 /**

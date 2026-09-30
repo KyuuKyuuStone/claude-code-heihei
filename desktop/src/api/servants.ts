@@ -41,8 +41,13 @@ export type ServantInput = {
   runtimeProviderId?: string | null
   runtimeModelId?: string
   effortLevel?: string
-  /** 约束档位：readonly=只读观察；whitelist=目录白名单（需 writeDirs） */
-  constraint?: 'readonly' | 'whitelist'
+  /**
+   * 约束档位（三态，v1.6.0 契约）：
+   * - 'readonly' | 'whitelist' → 设为该档位；
+   * - null → 清除约束（恢复完全执行，writeDirs 一并清空）；
+   * - undefined（不传）→ 继承旧值（服务端语义，非「恢复默认」）。
+   */
+  constraint?: 'readonly' | 'whitelist' | null
   /** whitelist 档可写目录（每行一个绝对路径；服务端校验规范化） */
   writeDirs?: string[]
 }

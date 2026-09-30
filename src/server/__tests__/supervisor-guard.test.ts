@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { tmpdir } from 'node:os'
 import {
   SERVANT_CONSTRAINT_ENV,
   SERVANT_WRITE_DIRS_ENV,
@@ -89,6 +90,104 @@ describe('supervisorGuard', () => {
 
   test('non-supervisor sessions are unaffected by the cwd-outside rule (regression)', () => {
     expect(supervisorWriteDeniedReason('C:/anywhere/file.md', ENV_OFF, { cwd: 'C:/proj' })).toBeNull()
+  })
+
+  // ── v1.6.0：临时目录显式放行 + 父目录语义（2026-09-30 主管被拒复盘）──
+
+  test('系统临时目录内一律放行（协议承诺的 payload 落地位置）', () => {
+    const tmp = tmpdir().replace(/\\/g, '/')
+    // 故意把 cwd 设成盘根（临时目录落在 cwd 之内），仍应放行——
+    // 靠的是 tmpdir 显式放行，不是「cwd 之外」那条兜底。
+    const driveRoot = `${tmp.slice(0, 2)}/`
+    expect(
+      supervisorWriteDeniedReason(`${tmp}/hh-report.json`, ENV_ON, { cwd: driveRoot }),
+    ).toBeNull()
+  })
+
+  test('复现（2026-09-30 主管实测）：workDir 内项目的兄弟目录应放行', () => {
+    const CWD = 'D:/xxw_p/claude-code-heihei'
+    // 主管实测现场：Write 到 D:\xxw_p\hh-dispatch\backend-bisect.json 被拒。
+    // hh-dispatch 与 cwd 是兄弟目录，按 v1.4.1 设计应放行。
+    expect(
+      supervisorWriteDeniedReason('D:\\xxw_p\\hh-dispatch\\backend-bisect.json', ENV_ON, {
+        cwd: CWD,
+        platform: 'win32',
+      }),
+    ).toBeNull()
+    // 正斜杠形式
+    expect(
+      supervisorWriteDeniedReason('D:/xxw_p/hh-dispatch/backend-bisect.json', ENV_ON, {
+        cwd: CWD,
+        platform: 'win32',
+      }),
+    ).toBeNull()
+    // 盘符大小写 + 反斜杠 cwd 的组合
+    expect(
+      supervisorWriteDeniedReason('d:\\xxw_p\\hh-dispatch\\x.json', ENV_ON, {
+        cwd: 'D:\\xxw_p\\claude-code-heihei\\',
+        platform: 'win32',
+      }),
+    ).toBeNull()
+    // 前缀相似但不是父目录：claude-code-heihei-evil 仍是兄弟，放行
+    expect(
+      supervisorWriteDeniedReason('D:/xxw_p/claude-code-heihei-evil/x.ts', ENV_ON, {
+        cwd: CWD,
+        platform: 'win32',
+      }),
+    ).toBeNull()
+    // 对照：真在 workDir 之内的路径仍拒（确保没有把整棵 D:/xxw_p 放开）
+    expect(
+      supervisorWriteDeniedReason('D:\\xxw_p\\claude-code-heihei\\src\\x.ts', ENV_ON, {
+        cwd: CWD,
+        platform: 'win32',
+      }),
+    ).toBe(SUPERVISOR_DISPATCH_ONLY_REASON)
+  })
+
+  test('显式注入的会话 workDir 优先于 process.cwd()（v1.6.0，消除进程 cwd 漂移）', () => {
+    // 用一个与真实 process.cwd() 无关的注入值，证明守卫真的采纳了它：
+    // 注入目录之内仍拒、其兄弟目录放行。
+    const env = {
+      CC_HEIHEI_SUPERVISOR: '1',
+      CC_HEIHEI_WORK_DIR: 'C:/fake/proj',
+    } as NodeJS.ProcessEnv
+    expect(
+      supervisorWriteDeniedReason('C:/fake/proj/src/a.ts', env, { platform: 'win32' }),
+    ).toBe(SUPERVISOR_DISPATCH_ONLY_REASON)
+    expect(
+      supervisorWriteDeniedReason('C:/fake/other/a.ts', env, { platform: 'win32' }),
+    ).toBeNull()
+    // 派活 payload / 信箱在注入的 workDir 之内仍放行
+    expect(
+      supervisorWriteDeniedReason('C:/fake/proj/.dispatch-payload.json', env, { platform: 'win32' }),
+    ).toBeNull()
+  })
+
+  test('未注入 workDir 时回退 process.cwd()（老服务端兼容）', () => {
+    const inside = `${process.cwd()}\\src\\a.ts`
+    expect(supervisorWriteDeniedReason(inside, ENV_ON, { platform: 'win32' })).toBe(
+      SUPERVISOR_DISPATCH_ONLY_REASON,
+    )
+  })
+
+  test('cwd 是父目录时其子目录仍在 cwd 内（父目录语义，非前缀误判）', () => {
+    // 2026-09-30 实测：主管会话的工作目录是父目录 D:/xxw_p，Write 到
+    // D:/xxw_p/hh-dispatch/x.json 被拒。这不是前缀匹配 bug——hh-dispatch
+    // 确实是 D:/xxw_p 的子目录，按设计就该拒（sibling 判定见上一条用例）。
+    // 正确修法是让 payload 落到系统临时目录（上一条），或写到真正在 cwd 之外的位置。
+    expect(
+      supervisorWriteDeniedReason('D:/xxw_p/hh-dispatch/x.json', ENV_ON, {
+        cwd: 'D:/xxw_p',
+        platform: 'win32',
+      }),
+    ).toBe(SUPERVISOR_DISPATCH_ONLY_REASON)
+    // 兄弟目录 D:/xxw_p2 才在 cwd 之外
+    expect(
+      supervisorWriteDeniedReason('D:/xxw_p2/hh-dispatch/x.json', ENV_ON, {
+        cwd: 'D:/xxw_p',
+        platform: 'win32',
+      }),
+    ).toBeNull()
   })
 })
 

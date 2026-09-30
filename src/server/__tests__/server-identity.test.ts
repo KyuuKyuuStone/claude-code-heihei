@@ -304,4 +304,70 @@ describe('desktop-server.json slot gate (sidecar marker)', () => {
     process.env.CC_HEIHEI_DESKTOP_SIDECAR = '0'
     expect(mod.isDesktopSidecarProcess()).toBe(false)
   })
+
+  // ── v1.6.0：端口文件被非正式实例覆盖的事故（2026-09-30 死实例 pid 5264 覆盖在用的 18908）──
+
+  test('自愈：文件被已死进程覆盖后，巡检把它夺回', async () => {
+    const mod = await import('../services/serverIdentity.js')
+    const home = await makeTmpHome()
+    try {
+      // 本 describe 的 beforeEach 会删掉该标记（它专测门控），巡检需要它
+      process.env.CC_HEIHEI_DESKTOP_SIDECAR = '1'
+      await fs.mkdir(desktopServerInfoDir(home), { recursive: true })
+      // 死实例残值（pid 用一个必然不存在的大值）——2026-09-30 事故现场的形状
+      await fs.writeFile(
+        desktopServerInfoPath(home),
+        JSON.stringify({
+          url: 'http://127.0.0.1:57094',
+          port: 57094,
+          pid: 999999999,
+          startedAt: '2026-09-30T03:08:45.325Z',
+        }),
+        'utf-8',
+      )
+
+      const stop = mod.startDesktopServerInfoGuard(63452, { home, intervalMs: 20 })
+      try {
+        await Bun.sleep(120)
+        const info = await readDesktopServerInfo({ home })
+        expect(info?.pid).toBe(process.pid)
+        expect(info?.port).toBe(63452)
+      } finally {
+        stop()
+      }
+    } finally {
+      await fs.rm(home, { recursive: true, force: true })
+    }
+  })
+
+  test('自愈不抢活着的实例：文件 pid 仍存活时保持原样', async () => {
+    const mod = await import('../services/serverIdentity.js')
+    const home = await makeTmpHome()
+    try {
+      process.env.CC_HEIHEI_DESKTOP_SIDECAR = '1'
+      await fs.mkdir(desktopServerInfoDir(home), { recursive: true })
+      // 借用本进程 pid 当作「活着的另一个实例」（多实例并行时不互相刷写）
+      await fs.writeFile(
+        desktopServerInfoPath(home),
+        JSON.stringify({
+          url: 'http://127.0.0.1:11111',
+          port: 11111,
+          pid: process.pid,
+          startedAt: '2026-09-30T03:08:45.325Z',
+        }),
+        'utf-8',
+      )
+
+      const stop = mod.startDesktopServerInfoGuard(63453, { home, intervalMs: 20 })
+      try {
+        await Bun.sleep(120)
+        const info = await readDesktopServerInfo({ home })
+        expect(info?.port).toBe(11111) // 未被夺回
+      } finally {
+        stop()
+      }
+    } finally {
+      await fs.rm(home, { recursive: true, force: true })
+    }
+  })
 })

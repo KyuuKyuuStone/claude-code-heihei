@@ -3,12 +3,13 @@ import '@testing-library/jest-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ServantSessionModal } from './ServantSessionModal'
-import { servantsApi } from '../../api/servants'
+import { servantsApi, type ServantInfo } from '../../api/servants'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useProviderStore } from '../../stores/providerStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useChatStore } from '../../stores/chatStore'
+import { useServantStore } from '../../stores/servantStore'
 
 vi.mock('../../api/servants', () => ({
   servantsApi: {
@@ -20,6 +21,17 @@ vi.mock('../../api/servants', () => ({
     sendMessage: vi.fn().mockResolvedValue({ ok: true }),
   },
 }))
+
+function servant(partial: Partial<ServantInfo> & { sessionId: string }): ServantInfo {
+  return {
+    enabled: true,
+    updatedAt: 1,
+    title: partial.sessionId,
+    running: false,
+    turnInProgress: false,
+    ...partial,
+  }
+}
 
 function seedStores() {
   useSettingsStore.setState({
@@ -48,66 +60,98 @@ function seedStores() {
   })
   useTabStore.setState({ openTab: vi.fn() })
   useChatStore.setState({ connectToSession: vi.fn() })
+  useServantStore.setState({ bySessionId: {} })
+}
+
+/** 高级选项默认折叠：断言运行配置前先展开。 */
+function openAdvanced() {
+  fireEvent.click(screen.getByRole('button', { name: /高级选项/ }))
 }
 
 beforeEach(() => {
   seedStores()
+  vi.mocked(servantsApi.set).mockClear()
+  vi.mocked(servantsApi.set).mockResolvedValue({
+    servant: { sessionId: 'new-session', enabled: true, updatedAt: 1 },
+  })
 })
 
-describe('ServantSessionModal', () => {
-  it('renders the three sections and runtime fields', () => {
+describe('ServantSessionModal 创建路径', () => {
+  it('首屏突出身份与行业，运行配置默认收起在高级选项内', () => {
     render(<ServantSessionModal open mode="create" workDir="D:/proj" onClose={vi.fn()} />)
 
-    expect(screen.getAllByText('角色').length).toBeGreaterThan(0)
-    expect(screen.getByText('运行配置')).toBeInTheDocument()
-    expect(screen.getByText('身份')).toBeInTheDocument()
+    // 身份二选一 + 行业选择
+    expect(screen.getByRole('button', { name: /员工/ })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByLabelText('你要做什么？')).toBeInTheDocument()
+    // 高级选项默认折叠：折叠状态下不渲染运行配置字段
+    expect(screen.queryByLabelText('服务商')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('大模型')).not.toBeInTheDocument()
+
+    openAdvanced()
     expect(screen.getByLabelText('服务商')).toBeInTheDocument()
-    expect(screen.getByLabelText('大模型')).toBeInTheDocument()
     expect(screen.getByLabelText('思考强度')).toBeInTheDocument()
   })
 
-  it('fills role and description from a preset including personality wording', () => {
+  it('选行业后展示该行业首批角色卡片，并可展开其他角色', () => {
     render(<ServantSessionModal open mode="create" workDir="D:/proj" onClose={vi.fn()} />)
 
-    fireEvent.change(screen.getByLabelText('预置角色'), { target: { value: '代码审查' } })
+    // 未选行业：轻量引导空态
+    expect(screen.getByText('选择一个方向，看看适合的角色')).toBeInTheDocument()
 
-    expect(screen.getByLabelText('角色')).toHaveValue('代码审查')
-    expect(screen.getByLabelText('角色特性')).toHaveValue(
-      '严格挑剔地审查代码质量、安全与可维护性，只报真问题，输出问题清单与修改建议',
-    )
+    fireEvent.change(screen.getByLabelText('你要做什么？'), { target: { value: 'software' } })
+
+    // 首批 4 张卡片（软件开发含旧角色，文案沿用既有 i18n）
+    expect(screen.getByRole('button', { name: /^后端/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /前端/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /测试/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /代码审查/ })).toBeInTheDocument()
+    // 第 5 个「设计师」不在首批
+    expect(screen.queryByRole('button', { name: /设计师/ })).not.toBeInTheDocument()
+    // 架构师只在四个架构节点介入，排在首批之外
+    expect(screen.queryByRole('button', { name: /架构师/ })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /查看其他角色/ }))
+    expect(screen.getByRole('button', { name: /设计师/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /架构师/ })).toBeInTheDocument()
   })
 
-  it('localizes preset labels and descriptions while keeping the canonical role name', () => {
-    useSettingsStore.setState({ locale: 'en' })
+  it('角色卡片只显示「负责」段首句，完整四段文案进职责输入框', () => {
     render(<ServantSessionModal open mode="create" workDir="D:/proj" onClose={vi.fn()} />)
 
-    // 选项标签随语言走，value 仍是中文正名（稳定标识，匹配既有存档）
-    const presetSelect = screen.getByLabelText('Role preset')
-    expect(within(presetSelect).getByRole('option', { name: 'Code Review' })).toHaveValue('代码审查')
+    fireEvent.change(screen.getByLabelText('你要做什么？'), { target: { value: 'software' } })
 
-    fireEvent.change(presetSelect, { target: { value: '代码审查' } })
+    // 卡片摘要 = 负责段首句（截到首个句末标点），不出现边界/交付/汇报段
+    expect(
+      screen.getByText('代码变更需要独立检查正确性、可维护性、安全隐患或与项目约定的一致性时派给代码审查'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/不替开发直接改代码/)).not.toBeInTheDocument()
 
-    expect(screen.getByLabelText('Role')).toHaveValue('代码审查')
-    expect(screen.getByLabelText('Role description')).toHaveValue(
-      'Reviews code quality, security and maintainability with a critical eye; only reports real issues, delivering a problem list with fix suggestions',
-    )
+    fireEvent.click(screen.getByRole('button', { name: /代码审查/ }))
+    const box = screen.getByLabelText('这个角色负责什么') as HTMLTextAreaElement
+    expect(box.value.split('\n')).toHaveLength(4)
+    expect(box.value.startsWith('负责：')).toBe(true)
+    expect(box.value).toContain('不负责：')
+    expect(box.value).toContain('交付：')
+    expect(box.value).toContain('汇报：')
   })
 
-  it('explains that disabling serve only pauses work while roster removal ends the identity', () => {
+  it('选模板回填角色名与职责，创建时写入中文正名', async () => {
     render(<ServantSessionModal open mode="create" workDir="D:/proj" onClose={vi.fn()} />)
 
-    expect(screen.getByText(/只是暂停接活/)).toBeInTheDocument()
-    expect(screen.getByText(/从花名册移除则协作身份终止/)).toBeInTheDocument()
-  })
+    fireEvent.change(screen.getByLabelText('你要做什么？'), { target: { value: 'software' } })
+    fireEvent.click(screen.getByRole('button', { name: /代码审查/ }))
 
-  it('submits the selected runtime (provider/model/effort) when creating', async () => {
-    render(<ServantSessionModal open mode="create" workDir="D:/proj" onClose={vi.fn()} />)
+    expect(screen.getByLabelText('角色名称')).toHaveValue('代码审查')
+    // 回填完整四段职责文案（统一格式：负责/不负责/交付/汇报）
+    const desc = (screen.getByLabelText('这个角色负责什么') as HTMLTextAreaElement).value
+    expect(desc.split('\n')).toHaveLength(4)
+    expect(desc.startsWith('负责：代码变更需要独立检查正确性')).toBe(true)
+    expect(desc).toContain('\n不负责：')
+    expect(desc).toContain('\n交付：')
+    expect(desc).toContain('\n汇报：')
 
-    fireEvent.click(screen.getByRole('button', { name: '创建' }))
-
-    await waitFor(() => {
-      expect(servantsApi.set).toHaveBeenCalled()
-    })
+    fireEvent.click(screen.getByRole('button', { name: '创建协作会话' }))
+    await waitFor(() => expect(servantsApi.set).toHaveBeenCalled())
     expect(useSessionStore.getState().createSession).toHaveBeenCalledWith(
       'D:/proj',
       { permissionMode: 'bypassPermissions' },
@@ -115,173 +159,211 @@ describe('ServantSessionModal', () => {
     expect(vi.mocked(servantsApi.set)).toHaveBeenCalledWith(
       'new-session',
       expect.objectContaining({
+        role: '代码审查',
         enabled: true,
+        supervisor: false,
         runtimeProviderId: 'prov-1',
         runtimeModelId: 'kimi-k2',
         effortLevel: 'high',
       }),
     )
-    // 标签页标题使用角色名而不是通用“新建会话”（未填角色时才回退）
-    expect(useTabStore.getState().openTab).toHaveBeenCalledWith('new-session', '新建会话')
+    expect(useTabStore.getState().openTab).toHaveBeenCalledWith('new-session', '代码审查')
   })
 
-  it('pre-fills the session persisted runtime in edit mode', () => {
-    useSessionStore.setState({
-      sessions: [{
-        id: 's1',
-        title: '写作会话',
-        createdAt: '2026-01-01',
-        modifiedAt: '2026-01-01',
-        messageCount: 0,
-        projectPath: 'D:/proj',
-        workDir: 'D:/proj',
-        workDirExists: true,
-        runtimeProviderId: 'prov-1',
-        runtimeModelId: 'kimi-max',
-        effortLevel: 'low',
-      }],
-    })
+  it('新建员工未填角色名时禁用提交并就地提示', () => {
+    render(<ServantSessionModal open mode="create" workDir="D:/proj" onClose={vi.fn()} />)
 
+    expect(screen.getByText('请选择一个角色，或自己定义角色名称')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '创建协作会话' })).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('button', { name: '自己定义角色' }))
+    expect(screen.getByLabelText('角色名称')).toHaveValue('')
+  })
+
+  it('新建主管无需角色名即可提交', async () => {
+    render(<ServantSessionModal open mode="create" workDir="D:/proj" onClose={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: '主管' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建协作会话' }))
+
+    await waitFor(() => expect(servantsApi.set).toHaveBeenCalled())
+    expect(vi.mocked(servantsApi.set)).toHaveBeenCalledWith(
+      'new-session',
+      expect.objectContaining({ supervisor: true }),
+    )
+  })
+
+  it('高级选项折叠与否不改变提交值', async () => {
+    render(<ServantSessionModal open mode="create" workDir="D:/proj" onClose={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('你要做什么？'), { target: { value: 'software' } })
+    fireEvent.click(screen.getByRole('button', { name: /^后端/ }))
+
+    // 展开高级 → 保持默认「完全执行」，再收起
+    openAdvanced()
+    fireEvent.click(screen.getByRole('button', { name: /高级选项/ }))
+
+    fireEvent.click(screen.getByRole('button', { name: '创建协作会话' }))
+    await waitFor(() => expect(servantsApi.set).toHaveBeenCalled())
+
+    const payload = vi.mocked(servantsApi.set).mock.calls[0]?.[1]
+    expect(payload?.constraint).toBeUndefined()
+    expect(payload?.writeDirs).toBeUndefined()
+    expect(payload?.runtimeProviderId).toBe('prov-1')
+  })
+
+  it('创建成功但登记失败时不重复创建会话，重试只做登记', async () => {
+    vi.mocked(servantsApi.set).mockRejectedValueOnce(new Error('register failed'))
+    render(<ServantSessionModal open mode="create" workDir="D:/proj" onClose={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('你要做什么？'), { target: { value: 'software' } })
+    fireEvent.click(screen.getByRole('button', { name: /^后端/ }))
+    fireEvent.click(screen.getByRole('button', { name: '创建协作会话' }))
+
+    await waitFor(() => {
+      expect(screen.getByText(/会话已创建，但协作身份登记失败/)).toBeInTheDocument()
+    })
+    expect(useSessionStore.getState().createSession).toHaveBeenCalledTimes(1)
+
+    // 重试：只再登记一次，绝不创建第二个会话
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    await waitFor(() => expect(servantsApi.set).toHaveBeenCalledTimes(2))
+    expect(useSessionStore.getState().createSession).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('ServantSessionModal 编辑路径', () => {
+  it('按旧 role 反推行业并保留持久化 description 原文', () => {
+    // 设计师在 software 行业但不在首批：必须仍被识别，不能按自定义覆盖存档
+    useServantStore.setState({
+      bySessionId: {
+        s1: servant({ sessionId: 's1', role: '设计师', description: '我的自定义职责描述' }),
+      },
+    })
     render(<ServantSessionModal open mode="edit" sessionId="s1" onClose={vi.fn()} />)
 
+    expect(screen.getByLabelText('你要做什么？')).toHaveValue('software')
+    expect(screen.getByLabelText('角色名称')).toHaveValue('设计师')
+    expect(screen.getByLabelText('这个角色负责什么')).toHaveValue('我的自定义职责描述')
+  })
+
+  it('未知自定义角色回退到通用自定义并原样保留', () => {
+    useServantStore.setState({
+      bySessionId: {
+        s1: servant({ sessionId: 's1', role: '我的角色', description: '手写职责' }),
+      },
+    })
+    render(<ServantSessionModal open mode="edit" sessionId="s1" onClose={vi.fn()} />)
+
+    expect(screen.getByLabelText('你要做什么？')).toHaveValue('custom')
+    expect(screen.getByLabelText('角色名称')).toHaveValue('我的角色')
+    expect(screen.getByLabelText('这个角色负责什么')).toHaveValue('手写职责')
+  })
+
+  it('花名册未就绪时不渲染空表单（防覆盖原身份）', () => {
+    useServantStore.setState({ bySessionId: {} })
+    render(<ServantSessionModal open mode="edit" sessionId="s1" onClose={vi.fn()} />)
+
+    expect(screen.getByText('正在加载原设置…')).toBeInTheDocument()
+    expect(screen.queryByLabelText('你要做什么？')).not.toBeInTheDocument()
+  })
+
+  it('从受限档切回完全执行时显式发送 constraint: null', async () => {
+    useServantStore.setState({
+      bySessionId: {
+        s1: servant({ sessionId: 's1', role: '后端', constraint: 'readonly' }),
+      },
+    })
+    render(<ServantSessionModal open mode="edit" sessionId="s1" onClose={vi.fn()} />)
+
+    openAdvanced()
+    expect(screen.getByLabelText('约束档位')).toHaveValue('readonly')
+    fireEvent.change(screen.getByLabelText('约束档位'), { target: { value: '' } })
+
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+    await waitFor(() => expect(servantsApi.set).toHaveBeenCalled())
+    expect(vi.mocked(servantsApi.set)).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ constraint: null }),
+    )
+  })
+
+  it('原本完全执行、保持默认时不发送 constraint 字段（继承语义）', async () => {
+    useServantStore.setState({
+      bySessionId: { s1: servant({ sessionId: 's1', role: '后端' }) },
+    })
+    render(<ServantSessionModal open mode="edit" sessionId="s1" onClose={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+    await waitFor(() => expect(servantsApi.set).toHaveBeenCalled())
+    const payload = vi.mocked(servantsApi.set).mock.calls[0]?.[1]
+    expect(payload?.constraint).toBeUndefined()
+  })
+
+  it('同工作目录已有主管时禁用主管身份切换并提示冲突', () => {
+    useSessionStore.setState({
+      sessions: [{
+        id: 's1', title: '员工', createdAt: '2026-01-01', modifiedAt: '2026-01-01',
+        messageCount: 0, projectPath: 'D:/proj', workDir: 'D:/proj', workDirExists: true,
+      }],
+    })
+    useServantStore.setState({
+      bySessionId: {
+        s1: servant({ sessionId: 's1', role: '后端', workDir: 'D:/proj' }),
+        boss: servant({ sessionId: 'boss', role: '主管', supervisor: true, workDir: 'D:/proj' }),
+      },
+    })
+    render(<ServantSessionModal open mode="edit" sessionId="s1" onClose={vi.fn()} />)
+
+    expect(screen.getByText('当前工作目录已有主管，请先到该会话取消任命')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '主管' })).toBeDisabled()
+  })
+
+  it('编辑态回显会话持久化的运行配置', () => {
+    useSessionStore.setState({
+      sessions: [{
+        id: 's1', title: '写作会话', createdAt: '2026-01-01', modifiedAt: '2026-01-01',
+        messageCount: 0, projectPath: 'D:/proj', workDir: 'D:/proj', workDirExists: true,
+        runtimeProviderId: 'prov-1', runtimeModelId: 'kimi-max', effortLevel: 'low',
+      }],
+    })
+    useServantStore.setState({
+      bySessionId: { s1: servant({ sessionId: 's1', role: '写作' }) },
+    })
+    render(<ServantSessionModal open mode="edit" sessionId="s1" onClose={vi.fn()} />)
+
+    openAdvanced()
     expect(screen.getByLabelText('大模型')).toHaveValue('kimi-max')
     expect(screen.getByLabelText('思考强度')).toHaveValue('low')
   })
 
-  // ─── whitelist 约束档（A3）─────────────────────────────────────────────────
-
-  it('shows writeDirs editor only when the whitelist constraint is selected', () => {
-    render(<ServantSessionModal open mode="create" workDir="D:/proj" onClose={vi.fn()} />)
-
-    const constraintSelect = screen.getByLabelText('约束档位')
-    expect(constraintSelect).toHaveValue('')
-    expect(screen.queryByLabelText('可写目录（每行一个绝对路径）')).not.toBeInTheDocument()
-
-    fireEvent.change(constraintSelect, { target: { value: 'whitelist' } })
-    expect(screen.getByLabelText('可写目录（每行一个绝对路径）')).toBeInTheDocument()
-
-    fireEvent.change(constraintSelect, { target: { value: '' } })
-    expect(screen.queryByLabelText('可写目录（每行一个绝对路径）')).not.toBeInTheDocument()
-  })
-
-  it('pre-fills writeDirs with the session working directory in create mode', () => {
-    render(<ServantSessionModal open mode="create" workDir="D:/proj" onClose={vi.fn()} />)
-
-    fireEvent.change(screen.getByLabelText('约束档位'), { target: { value: 'whitelist' } })
-
-    expect(screen.getByLabelText('可写目录（每行一个绝对路径）')).toHaveValue('D:/proj')
-  })
-
-  it('pre-fills writeDirs from the persisted roster entry in edit mode', async () => {
-    useSessionStore.setState({
-      sessions: [{
-        id: 's1',
-        title: '受限员工',
-        createdAt: '2026-01-01',
-        modifiedAt: '2026-01-01',
-        messageCount: 0,
-        projectPath: 'D:/proj',
-        workDir: 'D:/proj',
-        workDirExists: true,
-      }],
-    })
-    const { useServantStore } = await import('../../stores/servantStore')
+  it('目录白名单空值时禁用提交并就地提示', () => {
     useServantStore.setState({
-      bySessionId: {
-        s1: {
-          sessionId: 's1',
-          enabled: true,
-          constraint: 'whitelist',
-          writeDirs: ['D:/safe-area', 'D:/build-out'],
-          updatedAt: 1,
-          title: '受限员工',
-          running: false,
-          turnInProgress: false,
-        },
-      },
+      bySessionId: { s1: servant({ sessionId: 's1', role: '后端', constraint: 'whitelist', writeDirs: ['D:/seed'] }) },
     })
-
     render(<ServantSessionModal open mode="edit" sessionId="s1" onClose={vi.fn()} />)
 
-    expect(screen.getByLabelText('约束档位')).toHaveValue('whitelist')
-    expect(screen.getByLabelText('可写目录（每行一个绝对路径）')).toHaveValue(
-      'D:/safe-area\nD:/build-out',
-    )
-  })
-
-  it('does not overwrite user-edited writeDirs when roster data arrives late (坑③ touched guard)', async () => {
-    useSessionStore.setState({
-      sessions: [{
-        id: 's1',
-        title: '员工',
-        createdAt: '2026-01-01',
-        modifiedAt: '2026-01-01',
-        messageCount: 0,
-        projectPath: 'D:/proj',
-        workDir: 'D:/proj',
-        workDirExists: true,
-      }],
-    })
-    const { useServantStore } = await import('../../stores/servantStore')
-    useServantStore.setState({ bySessionId: {} })
-
-    render(<ServantSessionModal open mode="edit" sessionId="s1" onClose={vi.fn()} />)
-
-    fireEvent.change(screen.getByLabelText('约束档位'), { target: { value: 'whitelist' } })
-    // 档位切换后 workDir 兜底预填，用户随后手动编辑
+    openAdvanced()
     const editor = screen.getByLabelText('可写目录（每行一个绝对路径）')
-    fireEvent.change(editor, { target: { value: 'D:/user-typed' } })
+    fireEvent.change(editor, { target: { value: '   ' } })
 
-    // 花名册数据晚到（模拟异步 fetch 完成触发 rerender + 预填 effect）
-    useServantStore.setState({
-      bySessionId: {
-        s1: {
-          sessionId: 's1',
-          enabled: true,
-          constraint: 'whitelist',
-          writeDirs: ['D:/late-arrived'],
-          updatedAt: 2,
-          title: '员工',
-          running: false,
-          turnInProgress: false,
-        },
-      },
-    })
-
-    // touched 守卫生效：用户输入不被晚到的持久化数据覆盖
-    expect(screen.getByLabelText('可写目录（每行一个绝对路径）')).toHaveValue('D:/user-typed')
+    expect(screen.getByText('至少填写一个绝对路径')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '保存设置' })).toBeDisabled()
   })
+})
 
-  it('submits writeDirs with whitelist and omits them for other constraints', async () => {
+describe('ServantSessionModal i18n', () => {
+  it('英文界面下行业与角色展示名走本地化，角色名仍是中文正名', () => {
+    useSettingsStore.setState({ locale: 'en' })
     render(<ServantSessionModal open mode="create" workDir="D:/proj" onClose={vi.fn()} />)
 
-    fireEvent.change(screen.getByLabelText('约束档位'), { target: { value: 'whitelist' } })
-    fireEvent.change(screen.getByLabelText('可写目录（每行一个绝对路径）'), {
-      target: { value: '\n  D:/proj  \n\nD:/out\n' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: '创建' }))
+    const industrySelect = screen.getByLabelText('What do you do?')
+    expect(within(industrySelect).getByRole('option', { name: 'Software development' })).toHaveValue('software')
 
-    await waitFor(() => {
-      expect(servantsApi.set).toHaveBeenCalled()
-    })
-    expect(vi.mocked(servantsApi.set)).toHaveBeenCalledWith(
-      'new-session',
-      expect.objectContaining({
-        constraint: 'whitelist',
-        // trim + 去空行
-        writeDirs: ['D:/proj', 'D:/out'],
-      }),
-    )
+    fireEvent.change(industrySelect, { target: { value: 'software' } })
+    fireEvent.click(screen.getByRole('button', { name: /Code Review/ }))
 
-    // 切回 full 再提交：不带 constraint/writeDirs
-    vi.mocked(servantsApi.set).mockClear()
-    fireEvent.change(screen.getByLabelText('约束档位'), { target: { value: '' } })
-    fireEvent.click(screen.getByRole('button', { name: '创建' }))
-    await waitFor(() => {
-      expect(servantsApi.set).toHaveBeenCalled()
-    })
-    const secondCall = vi.mocked(servantsApi.set).mock.calls[0]?.[1]
-    expect(secondCall?.constraint).toBeUndefined()
-    expect(secondCall?.writeDirs).toBeUndefined()
+    // value 仍是中文正名（稳定标识，匹配既有存档）
+    expect(screen.getByLabelText('Role name')).toHaveValue('代码审查')
   })
 })

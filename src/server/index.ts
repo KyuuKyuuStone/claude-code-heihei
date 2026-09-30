@@ -36,6 +36,7 @@ import { registerServantInfoSource } from './services/servantInfoSource.js'
 import {
   clearDesktopServerInfo,
   clearDesktopServerInfoSync,
+  startDesktopServerInfoGuard,
   writeDesktopServerInfo,
 } from './services/serverIdentity.js'
 registerServantInfoSource((sessionId) => servantService.getServant(sessionId))
@@ -49,6 +50,11 @@ registerServantIncidentDeliver((targetSessionId, content, serverHost) =>
   sessionMessenger.deliver(targetSessionId, content, serverHost),
 )
 import { dispatchMailboxService } from './services/dispatchMailboxService.js'
+// v1.6.0 任务台账：订阅 sessionRegistry 的回合事件，把「员工回合开始消费」
+// 落成任务状态 accepted → in_progress。L1 → 本模块（L4 汇聚点）单向订阅，
+// 台账本身不反向依赖任何业务模块。
+import { collabTaskService } from './services/collabTaskService.js'
+collabTaskService.startTurnSubscription()
 import { OPENAI_CODEX_REDIRECT_PATH } from '../services/openaiAuth/client.js'
 import { ensureDesktopCliLauncherInstalled } from './services/desktopCliLauncherService.js'
 import { enableConfigs } from '../utils/config.js'
@@ -506,10 +512,21 @@ export function startServer(port = PORT, host = HOST) {
 
   // 端口自发现落盘（v1.4.0 阶段1-A ①）：server.port 是实际绑定端口（port=0
   // 自动分配时与入参不同）。写入失败只降级自发现（读方走 env 兜底），不炸启动。
-  void writeDesktopServerInfo(serverPort).catch((error) => {
-    const message = error instanceof Error ? error.message : String(error)
-    console.warn(`[Server] Failed to write desktop-server.json (port discovery degraded): ${message}`)
-  })
+  // v1.6.0：测试进程（bun test 恒设 NODE_ENV=test）不碰端口文件。
+  // 门控原本只看 CC_HEIHEI_DESKTOP_SIDECAR，但那是会被子进程继承的环境变量——
+  // e2e 测试 import 本模块起服务时照样带着它，于是把真实用户目录下的端口文件
+  // 覆盖成测试实例的地址（2026-09-30：死实例 pid 5264/57094 覆盖了在用的
+  // 18908/56923，所有按端口文件寻址的会话投递失败）。同文件下方的
+  // diagnostics console 捕获已有同样的判断先例。
+  if (process.env.NODE_ENV !== 'test') {
+    void writeDesktopServerInfo(serverPort).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn(`[Server] Failed to write desktop-server.json (port discovery degraded): ${message}`)
+    })
+    // 自愈：端口文件可能被别的实例（尤其是已死进程的残值）覆盖，导致所有按端口
+    // 文件寻址的会话投递失败。巡检只在「文件 pid 已死/文件缺失」时夺回，不抢活着的实例。
+    startDesktopServerInfoGuard(serverPort)
+  }
 
   // v1.5.0 A6：协作推送——花名册 lastActivityAt 巡检（5s 节流）。
   // 与其他后台任务同款动态 import：启动失败不影响服务器体。

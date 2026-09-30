@@ -1883,6 +1883,13 @@ export class ConversationService {
       CLAUDE_COWORK_MEMORY_PATH_OVERRIDE: this.resolveDesktopAutoMemoryPath(workDir),
       CALLER_DIR: workDir,
       PWD: workDir,
+      // v1.6.0：会话工作目录的**显式**来源。主管收权守卫（supervisorGuard）
+      // 此前用 process.cwd() 判断「是否在工作目录之外」——而进程 cwd 受
+      // preload chdir、CLI 内部切换、resume 复用等多处影响，实测出现过
+      // 「会话显示 workDir=A，但 Write 到 A 的兄弟目录被判成 A 之内而拒绝」
+      // （2026-09-30 主管报告）。守卫改为优先读本变量，与用户看到的 workDir
+      // 严格一致；变量缺失时才回退 process.cwd()（老版本服务端兼容）。
+      CC_HEIHEI_WORK_DIR: workDir,
       ...(sdkUrl
         ? {
             // Runtime config changes restart the SDK child as soon as its result

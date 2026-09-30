@@ -32,6 +32,16 @@ export type CollabPushSignal =
       /** 单调递增；服务端在广播前做 250ms 合并，只发最大 epoch */
       epoch: number
     }
+  | {
+      /** 任务台账变化（v1.6.0）：前端面板据此增量更新，轮询只做分钟级兜底 */
+      kind: 'task'
+      taskId: string
+      projectDir: string
+      /** created=新任务；status=状态流转（含 report/review 带来的字段更新） */
+      change: 'created' | 'status'
+      /** 变化后的状态（change=status 时必填） */
+      status?: string
+    }
 
 export type CollabPushListener = (signal: CollabPushSignal) => void
 

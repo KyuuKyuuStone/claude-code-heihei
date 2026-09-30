@@ -83,3 +83,6 @@ graphify-out/
 # .dispatch-payload.json = 主管派活协议的临时载荷（写入后用完即删）
 .heihei/
 .dispatch-payload.json
+
+# Server runtime DB (repo-root stray from local verification runs)
+cc-heihei/

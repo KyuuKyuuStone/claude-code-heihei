@@ -38,12 +38,12 @@
 ## GitHub 信息
 
 - **仓库**：`https://github.com/KyuuKyuuStone/claude-code-heihei`
-- **当前版本**：`v1.4.1`（本地工作区未提交、未发布；v1.3.0 / v1.4.0 / v1.4.1 均在工作区，等用户实测批准后统一走发布链）
-- **主分支**：`main`（HEAD=`adead8d`；v1.2.7 之后的地基重构与收口尚未 commit）
+- **当前版本**：`v1.5.0`（2026-09-30，用户实测通过；从 v1.2.7 升级，无 bug）
+- **主分支**：`main`（v1.5.0 提交 `aecc650`；本轮只更新文档，不执行 git 写操作）
 
 ## 当前状态
 
-### 版本快照（v1.0.3 → v1.4.1，2026-09-07 ~ 09-29）
+### 版本快照（v1.0.3 → v1.5.0，2026-09-07 ~ 09-30）
 
 - **v1.0.3**：会话协作实战韧性第一轮——`.heihei/dispatch` 文件信箱（Bash 不可用时的派活/汇报降级通道）、主管履新承诺前实测 CLI 技能、Doctor 新增 shell/协作技能体检、prewarm 回收日志正名
 - **v1.0.4**：本地模型上下文规划重做（32K 是下限非目标，预算内逐级上探至 128K q8_0，`desktop/src/lib/localModelPlan.ts`）；跑分运行方式判定修复（全 GPU 不再误标混合）
@@ -66,13 +66,18 @@
 - **v1.3.0**：**地基重构——协作状态单一权威源**。`sessionRegistry`（`src/server/services/sessionRegistry.ts`：六态 `SessionPhase` registered/starting/running/crashed/stopped/deleted-tombstone + 三态 `TurnPhase` + `SessionSnapshot` 快照；硬约束 C1 仅内存态不落盘、C5 先改状态后发事件、C7 无 mock.module）+ `sessionEvents`（自写 typed 事件总线 ~60 行，不用 EventEmitter，`emitSessionEvent` 仅 registry 可调 + `assertNotReentrant` 重入断言）。把散落在 7 处的回合/忙碌判定收敛为单一权威源、断开 2 组真实依赖环（`conversationService⇄servantService`、`sessionMessenger⇄ws/handler`，经注入缝）、加 `dependency-cruiser` 分层门禁（`lint:layers`）。五阶段迁移（0 骨架 → 1 turn 收编 → 2 观察者迁移+crashed 中间态 → 3 存在性判定三分类 → 4 断环+分层门禁），每阶段独立可验证可回滚。**v1.3.1** 修复派活短路回归：tombstone 短路 + 内存态 registry 启动不重放 ⇒ 磁盘在册但未登记的会话被误判「不存在」（所有派活返回 Session not found）；新增 `isTombstoned()` 只对显式 tombstone 为真。全量服务端 **1743 pass / 10 skip / 0 fail**
 - **v1.4.0**：**地基收口**。① 端口自发现：`~/.claude/cc-heihei/desktop-server.json` 契约 `{url,port,pid,startedAt}`（陈旧可识别）+ `GET /api/whoami` 探活验身份（防本机冒名服务）——解决「app 重启换端口后员工会话汇报发不出」的头号问题；② 信箱 `.ack` 回执（员工可 Read 确认送达，不必等主管口头确认）；③ `renameWithRetry` 原子落盘（`src/utils/atomicFs.ts`，EPERM/EBUSY 重试，修「保存 agent 偶发 500」）；④ 微信 `quietPoll` 节流（`adapters/wechat/quietPoll.ts`，治理 `getupdates error: -14` 刷屏）；⑤ `keep_alive` 协议对齐（心跳不再误报未知消息类型）；⑥ 花名册轮询直查提速；⑦ 验收脚本 `scheduleRunIndex/acceptance.ts` + `known-flaky` 口径（安静双跑连续两轮全绿 + 失败自动隔离复跑、flaky 三分类）。详见 `D:/xxw_p/cc-heihei-docs/v1.4.x/批次10_v1.4.0地基收口_计划_20260928.md`
 - **v1.4.1**：**主管通道放行**——主管 Write 收权**放行工作目录外任意位置**（写派活 payload 到临时目录、写汇总文档到桌面等直接 Write 完成，不再绕道）；派活协议补「主管通道」说明（`src/collaboration/dispatchProtocol.ts`：明确 Write 放行范围 + 禁 heredoc 内联 JSON 防反斜杠折叠，实测 6 连 400 的根因）
+- **v1.5.0**：**花名册高危数据丢失修复 + Windows/打包收口**。① `servantService.listServants()` 读路径改为**零写入**：摘要暂时不可用时仍保留花名册条目、标题退化为 sessionId 前缀；清理只由明确删除事件触发。② 新增 `pruneForDeletedSessions(sessionIds)` 兜底：一次清理涉及 ≥2 条或会清空整册时整批跳过并写 warn 诊断 `servant_roster_mass_cleanup_skipped`，采用「宁留脏条目、不静默丢协作身份」策略。③ 花名册与会话统一用 `getClaudeConfigHomeDir()` 解析配置目录。受影响版本：**v1.4.1 及更早**；根因是暂时查不到会话摘要被误判为会话删除，一个普通 GET 读请求便会写盘清空花名册。④ 收口为 Windows + Electron，移除 macOS/Linux 平台支持面与外部 IM 适配器，构建链统一到 bun；修复平台清理造成的测试断链。用户从 **v1.2.7 升级并实测通过，无 bug**。**打包/排障教训**：经运维复核，v1.5.0 首包 `win-unpacked` 内的 sidecar **确实包含修复**（命中特征 `pruneForDeletedSessions` 与 `servant_roster_mass_cleanup_skipped`）；此前因 `session-deleted-auto-cleanup` 也合法存在于新源码（作为 prune 路径的 reason 值），被误当成旧逻辑残留，导致误判打漏。今后排查必须先确认 grep 的是**当前运行的那份二进制**：按端口文件中的 pid 找到对应进程及其实际路径；诊断日志会混入多个实例事件，须依据 pid/startedAt 区分来源。打包验证只使用稳定的字符串字面量 / 日志事件名（如 `pruneForDeletedSessions`、`servant_roster_mass_cleanup_skipped`）；函数名 `getClaudeConfigHomeDir` 可能被 bundle 内联或改名，**不得作为产物验证判据**。GUI 整包首启未由运维独立验证（单实例锁阻止第二实例）；用户随后安装升级实测通过。发布说明：`release-notes/v1.5.0.md`。相关方案与执行证据保存在仓库外私有文档归档中。**版本快照只记变更结论，不外放本机绝对路径或事故细节。**
 
 ### 能工作的
-- 本地模型全流程（设置页、跑分、启动、下载中心、多模态、自定义引擎）都能用
-- 站点和 README 已更新本地模型介绍
+- **v1.5.0 用户实测**：用户从 v1.2.7 升级后确认无 bug。`release-notes/v1.5.0.md` 与 README 定位一致：花名册高危修复、Windows 专属、移除外部 IM 适配器、bun 打包链；本地模型仍可用但已冻结，不参与协作会话。
+- **本地模型（冻结的可选功能）**：现有设置页、跑分、启动、下载中心、多模态、自定义引擎仍可用；不再新增功能、不参与协作会话。核心产品方向是会话级协作。
 - llama.cpp b10786（比上游 release v0.3.0 新）
 
+**v1.5.0 花名册修复与打包教训**：`servantService.listServants()` 读路径零写入；`pruneForDeletedSessions` 仅响应明确删除事件，批量 ≥2 条或清空整册时拒绝并记诊断；配置目录统一使用 `getClaudeConfigHomeDir()`。运维复核确认首包 `win-unpacked` 内的 sidecar 已包含修复；此前误判是把新源码中仍合法存在的 `session-deleted-auto-cleanup` reason 字符串当成旧逻辑证据。**以后排查先按端口文件 pid 找到当前服务进程的实际二进制路径，再对那份二进制 grep 稳定的修复字符串字面量 / 日志事件名**（本次用 `pruneForDeletedSessions`、`servant_roster_mass_cleanup_skipped`）；不要把函数名 `getClaudeConfigHomeDir` 当判据（bundle 可能内联或改名）。诊断日志可能混入多个实例的事件，必须结合 pid/startedAt 区分来源，避免误归因。不能只凭构建命令成功或 exe 存在认定修复已进包。**以后打包必须对正在运行的实际产物验证修复特征串，避免只查错产物。** 用户随后安装 v1.5.0 从 v1.2.7 升级实测通过。发布说明见 `release-notes/v1.5.0.md`。相关过程材料已在仓库外私有归档。 GUI 整包首启未由运维独立验证（Electron 单实例锁阻止第二实例）；之后用户安装 v1.5.0 从 v1.2.7 升级实测通过。发布说明见 `release-notes/v1.5.0.md`。相关过程材料已在仓库外私有归档。 
+
 ### 已知问题 / 待办
+- **v1.6.0 路线：原生协作 + 任务台账**（已规划，详见仓库外规划原文）。引入持久化 TaskService（按项目 JSONL 追加写 + 启动重放），将任务状态流转与会话状态区分：派发→员工接受/执行→汇报→主管验收/返工；为协作会话提供原生 `DispatchTask` / `ReportToSupervisor` / `ReviewTask` / `ListTasks` 工具与任务面板，并通过任务卡片支持长上下文压缩后续做。流程保持全自动，**不增加人工审批点**。
+- **新增需求：协作设置弹窗重设计**——提供行业/场景模板（至少软件开发、小说写作等），便于用户按用途快速配置主管与员工角色；交互与模板范围待产品设计细化。
 - **桌面 vitest 基线已清零，豁免也已清理**（v1.1.2 → v1.2.5）：历史遗留 14 失败文件 / 40 失败用例于 v1.1.2 全部处理完毕；其中 generalSettings 25 条（H5 设置区 / 官方 provider 卡片 / cc-switch 入口）曾按用户拍板「应存在」转为**显式 skip**（条目 **B1-D2**）——**v1.2.5 用户改判「都不要，干净删掉」**：三特性实为**初始快照自带的未接线半成品、不接线**，**代码与 25 条 skip 用例已一并移除**（基线 skip 27 → 2）。分诊与加固记录见 `D:/xxw_p/cc-heihei-docs/v1.2.x/批次0_B1分诊报告_20260914.md`、`批次1_B1修复进度_20260914.md`
 - **ToolSearch 误用：已修复并发布（v1.1.2）**：根因是**语义误导**而非注册时序——「核心工具中途才进工具集」已被探针**证伪**（核心工具从首轮请求起 100% inline 发送、从未 defer）；修复 = 文案改真 deferred 示例 + `select:` 命中 inline 时显式回执 + 协作侧 4 处文案五语言同步。证据见 `D:/xxw_p/cc-heihei-docs/v1.2.x/批次0_A1探针报告_20260914.md`
 - **CI 现有 4 个 job：server-tests / adapters / docs / desktop-tests**：v1.2.0 新增 `desktop-tests`（windows runner，18 文件起步），**v1.2.6 扩容至 37 文件**（达「连续 ≥3 次全绿」标准，1104 tests 逐字一致）；`server-tests-linux-exp` 实验 job 于 v1.2.6 加入、**v1.2.7 后按用户拍板移除**（**放弃 Linux 平台支持、专注 Windows**——采集到的 195 条失败清单存档 `D:/xxw_p/cc-heihei-docs/v1.2.x/批次7_Linux实测清单_20260919.md`，收编评估存档 `批次7_Linux收编评估_20260919.md`）
@@ -140,6 +145,6 @@
 
 ---
 
-*交接时间：2026-09-13（v1.1.1 周期）；文档同步：2026-09-14 ~ 09-29（v1.2.0 ~ v1.4.1 发布前）——均未改代码*
-*当前版本：v1.4.1（本地未提交；上一发布 v1.2.7）*
-*交接状态：协作状态单一权威源（v1.3.0 地基重构）+ 协作可靠性地基收口（v1.4.0）+ 主管通道放行（v1.4.1）；代码在工作区未 commit，等用户实测批准后发布*
+*交接时间：2026-09-13（v1.1.1 周期）；文档同步：2026-09-14 ~ 09-30（v1.2.0 ~ v1.5.0）*
+*当前版本：v1.5.0（用户实测通过；提交 aecc650；README 与 release-notes 已核对）*
+*交接状态：协作状态单一权威源（v1.3.0）+ 地基收口（v1.4.0）+ 主管通道放行（v1.4.1）+ 花名册高危修复及 Windows 瘦身（v1.5.0）；后续版本快照与公告按用户确认节奏执行*
