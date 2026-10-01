@@ -14,7 +14,8 @@ import { createInterface } from 'node:readline'
 import { ApiError } from '../middleware/errorHandler.js'
 import { sanitizePath as sanitizePortablePath } from '../../utils/sessionStoragePortable.js'
 import type { FileHistorySnapshot } from '../../utils/fileHistory.js'
-import { findCanonicalGitRoot } from '../../utils/git.js'
+// v1.7 结构拆分（sessionService 第③批）：findCanonicalGitRoot 的唯一使用者
+// resolveProjectRootFromSessionMetadata 已搬走，本文件不再需要该导入。
 import { calculateUSDCost, MODEL_COSTS } from '../../utils/modelCost.js'
 import {
   MODEL_CONTEXT_WINDOW_DEFAULT,
@@ -105,6 +106,26 @@ import {
   namespaceSubagentContentIds,
 } from './session/transcriptAgents.js'
 import type { ContentBlock, RawEntry } from './session/transcriptAgents.js'
+// v1.7 结构拆分（sessionService 第③批 · 纯移动）：会话条目元数据解析。
+// ProviderContextWindowHint 原是门面本地未导出类型，随本批搬到该模块、再以 import type
+// 引用回来（门面导出面不变；类型擦除，不产生运行时循环）。desanitizePath 原理是门面
+// public 方法，搬走后以同名 public 字段委托保留（门面另有 3 处组外调用点）。
+// VALID_SESSION_PERMISSION_MODES 搬走后仍被门面 5 处使用，随值导入回来。
+import {
+  applyRuntimeContextMetadata,
+  countTranscriptMessages,
+  desanitizePath,
+  resolvePermissionModeFromEntries,
+  resolveProjectRootFromEntries,
+  resolveProjectRootFromSessionMetadata,
+  resolveRepositoryFromEntries,
+  resolveRuntimeContextMetadataFromEntries,
+  resolveTranscriptModifiedAtFromEntries,
+  resolveWorkDirFromEntries,
+  resolveWorktreeSessionFromEntries,
+  VALID_SESSION_PERMISSION_MODES,
+} from './session/sessionEntryMetadata.js'
+import type { ProviderContextWindowHint } from './session/sessionEntryMetadata.js'
 
 // ============================================================================
 // Types
@@ -202,7 +223,9 @@ export type SessionLaunchInfo = {
   effortLevel?: string
 }
 
-type ProviderContextWindowHint = Pick<SessionLaunchInfo, 'runtimeProviderId' | 'runtimeModelId'>
+// v1.7 结构拆分（sessionService 第③批）：ProviderContextWindowHint 随会话条目
+// 元数据解析方法搬到 ./session/sessionEntryMetadata.ts，本文件改为 import type
+// （仍不对外导出；门面 :2166/:2318/:2377/:2510 等使用点不变）。
 
 export type SessionInspectionTranscriptSnapshot = {
   launchInfo: SessionLaunchInfo
@@ -376,14 +399,9 @@ type SessionListSummaryCacheEntry = {
 const DEFAULT_SESSION_LIST_CACHE_MAX_ENTRIES = 16
 const DEFAULT_SESSION_LIST_SUMMARY_CACHE_MAX_ENTRIES = 20_000
 
-const VALID_SESSION_PERMISSION_MODES = new Set([
-  'default',
-  'acceptEdits',
-  'plan',
-  'bypassPermissions',
-  'dontAsk',
-  'auto',
-])
+// v1.7 结构拆分（sessionService 第③批）：VALID_SESSION_PERMISSION_MODES 搬到
+// ./session/sessionEntryMetadata.ts 并 export，本文件改为值导入（门面 :722/:2682/
+// :3719/:3941/:4023 等使用点不变）。
 const VALID_SESSION_EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'xhigh', 'max'])
 
 // v1.7 结构拆分（sessionService 第②批）：ContentBlock 同上搬到 transcriptAgents.ts。
@@ -685,16 +703,9 @@ export class SessionService {
     }
   }
 
-  private latestTimestamp(current: string | null, candidate: unknown): string | null {
-    if (typeof candidate !== 'string') return current
-    const candidateTime = Date.parse(candidate)
-    if (!Number.isFinite(candidateTime)) return current
-    if (!current) return candidate
-    const currentTime = Date.parse(current)
-    return !Number.isFinite(currentTime) || candidateTime > currentTime
-      ? candidate
-      : current
-  }
+  // v1.7 结构拆分（sessionService 第③批）：latestTimestamp 搬到
+  // ./session/sessionEntryMetadata.ts。它在本文件**组外零调用点**（唯一调用者
+  // resolveTranscriptModifiedAtFromEntries 同批搬走），故不留委托字段以免死代码。
 
   private metadataMatchesLaunchInfo(
     launchInfo: SessionLaunchInfo | null,
@@ -1438,184 +1449,27 @@ export class SessionService {
     await fs.appendFile(filePath, line, 'utf-8')
   }
 
-  private resolveWorkDirFromEntries(
-    entries: RawEntry[],
-    fallbackProjectDir?: string,
-  ): string | null {
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const entry = entries[i]
-      if (entry.type === 'session-meta' && typeof (entry as Record<string, unknown>).workDir === 'string') {
-        return normalizeDriveRootPathForPlatform((entry as Record<string, unknown>).workDir as string)
-      }
-    }
-
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const cwd = entries[i]?.cwd
-      if (typeof cwd === 'string' && cwd.trim()) {
-        return normalizeDriveRootPathForPlatform(cwd)
-      }
-    }
-
-    return fallbackProjectDir ? this.desanitizePath(fallbackProjectDir) : null
-  }
-
-  private resolveRepositoryFromEntries(entries: RawEntry[]): PreparedSessionWorkspace['repository'] | undefined {
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const repository = (entries[i] as Record<string, unknown>)?.repository
-      if (repository && typeof repository === 'object') {
-        return repository as PreparedSessionWorkspace['repository']
-      }
-    }
-    return undefined
-  }
-
-  private resolvePermissionModeFromEntries(entries: RawEntry[]): string | undefined {
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const entry = entries[i]
-      if (entry?.type !== 'session-meta') continue
-      const permissionMode = entry.permissionMode
-      if (
-        typeof permissionMode === 'string' &&
-        VALID_SESSION_PERMISSION_MODES.has(permissionMode)
-      ) {
-        return permissionMode
-      }
-    }
-    return undefined
-  }
-
-  private resolveTranscriptModifiedAtFromEntries(entries: RawEntry[]): string | null {
-    let modifiedAt: string | null = null
-    for (const entry of entries) {
-      if (
-        !entry.isMeta &&
-        (entry.type === 'user' || entry.type === 'assistant') &&
-        entry.message?.role
-      ) {
-        modifiedAt = this.latestTimestamp(modifiedAt, entry.timestamp)
-      }
-    }
-    return modifiedAt
-  }
-
-  private resolveRuntimeContextMetadataFromEntries(entries: RawEntry[]): ProviderContextWindowHint {
-    let runtimeProviderId: string | null | undefined
-    let runtimeModelId: string | undefined
-
-    for (const entry of entries) {
-      if (entry.type !== 'session-meta') continue
-      const record = entry as Record<string, unknown>
-      if (record.runtimeProviderId === null || typeof record.runtimeProviderId === 'string') {
-        runtimeProviderId = record.runtimeProviderId as string | null
-      }
-      if (typeof record.runtimeModelId === 'string') {
-        runtimeModelId = record.runtimeModelId
-      }
-    }
-
-    return {
-      ...(runtimeProviderId !== undefined ? { runtimeProviderId } : {}),
-      ...(runtimeModelId ? { runtimeModelId } : {}),
-    }
-  }
-
-  private applyRuntimeContextMetadata(
-    hint: ProviderContextWindowHint,
-    entry: RawEntry,
-  ): ProviderContextWindowHint {
-    if (entry.type !== 'session-meta') return hint
-
-    const record = entry as Record<string, unknown>
-    const nextHint: ProviderContextWindowHint = { ...hint }
-    if (record.runtimeProviderId === null || typeof record.runtimeProviderId === 'string') {
-      nextHint.runtimeProviderId = record.runtimeProviderId as string | null
-    }
-    if (typeof record.runtimeModelId === 'string') {
-      nextHint.runtimeModelId = record.runtimeModelId
-    }
-    return nextHint
-  }
-
-  private resolveWorktreeSessionFromEntries(entries: RawEntry[]): PersistedWorktreeSession | null | undefined {
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const entry = entries[i]
-      if (entry?.type !== 'worktree-state') continue
-
-      const worktreeSession = entry.worktreeSession
-      if (worktreeSession === null) return null
-      if (
-        worktreeSession &&
-        typeof worktreeSession === 'object' &&
-        typeof worktreeSession.worktreePath === 'string' &&
-        typeof worktreeSession.worktreeName === 'string'
-      ) {
-        return worktreeSession
-      }
-    }
-    return undefined
-  }
-
-  private async resolveProjectRootFromEntries(
-    entries: RawEntry[],
-    workDir: string | null,
-    fallbackProjectDir?: string,
-  ): Promise<string | null> {
-    const worktreeSession = this.resolveWorktreeSessionFromEntries(entries)
-    const repository = this.resolveRepositoryFromEntries(entries)
-    return this.resolveProjectRootFromSessionMetadata({
-      worktreeSession,
-      repository,
-      workDir,
-      fallbackProjectDir,
-    })
-  }
-
-  private async resolveProjectRootFromSessionMetadata({
-    worktreeSession,
-    repository,
-    workDir,
-    fallbackProjectDir,
-  }: {
-    worktreeSession?: PersistedWorktreeSession | null
-    repository?: PreparedSessionWorkspace['repository']
-    workDir: string | null
-    fallbackProjectDir?: string
-  }): Promise<string | null> {
-    const candidate = worktreeSession?.originalCwd ||
-      repository?.repoRoot ||
-      workDir ||
-      (fallbackProjectDir ? this.desanitizePath(fallbackProjectDir) : null)
-
-    if (!candidate) return null
-
-    const canonicalCandidate = await this.canonicalizeProjectPath(candidate)
-    const gitRoot = findCanonicalGitRoot(canonicalCandidate)
-    if (gitRoot) return gitRoot
-
-    if (workDir) {
-      const marker = `${path.sep}.claude${path.sep}worktrees${path.sep}`
-      const markerIndex = canonicalCandidate.indexOf(marker)
-      if (markerIndex > 0) return canonicalCandidate.slice(0, markerIndex)
-    }
-
-    return canonicalCandidate
-  }
-
-  private async canonicalizeProjectPath(projectPath: string): Promise<string> {
-    try {
-      return normalizeDriveRootPathForPlatform(await fs.realpath(projectPath)).normalize('NFC')
-    } catch {
-      return projectPath.normalize('NFC')
-    }
-  }
-
-  private countTranscriptMessages(entries: RawEntry[]): number {
-    return entries.filter((entry) =>
-      !entry.isMeta &&
-      !!entry.message?.role &&
-      (entry.type === 'user' || entry.type === 'assistant' || entry.type === 'system')
-    ).length
-  }
+  // ── v1.7 结构拆分（sessionService 第③批）：会话条目元数据解析 13 个名字搬到
+  // ./session/sessionEntryMetadata.ts，此处为其中 11 个保留同名类字段委托。所有调用点
+  // （含组外的 getIndexedSessionSearchMetadata / loadSessionList / findSessionFilesFromFiles
+  // 等）的 this.xxx(...) 文本一行未改。
+  // 规则：只有「门面仍有 this.<名>( 残留调用点」的方法才留委托，无残留者不留（避免死代码）。
+  //   · canonicalizeProjectPath、latestTimestamp 门面残留调用点均为 0，故**不留委托**、
+  //     也不 import（两者的唯一调用者都在同批搬走的方法体内，现为新模块内部裸调用）；
+  //   · desanitizePath 保持 **public** 委托：其 HEAD 形态是无 private 前缀的 public 类方法，
+  //     且门面外仍有 2 处生产调用（src/server/api/sessions.ts:1206/:1240）与 4 处测试调用，
+  //     加 private 会直接破坏这些调用方。
+  private resolveWorkDirFromEntries = resolveWorkDirFromEntries
+  private resolveRepositoryFromEntries = resolveRepositoryFromEntries
+  private resolvePermissionModeFromEntries = resolvePermissionModeFromEntries
+  private resolveTranscriptModifiedAtFromEntries = resolveTranscriptModifiedAtFromEntries
+  private resolveRuntimeContextMetadataFromEntries = resolveRuntimeContextMetadataFromEntries
+  private applyRuntimeContextMetadata = applyRuntimeContextMetadata
+  private resolveWorktreeSessionFromEntries = resolveWorktreeSessionFromEntries
+  private resolveProjectRootFromEntries = resolveProjectRootFromEntries
+  private resolveProjectRootFromSessionMetadata = resolveProjectRootFromSessionMetadata
+  private countTranscriptMessages = countTranscriptMessages
+  desanitizePath = desanitizePath
 
   // --------------------------------------------------------------------------
   // Entry → MessageEntry conversion
@@ -1959,28 +1813,9 @@ export class SessionService {
     return results
   }
 
-  /**
-   * Convert a sanitized directory name back to the original absolute path.
-   * Reverses sanitizePath(): `-Users-nanmi-workspace` → `/Users/nanmi/workspace`.
-   */
-  desanitizePath(sanitized: string): string {
-    // The sanitized form replaces all non-alphanumeric characters with '-'.
-    // This fallback is necessarily lossy, but old Windows transcripts without
-    // session-meta still need the drive separator restored well enough to resume.
-    const windowsDrivePath = sanitized.match(/^([a-zA-Z])--(.+)$/)
-    if (windowsDrivePath) {
-      return `${windowsDrivePath[1]}:${path.win32.sep}${windowsDrivePath[2].replace(/-/g, path.win32.sep)}`
-    }
-
-    const windowsDriveRoot = sanitized.match(/^([a-zA-Z])--$/)
-    if (windowsDriveRoot) {
-      return `${windowsDriveRoot[1]}:${path.win32.sep}`
-    }
-
-    // On POSIX the original path starts with '/', so the sanitized form starts with '-'.
-    // UNC-style Windows paths also recover to a leading double separator on Windows.
-    return sanitized.replace(/-/g, path.sep)
-  }
+  // v1.7 结构拆分（sessionService 第③批）：desanitizePath 搬到
+  // ./session/sessionEntryMetadata.ts；本文件保留 public 同名委托（见上方委托块），
+  // 门面若干组外调用点的调用文本未改。
 
   /**
    * Find the .jsonl file for a given session ID.
