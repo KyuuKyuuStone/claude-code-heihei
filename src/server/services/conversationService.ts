@@ -7,7 +7,6 @@
  */
 
 import * as fs from 'node:fs'
-import * as fsp from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { ProviderService } from './providerService.js'
@@ -72,15 +71,45 @@ import {
   setAwaitingPermission,
   tombstoneSession,
 } from './sessionRegistry.js'
-import { logError } from '../../utils/log.js'
-import {
-  createImageMetadataText,
-  maybeResizeAndDownsampleImageBuffer,
-} from '../../utils/imageResizer.js'
+// v1.7 结构拆分第①批：logError 与 imageResizer 的两个工具函数随附件子系统
+// 一起搬到了 conversation/attachments.ts，本文件不再使用它们。
 import {
   COLLAB_SERVANT_NONINTERACTIVE_ENV,
   COLLAB_SERVANT_PERMISSION_DENIED_MESSAGE,
 } from '../../collaboration/collabToolContract.js'
+// v1.7 结构拆分第①批（纯移动）：诊断文本与附件落盘搬到 conversation/ 子目录，
+// 门面以原路径重导出，方法走类字段委托（`this.xxx(...)` 调用点一行未改）。
+import {
+  MAX_CAPTURED_PROCESS_LINES,
+  MAX_CAPTURED_SDK_MESSAGES,
+  MAX_CAPTURED_SDK_DIAGNOSTIC_TEXT_BYTES,
+  MAX_CAPTURED_SDK_MESSAGE_BYTES,
+  MAX_CAPTURED_SDK_TOTAL_BYTES,
+  extractAssistantApiErrorDetail,
+  extractAssistantText,
+  extractSdkErrorEvent,
+  extractStartupDetail,
+  isAssistantApiErrorMessage,
+  isSafeSdkStatus,
+  redactProcessOutput,
+  sdkErrorCategory,
+  summarizeSdkMessages,
+} from './conversation/startupDiagnostics.js'
+import {
+  buildUserContent,
+  getAttachmentExtension,
+  materializeAttachments,
+  materializeImageAttachment,
+  normalizeImageExtension,
+  parseAttachmentData,
+  readImageAttachmentPayload,
+  replaceFileExtension,
+  sanitizeAttachmentName,
+  shouldInlineImageAttachment,
+  writeUploadAttachment,
+  type AttachmentRef,
+} from './conversation/attachments.js'
+export { MAX_CAPTURED_SDK_MESSAGE_BYTES, MAX_CAPTURED_SDK_TOTAL_BYTES }
 
 /**
  * v1.6.1（契约 §3.6）：员工会话免审批兜底总开关，默认开；置 '0' 关闭自动拒绝
@@ -91,12 +120,8 @@ export function isServantNonInteractiveEnabled(env: NodeJS.ProcessEnv = process.
   return env[COLLAB_SERVANT_NONINTERACTIVE_ENV] !== '0'
 }
 
-const MAX_CAPTURED_PROCESS_LINES = 80
-const MAX_CAPTURED_SDK_MESSAGES = 40
-const MAX_CAPTURED_SDK_SUMMARY = 20
-export const MAX_CAPTURED_SDK_MESSAGE_BYTES = 64 * 1024
-export const MAX_CAPTURED_SDK_TOTAL_BYTES = 512 * 1024
-const MAX_CAPTURED_SDK_DIAGNOSTIC_TEXT_BYTES = 4 * 1024
+// v1.7 结构拆分第①批：抓取/诊断常量搬到 conversation/startupDiagnostics.ts，
+// 由顶部 import 提供；两个原本 export 的常量在本文件重导出，导出面不变。
 const CONTROL_READY_POLL_MS = 50
 /**
  * 记住多少条已处理的 SDK 消息 uuid，用来挡掉 CLI 重连时的重放。
@@ -171,23 +196,8 @@ export function buildConversationCliSpawnOptions(
   } as const
 }
 
-type AttachmentRef = {
-  type: 'file' | 'image'
-  name?: string
-  path?: string
-  data?: string
-  mimeType?: string
-  isDirectory?: boolean
-}
-
-type UserContentBlock = Record<string, unknown>
-
-type MaterializedAttachments = {
-  pathPrefix: string
-  imageBlocks: UserContentBlock[]
-  imageMetadataTexts: string[]
-}
-
+// v1.7 结构拆分第①批：AttachmentRef 等附件类型搬到 conversation/attachments.ts，
+// 本文件仍要用的 AttachmentRef 由顶部 import 提供（无需给本地类型加 export）。
 type SessionOutputCallback = (msg: any) => void
 
 function networkRoutingFingerprint(
@@ -2384,375 +2394,50 @@ export class ConversationService {
     return stderrText || stdoutText
   }
 
-  private redactProcessOutput(line: string): string {
-    return line
-      .replace(/(ANTHROPIC_(?:API_KEY|AUTH_TOKEN)\s*[:=]\s*)[^\s,;]+/gi, '$1[REDACTED]')
-      .replace(/((?:api[_-]?key|auth[_-]?token|access[_-]?token)\s*[:=]\s*)[^\s,;]+/gi, '$1[REDACTED]')
-      .replace(/(Bearer\s+)[A-Za-z0-9._~+/-]+/gi, '$1[REDACTED]')
-  }
+  // ── v1.7 结构拆分第①批：诊断文本函数搬到 conversation/startupDiagnostics.ts。
+  // 同名类字段委托，调用点与 this 绑定语义不变。依赖实例状态的两个
+  // （buildStartupError / buildRuntimeExitMessage）留在本类，搬走必改签名。
+  private redactProcessOutput = redactProcessOutput
 
-  private extractStartupDetail(message: any): string {
-    if (!message) return ''
+  private extractStartupDetail = extractStartupDetail
 
-    if (typeof message.result === 'string') return message.result
-    if (typeof message.status === 'string') return message.status
-    if (typeof message.message === 'string') return message.message
+  private isAssistantApiErrorMessage = isAssistantApiErrorMessage
 
-    if (Array.isArray(message?.errors)) {
-      return message.errors
-        .filter((value: unknown): value is string => typeof value === 'string')
-        .join('\n')
-    }
+  private extractAssistantApiErrorDetail = extractAssistantApiErrorDetail
 
-    return ''
-  }
+  private extractAssistantText = extractAssistantText
 
-  private isAssistantApiErrorMessage(message: any): boolean {
-    return (
-      message?.type === 'assistant' &&
-      (message.isApiErrorMessage === true || typeof message.error === 'string')
-    )
-  }
+  private extractSdkErrorEvent = extractSdkErrorEvent
 
-  private extractAssistantApiErrorDetail(message: any): string {
-    if (!this.isAssistantApiErrorMessage(message)) return ''
+  private summarizeSdkMessages = summarizeSdkMessages
 
-    const text = this.extractAssistantText(message)
-    const error = typeof message.error === 'string' ? message.error : ''
-    if (text && error) return `${error}: ${text}`
-    return text || error
-  }
+  private isSafeSdkStatus = isSafeSdkStatus
 
-  private extractAssistantText(message: any): string {
-    const content = message?.message?.content
-    if (!Array.isArray(content)) return ''
-    const textBlock = content.find(
-      (block: unknown): block is { type: string; text: string } =>
-        !!block &&
-        typeof block === 'object' &&
-        (block as { type?: unknown }).type === 'text' &&
-        typeof (block as { text?: unknown }).text === 'string',
-    )
-    return textBlock?.text || ''
-  }
+  private sdkErrorCategory = sdkErrorCategory
 
-  private extractSdkErrorEvent(message: any): {
-    type: string
-    summary: string
-    details: Record<string, unknown>
-  } | null {
-    if (this.isAssistantApiErrorMessage(message)) {
-      const summary = this.redactProcessOutput(
-        this.extractAssistantApiErrorDetail(message) || 'Assistant API error',
-      )
-      return {
-        type: 'sdk_api_error',
-        summary,
-        details: {
-          sdkType: message.type,
-          error: typeof message.error === 'string' ? message.error : undefined,
-          isApiErrorMessage: message.isApiErrorMessage === true,
-          messageText: this.extractAssistantText(message)
-            ? this.redactProcessOutput(this.extractAssistantText(message))
-            : undefined,
-          errorDetails:
-            typeof message.errorDetails === 'string'
-              ? this.redactProcessOutput(message.errorDetails)
-              : undefined,
-        },
-      }
-    }
+  // ── v1.7 结构拆分第①批：附件落盘子系统搬到 conversation/attachments.ts，
+  // 同样用类字段委托，调用点零改动。
+  private buildUserContent = buildUserContent
 
-    if (message?.type === 'result' && message.is_error) {
-      const summary = this.redactProcessOutput(
-        this.extractStartupDetail(message) || 'SDK result error',
-      )
-      return {
-        type: 'sdk_result_error',
-        summary,
-        details: {
-          sdkType: message.type,
-          subtype: message.subtype,
-          isError: true,
-          result:
-            typeof message.result === 'string'
-              ? this.redactProcessOutput(message.result)
-              : undefined,
-          status:
-            typeof message.status === 'string'
-              ? this.redactProcessOutput(message.status)
-              : undefined,
-          usage: message.usage,
-        },
-      }
-    }
+  private materializeAttachments = materializeAttachments
 
-    return null
-  }
+  private parseAttachmentData = parseAttachmentData
 
-  private summarizeSdkMessages(messages: any[]): unknown[] {
-    return messages.slice(-MAX_CAPTURED_SDK_SUMMARY).map((message) => {
-      if (!message || typeof message !== 'object') {
-        return { type: 'unknown' }
-      }
-      return {
-        type: typeof message.type === 'string' ? message.type : 'unknown',
-        ...(typeof message.subtype === 'string' ? { subtype: message.subtype } : {}),
-        ...(typeof message.is_error === 'boolean' ? { is_error: message.is_error } : {}),
-        ...(this.isSafeSdkStatus(message.status) ? { status: message.status } : {}),
-        ...(this.sdkErrorCategory(message) ? { errorCategory: this.sdkErrorCategory(message) } : {}),
-      }
-    })
-  }
+  private materializeImageAttachment = materializeImageAttachment
 
-  private isSafeSdkStatus(value: unknown): value is string {
-    return typeof value === 'string' && /^(?:failed|error|success|completed|cancelled|canceled|pending|running)$/i.test(value)
-  }
+  private readImageAttachmentPayload = readImageAttachmentPayload
 
-  private sdkErrorCategory(message: any): string | undefined {
-    if (message?.type === 'assistant' && (message.isApiErrorMessage === true || message.error !== undefined)) {
-      return 'api_error'
-    }
-    if (message?.type === 'result' && message.is_error === true) return 'result_error'
-    if (message?.type === 'auth_status') return 'authentication'
-    return undefined
-  }
+  private shouldInlineImageAttachment = shouldInlineImageAttachment
 
-  private async buildUserContent(
-    content: string,
-    sessionId: string,
-    attachments?: AttachmentRef[],
-  ): Promise<UserContentBlock[]> {
-    const materialized = await this.materializeAttachments(sessionId, attachments)
-    const trimmed = content.trim()
-    const text = materialized.pathPrefix
-      ? `${materialized.pathPrefix}${trimmed || 'Please analyze the attached files.'}`.trim()
-      : trimmed
+  private writeUploadAttachment = writeUploadAttachment
 
-    const blocks: UserContentBlock[] = text
-      ? [{ type: 'text', text }]
-      : materialized.imageBlocks.length > 0
-        ? [{ type: 'text', text: 'Please analyze the attached image.' }]
-        : []
+  private normalizeImageExtension = normalizeImageExtension
 
-    blocks.push(...materialized.imageBlocks)
-    for (const metadataText of materialized.imageMetadataTexts) {
-      blocks.push({ type: 'text', text: metadataText })
-    }
+  private replaceFileExtension = replaceFileExtension
 
-    return blocks.length > 0 ? blocks : [{ type: 'text', text: '' }]
-  }
+  private getAttachmentExtension = getAttachmentExtension
 
-  private async materializeAttachments(
-    sessionId: string,
-    attachments?: AttachmentRef[],
-  ): Promise<MaterializedAttachments> {
-    const empty = (): MaterializedAttachments => ({
-      pathPrefix: '',
-      imageBlocks: [],
-      imageMetadataTexts: [],
-    })
-
-    if (!attachments || attachments.length === 0) {
-      return empty()
-    }
-
-    const uploadDir = path.join(
-      process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'),
-      'uploads',
-      sessionId,
-    )
-
-    const savedPaths: string[] = []
-    const imageBlocks: UserContentBlock[] = []
-    const imageMetadataTexts: string[] = []
-    for (const attachment of attachments) {
-      if (this.shouldInlineImageAttachment(attachment)) {
-        const image = await this.materializeImageAttachment(attachment, uploadDir)
-        if (image) {
-          imageBlocks.push(image.block)
-          if (image.metadataText) imageMetadataTexts.push(image.metadataText)
-          continue
-        }
-      }
-
-      if (attachment.path) {
-        savedPaths.push(attachment.path)
-        continue
-      }
-
-      if (!attachment.data) continue
-
-      const parsed = this.parseAttachmentData(attachment.data)
-      if (!parsed) continue
-
-      const ext = this.getAttachmentExtension({
-        ...attachment,
-        mimeType: attachment.mimeType ?? parsed.mimeType,
-      })
-      const fileName = this.sanitizeAttachmentName(attachment.name, attachment.type, ext)
-      const outPath = await this.writeUploadAttachment(uploadDir, fileName, parsed.payload)
-      savedPaths.push(outPath)
-    }
-
-    return {
-      pathPrefix: savedPaths.length > 0
-        ? savedPaths.map((filePath) => `@"${filePath}"`).join(' ') + ' '
-        : '',
-      imageBlocks,
-      imageMetadataTexts,
-    }
-  }
-
-  private parseAttachmentData(data: string): { payload: Buffer; mimeType?: string } | null {
-    const match = data.match(/^data:([^;,]+)?;base64,(.*)$/)
-    const encoded = match ? match[2] : data
-
-    try {
-      return {
-        payload: Buffer.from(encoded ?? '', 'base64'),
-        mimeType: match?.[1],
-      }
-    } catch {
-      return null
-    }
-  }
-
-  private async materializeImageAttachment(
-    attachment: AttachmentRef,
-    uploadDir: string,
-  ): Promise<{ block: UserContentBlock; metadataText?: string } | null> {
-    const source = this.readImageAttachmentPayload(attachment)
-    if (!source) {
-      return null
-    }
-
-    try {
-      const resized = await maybeResizeAndDownsampleImageBuffer(
-        source.payload,
-        source.payload.length,
-        source.ext,
-      )
-      const normalizedExt = this.normalizeImageExtension(resized.mediaType)
-      const storedName = this.replaceFileExtension(
-        this.sanitizeAttachmentName(attachment.name, attachment.type, normalizedExt),
-        normalizedExt,
-      )
-      const sourcePath = source.sourcePath ?? (await this.writeUploadAttachment(
-        uploadDir,
-        storedName,
-        resized.buffer,
-      ))
-      const metadataText = resized.dimensions
-        ? createImageMetadataText(resized.dimensions, sourcePath)
-        : sourcePath
-          ? `[Image source: ${sourcePath}]`
-          : undefined
-
-      return {
-        block: {
-          type: 'image',
-          source: {
-            type: 'base64',
-            media_type: `image/${normalizedExt}`,
-            data: resized.buffer.toString('base64'),
-          },
-        },
-        metadataText: metadataText ?? undefined,
-      }
-    } catch (error) {
-      logError(error)
-      console.warn(
-        `[ConversationService] Failed to inline image attachment ${attachment.name ?? '<unnamed>'}; falling back to file path`,
-      )
-      return null
-    }
-  }
-
-  private readImageAttachmentPayload(
-    attachment: AttachmentRef,
-  ): { payload: Buffer; ext: string; sourcePath?: string } | null {
-    if (attachment.data) {
-      const parsed = this.parseAttachmentData(attachment.data)
-      if (!parsed) return null
-      return {
-        payload: parsed.payload,
-        ext: this.getAttachmentExtension({
-          ...attachment,
-          mimeType: attachment.mimeType ?? parsed.mimeType,
-        }),
-      }
-    }
-
-    if (!attachment.path || attachment.isDirectory) {
-      return null
-    }
-
-    try {
-      return {
-        payload: fs.readFileSync(attachment.path),
-        ext: this.getAttachmentExtension(attachment),
-        sourcePath: attachment.path,
-      }
-    } catch (error) {
-      logError(error)
-      return null
-    }
-  }
-
-  private shouldInlineImageAttachment(attachment: AttachmentRef): boolean {
-    if (attachment.isDirectory) return false
-    if (attachment.type === 'image') return true
-    if (attachment.mimeType?.startsWith('image/')) return true
-    const candidate = attachment.path ?? attachment.name ?? ''
-    return /\.(png|jpe?g|gif|webp)$/i.test(candidate)
-  }
-
-  /**
-   * C6（v1.5.0）：改异步写——附件可达数 MB，同步 writeFileSync 阻塞事件循环，
-   * 表现为「发带图消息时整个服务端卡一下」（多人协作时放大）。
-   */
-  private async writeUploadAttachment(uploadDir: string, fileName: string, payload: Buffer): Promise<string> {
-    // 注意用 fs/promises：本文件顶部的 `fs` 是 node:fs（回调 API）
-    await fsp.mkdir(uploadDir, { recursive: true })
-    const outPath = path.join(uploadDir, `${crypto.randomUUID()}-${fileName}`)
-    await fsp.writeFile(outPath, payload)
-    return outPath
-  }
-
-  private normalizeImageExtension(ext: string): string {
-    const clean = ext.split('/').pop()?.split('+')[0]?.toLowerCase() || 'png'
-    return clean === 'jpg' ? 'jpeg' : clean
-  }
-
-  private replaceFileExtension(fileName: string, ext: string): string {
-    const cleanExt = this.normalizeImageExtension(ext)
-    const base = fileName.replace(/\.[a-z0-9]+$/i, '')
-    return `${base}.${cleanExt}`
-  }
-
-  private getAttachmentExtension(attachment: AttachmentRef): string {
-    const byName = attachment.name?.match(/\.([a-z0-9]+)$/i)?.[1]
-    if (byName) return byName
-
-    const byPath = attachment.path?.match(/\.([a-z0-9]+)$/i)?.[1]
-    if (byPath) return byPath
-
-    const byMime = attachment.mimeType?.split('/')[1]?.split('+')[0]
-    if (byMime) return byMime
-
-    return attachment.type === 'image' ? 'png' : 'bin'
-  }
-
-  private sanitizeAttachmentName(
-    name: string | undefined,
-    type: AttachmentRef['type'],
-    ext: string,
-  ): string {
-    const fallback = `${type}-attachment.${ext}`
-    const normalized = (name || fallback).replace(/[^a-zA-Z0-9._-]/g, '_')
-    return normalized || fallback
-  }
+  private sanitizeAttachmentName = sanitizeAttachmentName
 
   private getSdkTokenFromUrl(sdkUrl: string): string {
     const url = new URL(sdkUrl)
