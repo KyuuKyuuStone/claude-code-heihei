@@ -11,7 +11,6 @@ import type {
   ClientMessage,
   PermissionMode,
   ServerMessage,
-  StreamingFallbackCause,
   TokenUsage,
 } from './events.js'
 import * as os from 'node:os'
@@ -29,7 +28,6 @@ import {
   hasActiveTurn,
   isTurnMessageSent,
   markTurnSent,
-  observeTurnResult,
   registerSession,
   resetRegistryForTests,
   settleTurnIfOwner,
@@ -78,6 +76,12 @@ import {
 } from '../../utils/commandMetadata.js'
 import { shouldCreateWorktreeForSessionLaunch } from '../services/repositoryLaunchService.js'
 import { getDisconnectGraceMs } from './disconnectGraceConfig.js'
+// v1.7 结构拆分（ws/handler.ts 第①批 · 纯移动 · 绿灯区）：cli 重试/降级消息解析族。
+// 仅导入有组外调用点的 2 项（原就以裸名调用）；另 5 项组外为 0，未导入。
+import {
+  toApiRetryServerMessage,
+  toStreamingFallbackServerMessage,
+} from './cliRetryMessages.js'
 
 const settingsService = new SettingsService()
 const providerService = new ProviderService()
@@ -2481,73 +2485,13 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
 // Helpers
 // ============================================================================
 
-function finiteNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null
-}
-
-function normalizeRetryCount(value: unknown): number | null {
-  const numeric = finiteNumber(value)
-  if (numeric === null) return null
-  return Math.max(0, Math.trunc(numeric))
-}
-
-function readRetryErrorRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  return value as Record<string, unknown>
-}
-
-function readRetryErrorString(value: unknown, keys: string[]): string | undefined {
-  const record = readRetryErrorRecord(value)
-  if (!record) return undefined
-  for (const key of keys) {
-    const candidate = record[key]
-    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim()
-  }
-  return undefined
-}
-
-function toApiRetryServerMessage(cliMsg: any): ServerMessage | null {
-  const attempt = normalizeRetryCount(cliMsg.attempt)
-  const maxRetries = normalizeRetryCount(cliMsg.max_retries)
-  const retryDelayMs = normalizeRetryCount(cliMsg.retry_delay_ms)
-  if (attempt === null || maxRetries === null || retryDelayMs === null) return null
-
-  const embeddedError = readRetryErrorRecord(cliMsg.error)
-  const embeddedStatus = embeddedError ? finiteNumber(embeddedError.status) : null
-  const rawStatus = cliMsg.error_status === null
-    ? null
-    : finiteNumber(cliMsg.error_status) ?? embeddedStatus
-  const errorType = typeof cliMsg.error === 'string' && cliMsg.error.trim()
-    ? cliMsg.error.trim()
-    : readRetryErrorString(cliMsg.error, ['type', 'code', 'name'])
-  const errorMessage = readRetryErrorString(cliMsg.error, ['message', 'error'])
-
-  return {
-    type: 'api_retry',
-    attempt,
-    maxRetries,
-    retryDelayMs,
-    errorStatus: rawStatus === null ? null : Math.trunc(rawStatus),
-    ...(errorType ? { errorType } : {}),
-    ...(errorMessage ? { errorMessage } : {}),
-  }
-}
-
-const STREAMING_FALLBACK_CAUSES: ReadonlySet<StreamingFallbackCause> = new Set([
-  'watchdog',
-  'stream_error',
-  '404_stream_creation',
-  'stream_retry',
-])
-
-function toStreamingFallbackServerMessage(cliMsg: any): ServerMessage {
-  // 未识别的 cause 兜底为 unknown 而不是丢消息：提示本身比成因重要。
-  const cause: StreamingFallbackCause =
-    typeof cliMsg.cause === 'string' && STREAMING_FALLBACK_CAUSES.has(cliMsg.cause as StreamingFallbackCause)
-      ? (cliMsg.cause as StreamingFallbackCause)
-      : 'unknown'
-  return { type: 'streaming_fallback', cause }
-}
+// ── v1.7 结构拆分（ws/handler.ts 第①批 · 绿灯区）：cli 重试/降级解析族已搬到
+// ./cliRetryMessages.ts（同批）：finiteNumber / normalizeRetryCount /
+// readRetryErrorRecord / readRetryErrorString / toApiRetryServerMessage /
+// STREAMING_FALLBACK_CAUSES / toStreamingFallbackServerMessage。
+// 其中 toApiRetryServerMessage / toStreamingFallbackServerMessage 原就以裸名被本文件
+// 调用（:2285 / :2292），改由同名 import 直接承接，**调用点文本一行未改**；
+// 其余 5 项组外调用点为 0，不留死委托，未导入。
 
 function sendMessage(ws: ServerWebSocket<WebSocketData>, message: ServerMessage) {
   ws.send(JSON.stringify(message))
