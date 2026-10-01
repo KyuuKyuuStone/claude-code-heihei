@@ -89,10 +89,6 @@
       "lines": 3006,
       "kind": "own"
     },
-    "desktop/src/pages/Settings.tsx": {
-      "lines": 3884,
-      "kind": "own"
-    },
     "desktop/src/stores/chatStore.ts": {
       "lines": 4496,
       "kind": "own"
