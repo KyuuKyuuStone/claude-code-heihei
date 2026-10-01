@@ -90,6 +90,21 @@ import {
   parseTaskNotificationContent,
   readXmlTag,
 } from './session/transcriptContent.js'
+// v1.7 结构拆分（sessionService 第②批 · 纯移动）：Agent 子链与 Goal 本地命令解析。
+// RawEntry / ContentBlock 原是门面本地未导出类型，随本批搬到该模块、再以 import type
+// 引用回来（门面导出面不变；类型擦除，不产生运行时循环）。
+import {
+  extractAgentIdFromResultText,
+  extractAgentResultLinks,
+  extractAgentToolUseId,
+  extractAgentToolUseIdsFromMessage,
+  extractTextFromContent,
+  goalLocalCommandEntryToMessage,
+  isGoalLocalCommandEntry,
+  isGoalLocalCommandOutput,
+  namespaceSubagentContentIds,
+} from './session/transcriptAgents.js'
+import type { ContentBlock, RawEntry } from './session/transcriptAgents.js'
 
 // ============================================================================
 // Types
@@ -297,48 +312,8 @@ export type TranscriptContextEstimate = {
   }
 }
 
-/** Raw entry parsed from a single JSONL line */
-type RawEntry = {
-  type?: string
-  subtype?: string
-  content?: unknown
-  uuid?: string
-  messageId?: string
-  parentUuid?: string | null
-  parent_tool_use_id?: string | null
-  isSidechain?: boolean
-  isMeta?: boolean
-  cwd?: string
-  message?: {
-    role?: string
-    content?: unknown
-    model?: string
-    id?: string
-    type?: string
-    usage?: {
-      input_tokens?: number
-      output_tokens?: number
-      cache_read_input_tokens?: number
-      cache_creation_input_tokens?: number
-      server_tool_use?: {
-        web_search_requests?: number
-      }
-      speed?: string
-    }
-  }
-  timestamp?: string
-  version?: string
-  snapshot?: {
-    messageId?: string
-    trackedFileBackups?: Record<string, unknown>
-    timestamp?: string
-  }
-  customTitle?: string
-  permissionMode?: string
-  worktreeSession?: PersistedWorktreeSession | null
-  title?: string
-  [key: string]: unknown
-}
+// v1.7 结构拆分（sessionService 第②批）：RawEntry 随 Agent 子链 / Goal 本地命令
+// 解析方法搬到 ./session/transcriptAgents.ts，本文件改为 import type（仍不对外导出）。
 
 type RawMessageUsage = NonNullable<RawEntry['message']>['usage']
 
@@ -411,7 +386,7 @@ const VALID_SESSION_PERMISSION_MODES = new Set([
 ])
 const VALID_SESSION_EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'xhigh', 'max'])
 
-type ContentBlock = Record<string, unknown>
+// v1.7 结构拆分（sessionService 第②批）：ContentBlock 同上搬到 transcriptAgents.ts。
 
 // v1.7 结构拆分（sessionService 第①批）：USER_INTERRUPTION_TEXTS /
 // NO_RESPONSE_REQUESTED_TEXT / TASK_NOTIFICATION_RE / TASK_NOTIFICATION_BLOCK_RE
@@ -1747,134 +1722,19 @@ export class SessionService {
     return !this.shouldHideTranscriptEntry(entry)
   }
 
-  private isGoalLocalCommandOutput(output: string): boolean {
-    const trimmed = output.trim()
-    return (
-      trimmed.startsWith('Goal set:') ||
-      trimmed.startsWith('Goal continuing:') ||
-      trimmed.startsWith('Goal cleared:') ||
-      trimmed === 'Goal cleared.' ||
-      trimmed === 'Goal marked complete.' ||
-      trimmed === 'No active goal.'
-    )
-  }
-
-  private isGoalLocalCommandEntry(entry: RawEntry): boolean {
-    if (
-      entry.type !== 'system' ||
-      entry.subtype !== 'local_command' ||
-      typeof entry.content !== 'string'
-    ) {
-      return false
-    }
-
-    const commandName = this.readXmlTag(entry.content, 'command-name')?.replace(/^\//, '')
-    if (commandName) return commandName === 'goal'
-
-    const output =
-      this.readXmlTag(entry.content, 'local-command-stdout') ??
-      this.readXmlTag(entry.content, 'local-command-stderr')
-    return output ? this.isGoalLocalCommandOutput(output) : false
-  }
-
-  private goalLocalCommandEntryToMessage(entry: RawEntry): MessageEntry | null {
-    if (!this.isGoalLocalCommandEntry(entry)) return null
-    return {
-      id: entry.uuid || crypto.randomUUID(),
-      type: 'system',
-      content: entry.content,
-      timestamp: entry.timestamp || new Date().toISOString(),
-      parentUuid: entry.parentUuid ?? undefined,
-      isSidechain: entry.isSidechain,
-    }
-  }
-
-  private extractAgentToolUseId(entry: RawEntry): string | undefined {
-    const content = entry.message?.content
-    if (!Array.isArray(content)) return undefined
-
-    for (const block of content as Array<Record<string, unknown>>) {
-      if (
-        block.type === 'tool_use' &&
-        block.name === 'Agent' &&
-        typeof block.id === 'string'
-      ) {
-        return block.id
-      }
-    }
-
-    return undefined
-  }
-
-  private extractAgentToolUseIdsFromMessage(message: MessageEntry): string[] {
-    if (message.type !== 'tool_use' || !Array.isArray(message.content)) {
-      return []
-    }
-
-    return (message.content as ContentBlock[])
-      .filter((block) => block.type === 'tool_use' && block.name === 'Agent')
-      .flatMap((block) => (typeof block.id === 'string' ? [block.id] : []))
-  }
-
-  private extractTextFromContent(content: unknown): string {
-    if (typeof content === 'string') return content
-    if (!Array.isArray(content)) return ''
-
-    return (content as ContentBlock[])
-      .flatMap((block) => (typeof block.text === 'string' ? [block.text] : []))
-      .join('\n')
-  }
-
-  private extractAgentIdFromResultText(text: string): string | undefined {
-    const match = text.match(/(?:^|\n)\s*agentId:\s*([A-Za-z0-9_-]+)/)
-    return match?.[1]
-  }
-
-  private extractAgentResultLinks(messages: MessageEntry[]): Map<string, string> {
-    const agentToolUseIds = new Set(
-      messages.flatMap((message) => this.extractAgentToolUseIdsFromMessage(message)),
-    )
-    const resultLinks = new Map<string, string>()
-
-    for (const message of messages) {
-      if (message.type !== 'tool_result' || !Array.isArray(message.content)) {
-        continue
-      }
-
-      for (const block of message.content as ContentBlock[]) {
-        if (block.type !== 'tool_result' || typeof block.tool_use_id !== 'string') {
-          continue
-        }
-        if (!agentToolUseIds.has(block.tool_use_id)) {
-          continue
-        }
-
-        const agentId = this.extractAgentIdFromResultText(
-          this.extractTextFromContent(block.content),
-        )
-        if (agentId) {
-          resultLinks.set(block.tool_use_id, agentId)
-        }
-      }
-    }
-
-    return resultLinks
-  }
-
-  private namespaceSubagentContentIds(content: unknown, namespace: string): unknown {
-    if (!Array.isArray(content)) return content
-
-    return (content as ContentBlock[]).map((block) => {
-      if (!block || typeof block !== 'object') return block
-      if (block.type === 'tool_use' && typeof block.id === 'string') {
-        return { ...block, id: `${namespace}/${block.id}` }
-      }
-      if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
-        return { ...block, tool_use_id: `${namespace}/${block.tool_use_id}` }
-      }
-      return block
-    })
-  }
+  // ── v1.7 结构拆分（sessionService 第②批）：Agent 子链与 Goal 本地命令解析共 9 个
+  // 方法搬到 ./session/transcriptAgents.ts，此处改为同名类字段委托。所有调用点
+  // （含组外的 entriesToMessages / resolveParentToolUseId / loadSubagentToolMessages
+  // 等）的 this.xxx(...) 文本一行未改。
+  private isGoalLocalCommandOutput = isGoalLocalCommandOutput
+  private isGoalLocalCommandEntry = isGoalLocalCommandEntry
+  private goalLocalCommandEntryToMessage = goalLocalCommandEntryToMessage
+  private extractAgentToolUseId = extractAgentToolUseId
+  private extractAgentToolUseIdsFromMessage = extractAgentToolUseIdsFromMessage
+  private extractTextFromContent = extractTextFromContent
+  private extractAgentIdFromResultText = extractAgentIdFromResultText
+  private extractAgentResultLinks = extractAgentResultLinks
+  private namespaceSubagentContentIds = namespaceSubagentContentIds
 
   private subagentTranscriptPath(
     projectDir: string,
