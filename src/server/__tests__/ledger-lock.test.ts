@@ -149,7 +149,42 @@ describe('A6 台账单写者锁', () => {
     expect((caught as { statusCode?: number })?.statusCode).toBe(503)
     expect((caught as { code?: string })?.code).toBe('LEDGER_READONLY')
     // 说明里带人工恢复方式（pid 复用等极端情况下可自助）
-    expect((caught as Error).message).toContain('ledger.lock')
+    const message = (caught as Error).message
+    expect(message).toContain('ledger.lock')
+    // 文案必须与**实测**一致（2026-10-01）：只删锁文件**不生效**——只读判定
+    // 缓存在本实例内存里；必须「删锁 + 重启本实例」才会重新判定。旧文案写的是
+    // 「delete ... and retry」，照着做依然 503。
+    expect(message).toContain('RESTART')
+    expect(message).not.toContain('and retry')
+  })
+
+  it('只读实例被拒后**内存逐字段一致**（写失败绝不动内存）', async () => {
+    // 先由持有者建好一个任务并推进到 accepted
+    const seeder = new CollabTaskService()
+    await seeder.createTask(taskInput('frozen'))
+    await seeder.transitionTask('frozen', 'accepted')
+
+    // 再把自己降级为只读实例（锁已被 seeder 以别的 instanceId 持有）
+    const service = await makeReadonlyService()
+    const before = await service.getTask('frozen')
+    expect(before?.status).toBe('accepted')
+
+    // 尝试写 → 503（注意 LEDGER_READONLY 是 error.code，不在 message 里，
+    // 所以不能用 toThrow 匹配）
+    let caught: unknown = null
+    try {
+      await service.transitionTask('frozen', 'in_progress')
+    } catch (error) {
+      caught = error
+    }
+    expect((caught as { statusCode?: number })?.statusCode).toBe(503)
+    expect((caught as { code?: string })?.code).toBe('LEDGER_READONLY')
+
+    // 内存里该任务逐字段与尝试前完全一致（不能出现「拒绝了但内存已改」）
+    expect(await service.getTask('frozen')).toEqual(before)
+    // 磁盘也没变：重放仍是 accepted
+    const revived = new CollabTaskService()
+    expect((await revived.getTask('frozen'))?.status).toBe('accepted')
   })
 
   it('**不丢数据**：只读实例写入被拒后，持有者已写入的行一条不少', async () => {

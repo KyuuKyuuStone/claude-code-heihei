@@ -440,6 +440,18 @@ async function runBroadcast(
     throw new ApiError(403, '员工不能广播，请汇报给主管', 'FORBIDDEN')
   }
 
+  // B2 同款（v1.7.0 边界漏洞，广播通道残留）：`listServants({forSessionId})` 的
+  // workDir 过滤在**发送方 workDir 解析不出**时会被整段跳过，于是目标可能跨项目。
+  // 与单播的处置一致——无法证明同项目就拒绝，不给后门。
+  const fromWorkDir = await sessionService
+    .getSessionWorkDir(fromSessionId)
+    .catch(() => null)
+  if (!fromWorkDir) {
+    throw ApiError.conflict(
+      `Cross-project broadcast is not allowed: sender workDir could not be resolved (sender ${fromSessionId})`,
+    )
+  }
+
   // 裁决二第 2 条：目标只含同项目 enabled、supervisor=false、且不是发起者。
   // **主管永远不作为广播目标**（原先只过滤了 enabled，主管也会收到带页脚的派活）。
   const targets = (

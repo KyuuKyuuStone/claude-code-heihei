@@ -1187,6 +1187,23 @@ describe('Session Messages API', () => {
 
   // ─── v1.6.0 裁决二：广播 = N 条独立单播派活（各自独立 taskId 与台账） ──
 
+  it('发送方 workDir 解析不出时广播 409（B2 同款：不跨项目、不给后门）', async () => {
+    // 项目里照常有人，唯一的问题是发送方身份解析不出来——
+    // 此时 listServants 的 workDir 过滤会被整段跳过，若不拦就是跨项目广播。
+    await registerRosterWorker({ role: '主管', supervisor: true })
+    await registerRosterWorker({ role: '后端' })
+
+    const resp = await postMsg({
+      broadcast: true,
+      fromSessionId: 'ghost-session-never-registered',
+      content: '做功能',
+    })
+    expect(resp.status).toBe(409)
+    // 错误响应体是 { message }（与 B2 单播那条测试同一结构）
+    const body = (await resp.json()) as { message: string }
+    expect(body.message).toContain('workDir could not be resolved')
+  })
+
   it('主管向 3 名员工广播：3 个独立 taskId、台账 broadcastId 相同、页脚逐一对齐', async () => {
     const supervisor = await registerRosterWorker({ role: '主管', supervisor: true })
     const a = await registerRosterWorker({ role: '前端' })

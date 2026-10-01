@@ -747,16 +747,20 @@ describe('reportTask 补推进（裁决四方案 A）', () => {
     armCompaction(created.projectDir)
 
     const fsPromises = await import('node:fs/promises')
+    // 必须在 spyOn **之前**存下真实实现：spyOn 之后模块上的 rename 已被替换，
+    // 再 import 拿到的就是 mock 自己，会自递归。
+    const realRename = fsPromises.rename
     let fail = true
-    const renameSpy = spyOn(fsPromises, 'rename').mockImplementation(async (...args) => {
-      if (fail) {
-        const error = new Error('locked by indexer') as NodeJS.ErrnoException
-        error.code = 'EPERM'
-        throw error
-      }
-      const real = (await import('node:fs/promises')).rename
-      return real(...(args as Parameters<typeof real>))
-    })
+    const renameSpy = spyOn(fsPromises, 'rename').mockImplementation(
+      async (...args: Parameters<typeof realRename>) => {
+        if (fail) {
+          const error = new Error('locked by indexer') as NodeJS.ErrnoException
+          error.code = 'EPERM'
+          throw error
+        }
+        return realRename(...args)
+      },
+    )
 
     try {
       await service.transitionTask('lag-retry', 'accepted') // 压实失败

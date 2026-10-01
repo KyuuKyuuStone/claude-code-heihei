@@ -297,9 +297,15 @@ export class CollabTaskService {
     throw new ApiError(
       503,
       `The collaboration ledger is read-only in this instance${holderText}. ` +
-        // pid 复用等极端情况下无法自动判定，给出人工恢复方式（管理员可自助）
-        (lockPath ? `If the other instance is gone, delete ${lockPath} and retry. ` : '') +
-        `Close the other instance or restart this one to take over writing.`,
+        // pid 复用等极端情况下无法自动判定，给出人工恢复方式（管理员可自助）。
+        // 实测（2026-10-01）：只删锁文件**不生效**——只读判定结果缓存在本进程
+        // 内存里，删掉文件后本实例仍然照旧拒绝写；必须删锁 + **重启本实例**
+        // 才会重新判定。文案必须写准，否则管理员会照着做却依然 503。
+        (lockPath
+          ? `If the other instance is gone, delete ${lockPath} and then RESTART this instance ` +
+            `(deleting the file alone has no effect while this instance keeps running). `
+          : '') +
+        `Close the other instance, or restart this one to take over writing.`,
       'LEDGER_READONLY',
     )
   }
