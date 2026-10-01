@@ -85,6 +85,9 @@ import {
   pathExists,
   resolveWorkspaceAvailability,
 } from './session/workspaceAvailability.js'
+// v1.7 结构拆分（第⑧批 · 纯移动 · 收口批）：零散纯工具。两名皆有组外调用点，
+// 均以同名类字段委托保留；新模块零 import、纯函数。
+import { formatCost, isValidSessionId } from './session/sessionUtils.js'
 import type {
   PersistedWorktreeSession,
   SessionListSummary,
@@ -1701,14 +1704,11 @@ export class SessionService {
     }
   }
 
-  private isValidSessionId(id: string): boolean {
-    // UUID v4 format
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
-  }
+  // ── v1.7 结构拆分（第⑧批 · sessionService 纯移动收口批）：零散纯工具已搬到
+  // ./session/sessionUtils.ts（同批）。两名都有组外调用点，改为同名类字段委托。
+  private isValidSessionId = isValidSessionId
 
-  private formatCost(cost: number): string {
-    return `$${cost > 0.5 ? (Math.round(cost * 100) / 100).toFixed(2) : cost.toFixed(4)}`
-  }
+  private formatCost = formatCost
 
   private async getProviderContextWindowForSession(
     sessionId: string,
