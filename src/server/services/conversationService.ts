@@ -140,6 +140,12 @@ const MAX_SEEN_SDK_MESSAGE_UUIDS = 2_000
 const AUTO_MEMORY_DIRNAME = 'memory'
 export const DESKTOP_CLI_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 6_000
 
+// 缺陷修复 B（拉起链路总超时）：startSession 各子步骤各自限时，但整条链路原本没有
+// 总预算，长尾可累计到分钟级（已观测 82s / >150s）。此处只加**最外层一层**包装。
+// 取 180s：不低于观测分布上沿，保证分布内的成功路径零变化；取该下限值而非更大值，
+// 是为了把「截断慢但最终能成功的长尾」这一行为变更压到最小。
+const STARTUP_TOTAL_BUDGET_MS = 180_000
+
 /**
  * Severity for a CLI subprocess exit, by exit code.
  *
@@ -287,7 +293,8 @@ export class ConversationStartupError extends Error {
       | 'CLI_SESSION_CONFLICT'
       | 'CLI_START_FAILED'
       | 'CLI_SPAWN_FAILED'
-      | 'SESSION_DELETED',
+      | 'SESSION_DELETED'
+      | 'STARTUP_TIMEOUT',
     readonly retryable = false,
     /** 触发启动失败的 CLI 退出码；用于把 SIGTERM/SIGKILL 类回收与真崩溃区分开 */
     readonly exitCode?: number,
@@ -364,7 +371,45 @@ export class ConversationService {
     ])
   }
 
+  /**
+   * 缺陷修复 B：拉起链路总超时（最外层一层包装）。
+   * 超时只放弃**等待**，不打断、不清理内部链路——内部仍按原有路径继续跑完，
+   * 失败时仍由原有的 ConversationStartupError / markCrashed 收尾。
+   */
   async startSession(
+    sessionId: string,
+    workDir: string,
+    sdkUrl: string,
+    options?: SessionStartOptions,
+  ): Promise<void> {
+    const internal = this.startSessionInternal(sessionId, workDir, sdkUrl, options)
+    // 超时后不再观察 internal，但它仍在跑；接管其后续拒绝，避免 unhandledRejection。
+    // （非清理逻辑：不触碰子步骤、不改变其生命周期。）
+    internal.catch(() => undefined)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        internal,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new ConversationStartupError(
+                  `Session startup exceeded ${STARTUP_TOTAL_BUDGET_MS}ms budget: ${sessionId}`,
+                  'STARTUP_TIMEOUT',
+                  true,
+                ),
+              ),
+            STARTUP_TOTAL_BUDGET_MS,
+          )
+        }),
+      ])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }
+
+  private async startSessionInternal(
     sessionId: string,
     workDir: string,
     sdkUrl: string,
@@ -577,7 +622,7 @@ export class ConversationService {
         console.log(
           `[ConversationService] Removed stale lock for ${sessionId}, retrying...`,
         )
-        return this.startSession(sessionId, workDir, sdkUrl, options)
+        return this.startSessionInternal(sessionId, workDir, sdkUrl, options)
       }
 
       // console.error/warn 会被诊断采集镜像成 error/warn 事件，信息级回收
