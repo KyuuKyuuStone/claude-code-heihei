@@ -91,6 +91,18 @@ import {
 // createCurrentTurnLocalCommandForwarder 是公开 API（src/server/__tests__/ws-memory-events.test.ts
 // 直接 import），搬走后在此 re-export，保证门面导出面逐项不变、消费方零改动。
 export { createCurrentTurnLocalCommandForwarder }
+// v1.7 结构拆分（ws/handler.ts (C) 类批① · 架构师补充裁决十一）：延迟运行时状态族。
+// RuntimeOverride 类型随两个 Map 一并迁往 ./deferredRuntimeState.ts，此处 import 回来
+// （本模块 runtimeOverrides :157 仍用它；type-only，无运行期环）。
+import type { RuntimeOverride } from './deferredRuntimeState.js'
+import {
+  deleteDeferredPermissionMode,
+  deleteDeferredRuntimeRestart,
+  getDeferredPermissionMode,
+  getDeferredRuntimeRestart,
+  setDeferredPermissionMode,
+  setDeferredRuntimeRestart,
+} from './deferredRuntimeState.js'
 
 const settingsService = new SettingsService()
 const providerService = new ProviderService()
@@ -148,16 +160,10 @@ const sessionTitleState = new Map<string, {
   generationSeq: number
 }>()
 
-type RuntimeOverride = {
-  providerId: string | null
-  modelId: string
-  effort?: string
-}
-
 const runtimeOverrides = new Map<string, RuntimeOverride>()
 const activeBackgroundTaskIds = new Map<string, Set<string>>()
-const deferredRuntimeRestarts = new Map<string, RuntimeOverride>()
-const deferredPermissionModes = new Map<string, PermissionMode>()
+// ── (C) 类批①：deferredRuntimeRestarts / deferredPermissionModes 两个 Map 已搬到
+// ./deferredRuntimeState.ts（定义点唯一），此处经同名 import 使用其单操作原语。
 
 /**
  * 确保会话已在 registry 登记（幂等）：阶段 1 只收 turn，turn 生命周期尚不依赖
@@ -853,10 +859,10 @@ function applyDeferredPermissionModeAfterActiveTurn(
   ws: ServerWebSocket<WebSocketData>,
   sessionId: string,
 ): void {
-  const deferredMode = deferredPermissionModes.get(sessionId)
+  const deferredMode = getDeferredPermissionMode(sessionId)
   if (!deferredMode) return
 
-  deferredPermissionModes.delete(sessionId)
+  deleteDeferredPermissionMode(sessionId)
   void enqueueRuntimeTransition(sessionId, async () => {
     if (!conversationService.hasSession(sessionId)) return
     await applyPermissionModeToActiveSession(ws, sessionId, deferredMode)
@@ -867,10 +873,10 @@ function applyDeferredRuntimeRestartAfterActiveTurn(
   ws: ServerWebSocket<WebSocketData>,
   sessionId: string,
 ): void {
-  const deferred = deferredRuntimeRestarts.get(sessionId)
+  const deferred = getDeferredRuntimeRestart(sessionId)
   if (!deferred) return
 
-  deferredRuntimeRestarts.delete(sessionId)
+  deleteDeferredRuntimeRestart(sessionId)
   void enqueueRuntimeTransition(sessionId, async () => {
     const currentOverride = runtimeOverrides.get(sessionId)
     if (
@@ -1112,7 +1118,7 @@ async function applyPermissionModeToActiveSession(
 ): Promise<void> {
   const currentMode = conversationService.getSessionPermissionMode(sessionId)
   if (shouldDeferRuntimeRestartForActiveTurn(sessionId)) {
-    deferredPermissionModes.set(sessionId, mode)
+    setDeferredPermissionMode(sessionId, mode)
     return
   }
 
@@ -1195,7 +1201,7 @@ async function handleSetRuntimeConfig(
   )
 
   if (shouldDeferRuntimeRestartForActiveTurn(sessionId)) {
-    deferredRuntimeRestarts.set(sessionId, nextOverride)
+    setDeferredRuntimeRestart(sessionId, nextOverride)
     await persistSessionRuntimeConfig(sessionId, nextOverride)
     return
   }
@@ -1742,8 +1748,8 @@ function cleanupSessionRuntimeState(sessionId: string) {
   terminalSessionChatStates.delete(sessionId)
   legacyQueuedSessionChats.delete(sessionId)
   interruptedSessionChats.delete(sessionId)
-  deferredRuntimeRestarts.delete(sessionId)
-  deferredPermissionModes.delete(sessionId)
+  deleteDeferredRuntimeRestart(sessionId)
+  deleteDeferredPermissionMode(sessionId)
   runtimeTransitionPromises.delete(sessionId)
   sessionStartupPromises.delete(sessionId)
   lastResolvedStartupWorkDirs.delete(sessionId)
