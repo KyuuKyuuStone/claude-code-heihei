@@ -26,7 +26,7 @@
       "kind": "upstream"
     },
     "src/server/services/sessionService.ts": {
-      "lines": 4400,
+      "lines": 4231,
       "kind": "own"
     },
     "src/server/ws/handler.ts": {
@@ -86,7 +86,7 @@
       "kind": "upstream"
     },
     "desktop/src/components/chat/MessageList.tsx": {
-      "lines": 3006,
+      "lines": 2091,
       "kind": "own"
     },
     "desktop/src/stores/chatStore.ts": {
