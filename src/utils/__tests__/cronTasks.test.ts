@@ -10,7 +10,7 @@ import { randomUUID } from 'crypto'
 // Note: These are integration tests that use actual filesystem operations.
 
 describe('updateCronTask integration', () => {
-  const tmpDir = join('/tmp', `cron-test-${randomUUID().slice(0, 8)}`)
+  const tmpDir = join(tmpdir(), `cron-test-${randomUUID().slice(0, 8)}`)
 
   beforeEach(async () => {
     // Create temp project structure
@@ -80,7 +80,7 @@ describe('CronTaskMeta type coverage', () => {
 describe('readCronTasks backward compatibility', () => {
   test('handles empty file', async () => {
     const { readCronTasks } = await import('../cronTasks.js')
-    const tmpDir = join('/tmp', `cron-empty-${randomUUID().slice(0, 8)}`)
+    const tmpDir = join(tmpdir(), `cron-empty-${randomUUID().slice(0, 8)}`)
     await mkdir(join(tmpDir, '.claude'), { recursive: true })
 
     const tasks = await readCronTasks(tmpDir)
@@ -92,7 +92,7 @@ describe('readCronTasks backward compatibility', () => {
 
   test('skips malformed JSON', async () => {
     const { readCronTasks } = await import('../cronTasks.js')
-    const tmpDir = join('/tmp', `cron-malformed-${randomUUID().slice(0, 8)}`)
+    const tmpDir = join(tmpdir(), `cron-malformed-${randomUUID().slice(0, 8)}`)
     await mkdir(join(tmpDir, '.claude'), { recursive: true })
 
     // Write malformed JSON
@@ -107,7 +107,7 @@ describe('readCronTasks backward compatibility', () => {
 
   test('skips tasks with invalid cron strings', async () => {
     const { readCronTasks } = await import('../cronTasks.js')
-    const tmpDir = join('/tmp', `cron-invalid-${randomUUID().slice(0, 8)}`)
+    const tmpDir = join(tmpdir(), `cron-invalid-${randomUUID().slice(0, 8)}`)
     await mkdir(join(tmpDir, '.claude'), { recursive: true })
 
     // Write task with invalid cron
@@ -134,7 +134,7 @@ describe('readCronTasks backward compatibility', () => {
 
   test('preserves new fields when reading', async () => {
     const { readCronTasks } = await import('../cronTasks.js')
-    const tmpDir = join('/tmp', `cron-preserve-${randomUUID().slice(0, 8)}`)
+    const tmpDir = join(tmpdir(), `cron-preserve-${randomUUID().slice(0, 8)}`)
     await mkdir(join(tmpDir, '.claude'), { recursive: true })
 
     const filePath = join(tmpDir, '.claude', 'scheduled_tasks.json')
@@ -173,7 +173,7 @@ describe('readCronTasks backward compatibility', () => {
 describe('writeCronTasks strips runtime fields', () => {
   test('strips durable and agentId on write', async () => {
     const { readCronTasks, writeCronTasks } = await import('../cronTasks.js')
-    const tmpDir = join('/tmp', `cron-strip-${randomUUID().slice(0, 8)}`)
+    const tmpDir = join(tmpdir(), `cron-strip-${randomUUID().slice(0, 8)}`)
     await mkdir(join(tmpDir, '.claude'), { recursive: true })
 
     const taskWithRuntimeFields = {
@@ -205,23 +205,39 @@ describe('writeCronTasks strips runtime fields', () => {
 
 // Windows 下创建 symlink 需要开发者模式/管理员特权；无特权时 symlinkSync 直接
   // EPERM，用例前提（能造出 symlink）不成立 → 探测后跳过并注明原因。
-  const symlinkSupported = (() => {
-    try {
-      const probeRoot = mkdtempSync(join(tmpdir(), 'cron-symlink-probe-'))
-      const target = join(probeRoot, 'real')
-      mkdirSync(target, { recursive: true })
-      symlinkSync(target, join(probeRoot, 'link'), 'dir')
-      rmSync(probeRoot, { recursive: true, force: true })
-      return true
-    } catch {
-      return false
+  // 确定性探测：①与用例体使用**同一基目录**（tmpdir()）——原先探测在 tmpdir()
+  //（C 盘临时）而用例体在 join(tmpdir(), …)（当前盘 D:	mp），基目录不一致会让
+  // 探测通过 ≠ 用例能建 symlink；②最多重试 3 次，减少偶发抖动带来的假 skip；
+  // ③不支持时把 err.code 一并说清，便于定位是"无特权"还是别的原因。
+  const symlinkProbe = (() => {
+    let lastCode: string | undefined
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      let probeRoot: string | undefined
+      try {
+        probeRoot = mkdtempSync(join(tmpdir(), 'cron-symlink-probe-'))
+        const target = join(probeRoot, 'real')
+        mkdirSync(target, { recursive: true })
+        symlinkSync(target, join(probeRoot, 'link'), 'dir')
+        return { supported: true, code: undefined as string | undefined }
+      } catch (error) {
+        lastCode = (error as NodeJS.ErrnoException).code ?? String(error)
+      } finally {
+        if (probeRoot) rmSync(probeRoot, { recursive: true, force: true })
+      }
     }
+    return { supported: false, code: lastCode }
   })()
+  if (!symlinkProbe.supported) {
+    console.warn(
+      `[cronTasks.test] 跳过 .claude symlink 安全用例：本机创建符号链接失败（err.code=${symlinkProbe.code}）。` +
+        'Windows 需启用开发者模式或以管理员身份运行；其余平台请检查文件系统是否支持 symlink。',
+    )
+  }
 
   describe('writeCronTasks symlink safety', () => {
-  test.skipIf(!symlinkSupported)('refuses to write through a project .claude directory symlink', async () => {
+  test.skipIf(!symlinkProbe.supported)('refuses to write through a project .claude directory symlink', async () => {
     const { writeCronTasks } = await import('../cronTasks.js')
-    const tmpDir = join('/tmp', `cron-symlink-${randomUUID().slice(0, 8)}`)
+    const tmpDir = join(tmpdir(), `cron-symlink-${randomUUID().slice(0, 8)}`)
     const projectDir = join(tmpDir, 'project')
     const outsideDir = join(tmpDir, 'outside')
     try {
@@ -249,7 +265,7 @@ describe('writeCronTasks strips runtime fields', () => {
 
   test('cleans up the temporary file when atomic replacement fails', async () => {
     const { writeCronTasks } = await import('../cronTasks.js')
-    const tmpDir = join('/tmp', `cron-atomic-${randomUUID().slice(0, 8)}`)
+    const tmpDir = join(tmpdir(), `cron-atomic-${randomUUID().slice(0, 8)}`)
     const claudeDir = join(tmpDir, '.claude')
     try {
       await mkdir(join(claudeDir, 'scheduled_tasks.json'), { recursive: true })

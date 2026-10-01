@@ -3,6 +3,7 @@
  */
 
 import { diagnosticsService } from '../services/diagnosticsService.js'
+import { isAtomicWriteError } from '../../utils/atomicFs.js'
 
 export class ApiError extends Error {
   constructor(
@@ -36,6 +37,27 @@ export function errorResponse(error: unknown): Response {
     return Response.json(
       { error: error.code || 'ERROR', message: error.message },
       { status: error.statusCode }
+    )
+  }
+
+  // v1.7.0 D1：写盘被占用（杀软/索引器持锁，重试耗尽）→ 503 可理解说明，
+  // 而不是裸 500。只对 atomicWriteKind === 'locked' 生效；真实 IO 失败仍是 500。
+  if (isAtomicWriteError(error) && error.atomicWriteKind === 'locked') {
+    void diagnosticsService.recordEvent({
+      type: 'api_atomic_write_locked',
+      severity: 'warn',
+      summary: error.message,
+      details: { code: error.code },
+    })
+    return Response.json(
+      {
+        error: 'TARGET_FILE_BUSY',
+        message:
+          'The target file is temporarily locked by another process (e.g. antivirus or indexer). ' +
+          'The original file was left unchanged — please retry.',
+        errno: error.code,
+      },
+      { status: 503 }
     )
   }
 

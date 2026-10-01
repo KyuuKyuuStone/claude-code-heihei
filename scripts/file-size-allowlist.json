@@ -1,0 +1,5 @@
+{
+  "comment": "文件行数豁免清单（v1.7.0 结构专项，架构评估 §2.3）。**只有架构师能添加条目**，实施者不得自行添加。每条必须含 path、kind（file|directory）、reason（拆不动的具体原因）、decisionRef（决策文档名）、expiresInVersion（计划降到 2500 行的版本）；expiresInVersion ≤ 当前 desktop/package.json 版本即过期，过期条目本身会导致门禁失败。kind=directory 用于上游整目录排除（同样走本豁免流程）。文件行数超过 3000 时即使有豁免也失败。初始清单为空。"
+  ,
+  "entries": []
+}

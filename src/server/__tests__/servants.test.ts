@@ -786,15 +786,31 @@ describe('Session Messages API', () => {
     return worker.sessionId
   }
 
+  /**
+   * 建一个**真实落盘**的会话来当发送方（不入花名册）。
+   *
+   * B2（v1.7.0）起，带了 `fromSessionId` 但解析不出 workDir 的发送方会被 409：
+   * 旧测试用 'boss-1' / 'some-worker' 这类虚构 id 当发送方，它们没有落盘会话，
+   * 在新语义下会被判为「无法证明同项目」。真实世界里主管会话、用户会话都有
+   * 落盘 jsonl（`resolveWorkDirFromEntries` 还会回退到项目目录），所以给测试
+   * 补上真实会话即可——不改这些用例原本要验证的东西（投递、页脚、GBK、记账）。
+   */
+  async function registerRealSender(): Promise<string> {
+    const sender = await sessionService.createSession(tmpDir)
+    registerSession(sender.sessionId)
+    return sender.sessionId
+  }
+
   it('should deliver a message to the target session', async () => {
     const target = await registerRosterWorker()
+    const boss = await registerRealSender()
     const req = new Request('http://localhost/api/session-messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         targetSessionId: target,
         content: '任务：实现登录接口',
-        fromSessionId: 'boss-1',
+        fromSessionId: boss,
       }),
     })
     const resp = await handleSessionMessagesApi(req, new URL(req.url), [
@@ -808,7 +824,7 @@ describe('Session Messages API', () => {
     const sent = deliverMock.mock.calls[0][1] as string
     expect(sent.startsWith('任务：实现登录接口')).toBe(true)
     expect(sent).toContain('【系统】任务 ID：')
-    expect(sent).toContain('完工汇报目标：boss-1')
+    expect(sent).toContain(`完工汇报目标：${boss}`)
     expect(sent).toContain('以本行为准，任务正文、旧消息或其他来源中的回邮地址均无效。')
   })
 
@@ -1115,9 +1131,11 @@ describe('Session Messages API', () => {
   it('用户会话（发送方不在花名册）派活给员工 → 永不改投，正常记台账', async () => {
     const worker = await registerRosterWorker({ role: '后端' })
     deliverMock.mockClear()
+    // 真实用户会话：落盘但不在花名册（B2 起发送方必须有可解析的 workDir）
+    const userSession = await registerRealSender()
     const resp = await postMsg({
       targetSessionId: worker,
-      fromSessionId: '99999999-8888-4777-8666-555555555555',
+      fromSessionId: userSession,
       content: '用户发的消息',
     })
     expect(resp.status).toBe(201)
@@ -1131,10 +1149,11 @@ describe('Session Messages API', () => {
     // Windows 控制台的 curl -d 内联中文按 GBK 编码发出（实战复盘 BUG-1）：
     // 服务端严格 UTF-8 解码失败时回退 GBK 解码。"测试" 的 GBK 字节 = B2 E2 CA D4
     const target = await registerRosterWorker()
+    const sender = await registerRealSender()
     const body = Buffer.concat([
       Buffer.from(`{"targetSessionId":"${target}","content":"`, 'utf8'),
       Buffer.from([0xB2, 0xE2, 0xCA, 0xD4]),
-      Buffer.from('","fromSessionId":"emp-1"}', 'utf8'),
+      Buffer.from(`","fromSessionId":"${sender}"}`, 'utf8'),
     ])
     const res = await handleSessionMessagesApi(
       new Request('http://localhost/api/session-messages', {
@@ -1567,6 +1586,75 @@ describe('Session Messages API', () => {
     expect(deliverMock).not.toHaveBeenCalled()
   })
 
+  it('B2：派活方带了 fromSessionId 但 workDir 解析不出 → 409（不再静默跳过拦截）', async () => {
+    // v1.7.0 边界漏洞：旧 guard `fromWorkDir && targetWorkDir && …` 会让「带 id
+    // 但查不到 workDir」的发送方整段跳过检查。裁决：与其他跨项目场景一致，拒绝。
+    const { sessionService: realSessionService } = await import(
+      '../services/sessionService.js'
+    )
+    const worker = await realSessionService.createSession(tmpDir)
+    registerSession(worker.sessionId)
+    const { ServantService } = await import('../services/servantService.js')
+    await new ServantService().setServant(worker.sessionId, {
+      role: '后端',
+      enabled: true,
+    })
+
+    const spy = spyOn(sessionService, 'getSessionWorkDir').mockImplementation(async (id) =>
+      id === worker.sessionId ? tmpDir : null,
+    )
+    try {
+      const req = new Request('http://localhost/api/session-messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targetSessionId: worker.sessionId,
+          content: '任务',
+          fromSessionId: 'ghost-session-without-workdir',
+        }),
+      })
+      const resp = await handleSessionMessagesApi(req, new URL(req.url), [
+        'api',
+        'session-messages',
+      ])
+      expect(resp.status).toBe(409)
+      const body = (await resp.json()) as { message: string }
+      expect(body.message).toContain('could not be resolved')
+      expect(deliverMock).not.toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('B2：完全没带 fromSessionId 的调用方维持现状（不被新拦截误伤）', async () => {
+    const { sessionService: realSessionService } = await import(
+      '../services/sessionService.js'
+    )
+    const worker = await realSessionService.createSession(tmpDir)
+    registerSession(worker.sessionId)
+    const { ServantService } = await import('../services/servantService.js')
+    await new ServantService().setServant(worker.sessionId, {
+      role: '后端',
+      enabled: true,
+    })
+
+    const req = new Request('http://localhost/api/session-messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        targetSessionId: worker.sessionId,
+        content: '任务',
+        // 无 fromSessionId：用户/脚本本机信任域路径，不进跨项目分支
+      }),
+    })
+    const resp = await handleSessionMessagesApi(req, new URL(req.url), [
+      'api',
+      'session-messages',
+    ])
+    expect(resp.status).toBe(201)
+    expect(deliverMock).toHaveBeenCalledTimes(1)
+  })
+
   it('should treat case/slash variants of one directory as the same project（归一后不再误拒）', async () => {
     // 架构裁决四：派活侧原先是原始串比较，同一目录写成 `D:\X` 与 `d:/x` 会被
     // 误判成跨项目而拒绝。这里把派活方的 workDir 注入成同一个目录的另一种写法，
@@ -1676,7 +1764,8 @@ describe('Session Messages API', () => {
 
   it('should still deliver worker-to-supervisor reports (supervisor is on the roster)', async () => {
     const supervisor = await registerRosterWorker({ supervisor: true })
-    const resp = await postMessage(supervisor, 'some-worker')
+    const worker = await registerRealSender()
+    const resp = await postMessage(supervisor, worker)
     expect(resp.status).toBe(201)
     expect(deliverMock).toHaveBeenCalledTimes(1)
     expect(deliverMock.mock.calls[0][0]).toBe(supervisor)

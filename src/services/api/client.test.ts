@@ -1,16 +1,14 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { GROK_OAUTH_DUMMY_KEY } from '../grokAuth/fetch.js'
 
-mock.module('src/utils/http.js', () => ({
-  getAuthHeaders: mock(() => ({})),
-  getMCPUserAgent: mock(() => 'client-test-agent'),
-  getUserAgent: mock(() => 'client-test-agent'),
-  getWebFetchUserAgent: mock(() => 'client-test-agent'),
-  withOAuth401Retry: mock(async <T>(fn: () => Promise<T>) => fn()),
-}))
+// 原先在**模块顶层** mock.module('src/utils/http.js')：bun 的模块 mock 是进程级的，
+// 且顶层注册会一直生效到进程结束——同进程跑后续文件时，凡是 import 该模块的代码
+// 都会拿到这些桩（假绿/假红的来源，与 2026-10-01 diskOutput→cronTasks 事故同款）。
+// 改为 beforeEach 安装 spyOn、afterEach 统一 mock.restore()，作用域限定在本文件的用例内。
+import * as httpUtils from 'src/utils/http.js'
 
 // 被测函数的缺省参数直接读 process.env（如 providerManagedByHost =
 // process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST），测试里传 undefined 就是为
@@ -32,6 +30,11 @@ const ENV_ISOLATION_KEYS = [
 const savedEnv = new Map<string, string | undefined>()
 
 beforeEach(() => {
+  spyOn(httpUtils, 'getAuthHeaders').mockReturnValue({})
+  spyOn(httpUtils, 'getMCPUserAgent').mockReturnValue('client-test-agent')
+  spyOn(httpUtils, 'getUserAgent').mockReturnValue('client-test-agent')
+  spyOn(httpUtils, 'getWebFetchUserAgent').mockReturnValue('client-test-agent')
+  spyOn(httpUtils, 'withOAuth401Retry').mockImplementation(async <T>(fn: () => Promise<T>) => fn())
   savedEnv.clear()
   for (const key of ENV_ISOLATION_KEYS) {
     savedEnv.set(key, process.env[key])
@@ -40,6 +43,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  mock.restore()
   for (const key of ENV_ISOLATION_KEYS) {
     const value = savedEnv.get(key)
     if (value === undefined) delete process.env[key]

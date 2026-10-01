@@ -8,6 +8,7 @@ import {
   codePointSlice,
 } from '../services/collabTaskService.js'
 import { onCollabPush } from '../../collaboration/collabPushSignals.js'
+import { setDiagnosticsLogWriterForTests } from '../../utils/diagLogs.js'
 import { beginTurn, clearSession, registerSession } from '../services/sessionRegistry.js'
 
 /**
@@ -281,6 +282,108 @@ describe('协作任务台账 CollabTaskService', () => {
     expect((await revived.getTask(t2.id))?.status).toBe('accepted')
   })
 
+  it('压实失败不再让请求失败：数据已落盘、只记诊断、下次追加重试（v1.7.0 补充裁决二）', async () => {
+    // 场景：appendEvent 先把行追加**落盘成功**，随后才做压实。压实 rename 失败
+    // 时若把异常抛上去，用户会看到「写入失败」，但数据其实已经在文件里——
+    // 重试还会撞 409。压实只是优化，因此只记诊断并吞掉。
+    const created = await service.createTask({ ...baseInput, id: 'compact-fail' })
+    // 键必须是服务内部用的那个（task.projectDir 已 resolve）
+    ;(service as unknown as { lineCount: Map<string, number> }).lineCount.set(
+      created.projectDir,
+      1000,
+    )
+
+    const fsPromises = await import('node:fs/promises')
+    const renameSpy = spyOn(fsPromises, 'rename').mockImplementation(() => {
+      const error = new Error('locked by indexer') as NodeJS.ErrnoException
+      error.code = 'EPERM'
+      return Promise.reject(error)
+    })
+    const events: Array<{ event: string; data: Record<string, unknown> }> = []
+    setDiagnosticsLogWriterForTests((_level, event, data) => {
+      events.push({ event, data: data as Record<string, unknown> })
+    })
+
+    try {
+      // 不抛：请求照常成功
+      await service.transitionTask('compact-fail', 'accepted')
+    } finally {
+      renameSpy.mockRestore()
+      setDiagnosticsLogWriterForTests(null)
+    }
+
+    // 状态确实推进了
+    expect((await service.getTask('compact-fail'))?.status).toBe('accepted')
+    // 压实失败被记成诊断，而不是异常
+    expect(events.filter((e) => e.event === 'collab_task_compact_failed')).toHaveLength(1)
+    // lineCount 不重置 → 仍超阈值，下次追加还会尝试压实
+    const count = (service as unknown as { lineCount: Map<string, number> }).lineCount.get(created.projectDir)
+    expect(count).toBeGreaterThanOrEqual(400)
+
+    // 追加的那一行是真的落盘了：新实例重放能看到
+    const revived = new CollabTaskService()
+    expect((await revived.getTask('compact-fail'))?.status).toBe('accepted')
+  })
+
+  it('压实失败后 lineCount 不被重置：**下一次追加会再次尝试压实**（补充裁决二）', async () => {
+    // 上一条用例断言了「lineCount 仍 ≥ 阈值」，但那是状态断言。裁决的原意是
+    // 「下次追加时**再压实**」——这条直接数 rename 的调用次数来证明压实真的
+    // 被第二次触发：若有人把 lineCount 顺手重置回去，这里就会红。
+    const created = await service.createTask({ ...baseInput, id: 'compact-retry' })
+    const projectDir = created.projectDir
+    ;(service as unknown as { lineCount: Map<string, number> }).lineCount.set(projectDir, 1000)
+
+    const fsPromises = await import('node:fs/promises')
+    const realRename = fsPromises.rename
+    let renameCalls = 0
+    const renameSpy = spyOn(fsPromises, 'rename').mockImplementation(
+      async (...args: Parameters<typeof realRename>) => {
+        renameCalls += 1
+        // 第一次压实的全部尝试（retries=6 → 共 7 次）失败；此后放行，让第二次压实成功
+        if (renameCalls <= 7) {
+          const error = new Error('locked by indexer') as NodeJS.ErrnoException
+          error.code = 'EPERM'
+          throw error
+        }
+        return realRename(...args)
+      },
+    )
+    const events: string[] = []
+    setDiagnosticsLogWriterForTests((_level, event) => {
+      events.push(event)
+    })
+
+    try {
+      // ── 第一次追加：压实失败（6 次重试耗尽） ──
+      await service.transitionTask('compact-retry', 'accepted')
+      expect(renameCalls).toBe(7)
+      expect(events).toContain('collab_task_compact_failed')
+      expect((await service.getTask('compact-retry'))?.status).toBe('accepted')
+      expect(
+        (service as unknown as { lineCount: Map<string, number> }).lineCount.get(projectDir),
+      ).toBeGreaterThanOrEqual(400)
+
+      // ── 第二次追加：lineCount 没被打回 → **再次触发压实**，这次成功 ──
+      await service.transitionTask('compact-retry', 'in_progress')
+      expect(renameCalls).toBeGreaterThan(7) // ← 关键：第二次确实又压了
+      // 压实成功后 lineCount 被重置成任务数（此时只有 1 条任务）
+      expect(
+        (service as unknown as { lineCount: Map<string, number> }).lineCount.get(projectDir),
+      ).toBe(1)
+
+      // 压实后磁盘上就是快照（每任务一行）：任务还在
+      // 注：这里只断言任务存在，不断言状态——压实用的是「本次变更之前」的内存态
+      // （transitionTask 先 appendEvent 后改内存），那是另一个独立问题，见汇报。
+      const revived = new CollabTaskService()
+      expect((await revived.listTasks({ projectDir })).map((t) => t.id)).toContain(
+        'compact-retry',
+      )
+    } finally {
+      renameSpy.mockRestore()
+      setDiagnosticsLogWriterForTests(null)
+    }
+  })
+
   it('listTasks 的项目过滤同样按归一标准匹配双写法（审查 中1 附带）', async () => {
     await service.createTask({ ...baseInput, id: 'filter-a', projectDir: 'D:/X/proj' })
     const hits = await service.listTasks({ projectDir: 'd:\\x\\proj' })
@@ -526,6 +629,152 @@ describe('reportTask 补推进（裁决四方案 A）', () => {
     } finally {
       fresh.resetForTests()
     }
+  })
+
+  // ── v1.7.0：压实时机——压实必须发生在「内存已应用本次变更」之后 ─────────
+  //
+  // 旧实现把压实放在 appendEvents 里，而那一刻调用方还没改内存
+  // （transitionTask 先 appendEvent 成功、再赋值 task.status），于是快照写的是
+  // **变更前**的状态，刚追加的那一行又被快照覆盖掉 → 重启后状态回退。
+  // 修复：appendEvents 只登记 pendingCompaction，由临界区末尾（内存已更新）
+  // 统一 flush。
+
+  /** 让下一次追加正好跨过压实阈值 */
+  const armCompaction = (projectDir: string): void => {
+    ;(service as unknown as { lineCount: Map<string, number> }).lineCount.set(projectDir, 1000)
+  }
+
+  it('压实发生在内存更新之后：dispatched→accepted 不回退', async () => {
+    const created = await service.createTask(input('lag-basic'))
+    armCompaction(created.projectDir)
+
+    await service.transitionTask('lag-basic', 'accepted')
+
+    // 磁盘上应该是**本次变更后**的快照（旧行为下这里是 dispatched）
+    const dir = path.join(tmpDir, 'cc-heihei', 'tasks')
+    const files = await fs.readdir(dir)
+    const lines = (await fs.readFile(path.join(dir, files[0]!), 'utf-8'))
+      .split('\n')
+      .filter((l) => l.trim())
+    expect(lines).toHaveLength(1) // 已被压实成快照
+    expect(JSON.parse(lines[0]!).task.status).toBe('accepted')
+
+    const fresh = new CollabTaskService()
+    try {
+      expect((await fresh.getTask('lag-basic'))?.status).toBe('accepted')
+    } finally {
+      fresh.resetForTests()
+    }
+  })
+
+  it('**delivered 不回退**：汇报恰好触发压实，重启后仍是 delivered 且汇报全文在', async () => {
+    const created = await service.createTask(input('lag-delivered'))
+    await service.transitionTask('lag-delivered', 'accepted')
+    await service.transitionTask('lag-delivered', 'in_progress')
+    // 让「汇报」这一次写入正好触发压实——旧行为会把 in_progress 写成快照，
+    // 汇报记录看起来像没发生。
+    armCompaction(created.projectDir)
+
+    await service.reportTask('lag-delivered', {
+      summary: '已完成，证据见附',
+      deliverables: ['/tmp/a.ts'],
+    })
+
+    const fresh = new CollabTaskService()
+    try {
+      const replayed = await fresh.getTask('lag-delivered')
+      expect(replayed?.status).toBe('delivered')
+      expect(replayed?.report).toBe('已完成，证据见附')
+      expect(replayed?.deliverables).toEqual(['/tmp/a.ts'])
+    } finally {
+      fresh.resetForTests()
+    }
+  })
+
+  it('**verified 不回退**：验收恰好触发压实，重启后仍是 verified 且结论在', async () => {
+    const created = await service.createTask(input('lag-verified'))
+    await service.transitionTask('lag-verified', 'accepted')
+    await service.transitionTask('lag-verified', 'in_progress')
+    await service.reportTask('lag-verified', { summary: '完成' })
+    armCompaction(created.projectDir)
+
+    await service.reviewTask('lag-verified', { verdict: 'pass' })
+
+    const fresh = new CollabTaskService()
+    try {
+      const replayed = await fresh.getTask('lag-verified')
+      expect(replayed?.status).toBe('verified')
+      expect(replayed?.verdict).toBe('pass')
+    } finally {
+      fresh.resetForTests()
+    }
+  })
+
+  it('压实失败时重放仍得到正确状态（磁盘保持日志形态，追加行还在）', async () => {
+    const created = await service.createTask(input('lag-fail'))
+    armCompaction(created.projectDir)
+
+    const fsPromises = await import('node:fs/promises')
+    const renameSpy = spyOn(fsPromises, 'rename').mockImplementation(() => {
+      const error = new Error('locked by indexer') as NodeJS.ErrnoException
+      error.code = 'EPERM'
+      return Promise.reject(error)
+    })
+    try {
+      await service.transitionTask('lag-fail', 'accepted')
+    } finally {
+      renameSpy.mockRestore()
+    }
+
+    // 压实没成 → 文件仍是追加日志（两行：created + status），重放照样正确
+    const dir = path.join(tmpDir, 'cc-heihei', 'tasks')
+    const files = await fs.readdir(dir)
+    const lines = (await fs.readFile(path.join(dir, files[0]!), 'utf-8'))
+      .split('\n')
+      .filter((l) => l.trim())
+    expect(lines).toHaveLength(2)
+
+    const fresh = new CollabTaskService()
+    try {
+      expect((await fresh.getTask('lag-fail'))?.status).toBe('accepted')
+    } finally {
+      fresh.resetForTests()
+    }
+  })
+
+  it('压实失败后 pending 不堆积：下次成功操作会再次压实，文件不无限增长', async () => {
+    const created = await service.createTask(input('lag-retry'))
+    armCompaction(created.projectDir)
+
+    const fsPromises = await import('node:fs/promises')
+    let fail = true
+    const renameSpy = spyOn(fsPromises, 'rename').mockImplementation(async (...args) => {
+      if (fail) {
+        const error = new Error('locked by indexer') as NodeJS.ErrnoException
+        error.code = 'EPERM'
+        throw error
+      }
+      const real = (await import('node:fs/promises')).rename
+      return real(...(args as Parameters<typeof real>))
+    })
+
+    try {
+      await service.transitionTask('lag-retry', 'accepted') // 压实失败
+      // 期间又失败若干次，pending 不会因此堆积成多次压实
+      await service.transitionTask('lag-retry', 'in_progress')
+      fail = false
+      await service.transitionTask('lag-retry', 'delivered') // 这次压实成功
+    } finally {
+      renameSpy.mockRestore()
+    }
+
+    const dir = path.join(tmpDir, 'cc-heihei', 'tasks')
+    const files = await fs.readdir(dir)
+    const lines = (await fs.readFile(path.join(dir, files[0]!), 'utf-8'))
+      .split('\n')
+      .filter((l) => l.trim())
+    expect(lines).toHaveLength(1) // 已压实成快照，没有无限增长
+    expect(JSON.parse(lines[0]!).task.status).toBe('delivered')
   })
 })
 

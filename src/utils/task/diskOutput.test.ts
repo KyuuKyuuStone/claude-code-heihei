@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import * as fsPromises from 'fs/promises'
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
@@ -149,27 +149,31 @@ describe('initTaskOutputAsSymlink', () => {
   test('redirects reads when symlink() fails despite the probe passing', async () => {
     _setSymlinkCapableForTest(true)
     const taskId = 'symlink-throws'
-
-    mock.module('fs/promises', () => ({
-      ...fsPromises,
-      symlink: async () => {
-        const err = new Error(
-          'EPERM: operation not permitted, symlink',
-        ) as NodeJS.ErrnoException
-        err.code = 'EPERM'
-        throw err
-      },
-    }))
-    const disk = await import(`./diskOutput.js?throwing=${process.pid}`)
-    disk._setSymlinkCapableForTest(true)
     const target = writeTranscript(taskId)
 
-    await disk.initTaskOutputAsSymlink(taskId, target)
+    // 用 spyOn 在本用例内制造 symlink() 失败（EPERM），并在 finally 恢复。
+    // 不用 mock.module('fs/promises')：那是**进程级**替换，会跨文件泄漏——
+    // 重负载全量同进程交错时曾污染 cronTasks 的 .claude symlink 安全用例
+    //（表现为该用例在"建 symlink"前置阶段抛 EPERM 假红）。spyOn 生命周期
+    // 限定在本用例内，且只改这一个导出。
+    const spy = spyOn(fsPromises, 'symlink').mockImplementation(async () => {
+      const err = new Error(
+        'EPERM: operation not permitted, symlink',
+      ) as NodeJS.ErrnoException
+      err.code = 'EPERM'
+      throw err
+    })
+    try {
+      await initTaskOutputAsSymlink(taskId, target)
 
-    expect(await disk.getTaskOutput(taskId)).toBe(TRANSCRIPT_BODY)
-    // Placeholder still exists so a path captured earlier stays valid.
-    expect(statSync(join(getTaskOutputDir(), `${taskId}.output`)).size).toBe(0)
-    await disk._clearOutputsForTest()
+      // symlink 失败 → 读路径重定向到真实 transcript（#1141）
+      expect(getTaskOutputPath(taskId)).toBe(target)
+      expect(await getTaskOutput(taskId)).toBe(TRANSCRIPT_BODY)
+      // Placeholder still exists so a path captured earlier stays valid.
+      expect(statSync(join(getTaskOutputDir(), `${taskId}.output`)).size).toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
   })
 })
 

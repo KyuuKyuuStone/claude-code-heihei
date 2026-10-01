@@ -96,14 +96,27 @@ describe('prompt history persistence', () => {
 
     await waitFor(() => appendCalls === 1)
     const historyPath = join(configDir, 'history.jsonl')
-    await waitFor(async () => {
-      const contents = await fsPromises
-        .readFile(historyPath, 'utf8')
-        .catch(() => '')
-      return contents.includes('FIRST_SENTINEL')
-    })
+    // 等到**稳定终态**而不是"哨兵出现过"：partial-then-success 场景里，
+    // 对账会先补齐整行、随后可能再回滚半截行（或反之），只判 includes 会在
+    // 中途窗口满足条件，之后的断言读到"哨兵已消失"而假红（本用例历史 flaky）。
+    // 终态定义：恰好一条含哨兵的行、且每行都能 JSON.parse。
+    const readHistory = () =>
+      fsPromises.readFile(historyPath, 'utf8').catch(() => '')
+    const isStableTerminalState = async (): Promise<boolean> => {
+      const text = await readHistory()
+      const lines = text.trim().split(/\r?\n/).filter((line) => line.length > 0)
+      if (lines.length !== 1) return false
+      if ((text.match(/FIRST_SENTINEL/g) ?? []).length !== 1) return false
+      try {
+        JSON.parse(lines[0]!)
+      } catch {
+        return false
+      }
+      return true
+    }
+    await waitFor(isStableTerminalState, 5_000)
 
-    const contents = await fsPromises.readFile(historyPath, 'utf8')
+    const contents = await readHistory()
     expect(contents.match(/FIRST_SENTINEL/g)).toHaveLength(1)
 
     behavior = 'full-then-error'

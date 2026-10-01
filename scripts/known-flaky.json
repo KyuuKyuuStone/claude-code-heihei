@@ -1,22 +1,4 @@
 {
   "comment": "已知环境 flaky 清单（v1.4.0 阶段3）。红线：本清单仅用于【标注】已知噪声条目，绝不用于吞掉真回归——清单内失败仍会被验收脚本自动单文件复跑，复跑红仍判 FAIL 并阻塞发布。往清单里加条目前必须：①有分诊定性（根因+复现条件）②单文件复跑稳定绿。",
-  "entries": [
-    {
-      "test": "serializes concurrent updates by canonical target",
-      "reason": "FS 争用型：Windows tmp→rename 偶发 EPERM（杀软/索引器短暂持锁）→ 服务端 500（批次9 分诊定帧，2026-09-28）",
-      "added": "2026-09-28"
-    },
-    {
-      "test": "refuses to write through a project .claude directory symlink",
-      "reason": "Windows symlink 能力探测能建≠全场景可靠（批量进程内偶发挂、单文件复跑绿）；能力探测+skipIf 已在用例侧，残余窗口按噪声口径（2026-09-28 分诊）",
-      "added": "2026-09-28",
-      "triageNote": "低5（v1.5.0）：下次该条再出现时，先抓失败原文定帧（断言级 EPERM 还是锁窗口）再续标；若转确定性红仍按红线 FAIL，不得凭标注放行。"
-    },
-    {
-      "test": "round-trips official empty-body agents while keeping create strict",
-      "reason": "FS 争用型（同族）：Windows tmp→rename 偶发 EPERM → 服务端 500 → agents-api.test.ts:671 expect(status).toBe(200) 实收 500。2026-09-30 定帧：错误栈落在 renameWithRetry（src/utils/atomicFs.ts:40），即退避重试仍耗尽；实测复现率 9 跑 2 红（1/6 与 1/3 两次取样）。",
-      "added": "2026-09-30",
-      "triageNote": "红线不变（清单仅标注，脚本仍会单文件复跑，复跑红仍判 FAIL）。若出现确定性红或非 EPERM 机制，须重新定帧。"
-    }
-  ]
+  "entries": []
 }

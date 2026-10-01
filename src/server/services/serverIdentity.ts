@@ -24,7 +24,7 @@ import { readFileSync, unlinkSync } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { renameWithRetry } from '../../utils/atomicFs.js'
+import { BACKGROUND_WRITE_RETRY, renameWithRetry } from '../../utils/atomicFs.js'
 import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 
 export type DesktopServerInfo = {
@@ -189,7 +189,7 @@ export async function writeDesktopServerInfo(
   const finalPath = path.join(dir, DESKTOP_SERVER_INFO_FILENAME)
   const tmpPath = `${finalPath}.${process.pid}.tmp`
   await fs.writeFile(tmpPath, JSON.stringify(info, null, 2), 'utf-8')
-  await renameWithRetry(fs, tmpPath, finalPath)
+  await renameWithRetry(fs, tmpPath, finalPath, BACKGROUND_WRITE_RETRY)
 }
 
 /** 端口文件巡检周期（v1.6.0 自愈；只做一次文件读 + 必要时一次写，成本可忽略） */

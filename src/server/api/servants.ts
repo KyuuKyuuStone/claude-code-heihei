@@ -271,9 +271,19 @@ export async function handleSessionMessagesApi(
             sessionService.getSessionWorkDir(fromSessionId),
             sessionService.getSessionWorkDir(targetSessionId),
           ])
+          // B2（v1.7.0 边界漏洞）：派活方带了 fromSessionId 但**解析不出 workDir** 时，
+          // 旧行为是静默跳过整个跨项目检查（下述 guard 的第一项），等于给「无法证明
+          // 同项目」的发送方开了后门。裁决：与其他跨项目场景语义一致，一律拒绝。
+          // 完全没带 fromSessionId 的调用方（用户/脚本，本机信任域）不进这个分支，
+          // 维持现状。
+          if (!fromWorkDir) {
+            throw ApiError.conflict(
+              `Cross-project dispatch is not allowed: sender workDir could not be resolved (sender ${fromSessionId})`,
+            )
+          }
           // 共享归一口径比较（原先为原始串 !==，`D:\X` 与 `d:/x` 会被误判成跨项目
-          // 而拒绝派活）。两侧都有值时才可能判异项目，语义不变。
-          if (fromWorkDir && targetWorkDir && !sameProject(fromWorkDir, targetWorkDir)) {
+          // 而拒绝派活）。目标侧 workDir 未知时维持旧行为（不在本次裁决范围内）。
+          if (targetWorkDir && !sameProject(fromWorkDir, targetWorkDir)) {
             throw ApiError.conflict(
               `Cross-project dispatch is not allowed: sender is in ${fromWorkDir}, worker is in ${targetWorkDir}`,
             )

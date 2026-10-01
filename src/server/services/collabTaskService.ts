@@ -24,10 +24,11 @@ import * as fs from 'fs/promises'
 import * as path from 'path'
 import * as crypto from 'crypto'
 import { getCcHeiheiDir } from '../../utils/envUtils.js'
-import { renameWithRetry } from '../../utils/atomicFs.js'
+import { BACKGROUND_WRITE_RETRY, renameWithRetry } from '../../utils/atomicFs.js'
 import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 import { emitCollabPush } from '../../collaboration/collabPushSignals.js'
 import { normalizeProjectPath, sameProject } from '../../collaboration/projectPath.js'
+import { configureLedgerLock, getLedgerLock, resolveConfiguredLockPath } from './ledgerLock.js'
 import { onSessionEvent } from './sessionEvents.js'
 import { sessionService } from './sessionService.js'
 import { servantService } from './servantService.js'
@@ -170,6 +171,13 @@ function tasksFileFor(projectDir: string): string {
   return path.join(tasksDir(), `${projectHash(projectDir)}.jsonl`)
 }
 
+/** 单写者锁文件（A6）：与台账同目录，随配置目录走 */
+export const LEDGER_LOCK_FILENAME = 'ledger.lock'
+
+// 模块加载即装配锁（获取仍是懒的：见 ensureLedgerLock）。路径用闭包求值，
+// 这样测试切换 CLAUDE_CONFIG_DIR 后能跟上，也不需要在服务端装配层多一处调用。
+configureLedgerLock(() => path.join(tasksDir(), LEDGER_LOCK_FILENAME))
+
 function cloneTask(task: Task): Task {
   return {
     ...task,
@@ -203,14 +211,97 @@ export class CollabTaskService {
 
   /** 进程内写队列：并发创建/流转串行执行，防事件交错与 lost update */
   private writeQueue: Promise<unknown> = Promise.resolve()
+  /**
+   * 待压实项目（v1.7.0：压实时机修正）。
+   *
+   * 追加跨过阈值时只登记，**不在 appendEvents 里当场压实**——那一刻内存还是
+   * 「本次变更之前」的状态（调用方要先 append 落盘、成功后才改内存），当场
+   * 压实会把旧状态写成快照，导致磁盘回退。改为在临界区末尾（内存已更新）
+   * 统一 flush。
+   */
+  private pendingCompaction = new Set<string>()
 
   private enqueueWrite<T>(operation: () => Promise<T>): Promise<T> {
-    const run = this.writeQueue.then(operation, operation)
+    const run = this.writeQueue.then(
+      async () => {
+        const result = await operation()
+        // operation **成功**后才 flush；抛错时不 flush（自然行为，不加特判）。
+        // 于是：append 失败、A6 只读 503 → 内存未被改动，也不会有压实。
+        await this.flushPendingCompaction()
+        return result
+      },
+      async () => {
+        const result = await operation()
+        await this.flushPendingCompaction()
+        return result
+      },
+    )
     this.writeQueue = run.then(
       () => undefined,
       () => undefined,
     )
     return run
+  }
+
+  /**
+   * 懒获取台账写锁（A6）。
+   *
+   * **获取时机**：首次访问台账时（本方法由 ensureLoaded 调用），不是进程启动
+   * 那一刻——等价时机，且不必改服务端装配层。语义是**先写者胜**：两个实例
+   * 都空闲时，谁先碰台账谁持有写锁，另一个降级只读。
+   *
+   * **绝不抛错**：拿不到锁只是降级只读，启动/加载/读取路径全部照常。
+   */
+  private async ensureLedgerLock(): Promise<void> {
+    const lock = getLedgerLock()
+    if (!lock || lock.isChecked()) return
+    try {
+      const result = await lock.tryAcquire()
+      if (!result.acquired) {
+        logForDiagnosticsNoPII('warn', 'collab_task_ledger_readonly_mode', {
+          holderPid: result.holder?.pid,
+          holderStartedAt: result.holder?.startedAt,
+          lockFile: resolveConfiguredLockPath(),
+        })
+      }
+    } catch (error) {
+      // 锁本身出错也不能挡住读写（例如目录权限异常）：按「未启用锁」继续
+      logForDiagnosticsNoPII('warn', 'collab_task_ledger_lock_acquire_error', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  /**
+   * 写前守卫：非持有者一律 503 LEDGER_READONLY。
+   *
+   * 只在**真的要落盘**时调用（appendEvents 开头）。这样 `transitionTask` 的
+   * 同态幂等返回、`createTask` 命中已有 id、`reviewTask` 重复 pass 这些
+   * 不写盘的路径不会被误报 503。
+   *
+   * 未装配锁时（单测直接 new 服务、或功能未启用）维持旧行为。
+   */
+  private assertLedgerWritable(operation: string): void {
+    const lock = getLedgerLock()
+    if (!lock || !lock.isChecked()) return
+    if (lock.isAcquired()) return
+    const holder = lock.currentHolder()
+    logForDiagnosticsNoPII('warn', 'collab_task_ledger_readonly_rejected', {
+      operation,
+      holderPid: holder?.pid,
+      holderStartedAt: holder?.startedAt,
+      lockFile: resolveConfiguredLockPath(),
+    })
+    const holderText = holder ? ` (held by pid ${holder.pid} since ${holder.startedAt})` : ''
+    const lockPath = resolveConfiguredLockPath()
+    throw new ApiError(
+      503,
+      `The collaboration ledger is read-only in this instance${holderText}. ` +
+        // pid 复用等极端情况下无法自动判定，给出人工恢复方式（管理员可自助）
+        (lockPath ? `If the other instance is gone, delete ${lockPath} and retry. ` : '') +
+        `Close the other instance or restart this one to take over writing.`,
+      'LEDGER_READONLY',
+    )
   }
 
   /** 加载 tasks 目录下全部项目账本（幂等；首次访问时惰性触发） */
@@ -221,6 +312,9 @@ export class CollabTaskService {
       this.tasks.clear()
       this.projectOf.clear()
       this.lineCount.clear()
+
+      await this.ensureLedgerLock()
+      const writable = getLedgerLock()?.isAcquired() ?? true
 
       let files: string[] = []
       try {
@@ -236,8 +330,11 @@ export class CollabTaskService {
         // 压实 tmp 残留清扫（审查 v1.6.0 低3）：进程若在 writeFile 与 rename
         // 之间退出，会留下 <hash>.jsonl.tmp。它不影响加载（下面的 endsWith
         // 不认它），但会永久占位。启动时顺手清掉。
+        // A6：清扫是**写操作**，只读实例不动别人的文件。
         if (name.endsWith('.jsonl.tmp')) {
-          await fs.rm(path.join(tasksDir(), name), { force: true }).catch(() => {})
+          if (writable) {
+            await fs.rm(path.join(tasksDir(), name), { force: true }).catch(() => {})
+          }
           continue
         }
         if (!name.endsWith('.jsonl')) continue
@@ -676,6 +773,7 @@ export class CollabTaskService {
     this.loaded = false
     this.loading = null
     this.writeQueue = Promise.resolve()
+    this.pendingCompaction.clear()
   }
 
   private async advanceOnTurnStart(sessionId: string): Promise<void> {
@@ -706,17 +804,45 @@ export class CollabTaskService {
    */
   private async appendEvents(projectDir: string, events: TaskEvent[]): Promise<void> {
     if (events.length === 0) return
+    // A6：只有真要落盘时才拒绝——不写盘的幂等路径（同态流转、createTask 命中
+    // 已有 id、重复 pass）不在守卫范围内，不会被误报 503。
+    this.assertLedgerWritable('append')
     const filePath = tasksFileFor(projectDir)
     await fs.mkdir(path.dirname(filePath), { recursive: true })
     await fs.appendFile(filePath, `${events.map((e) => JSON.stringify(e)).join('\n')}\n`, 'utf-8')
     this.lineCount.set(projectDir, (this.lineCount.get(projectDir) ?? 0) + events.length)
-    await this.compactIfNeeded(projectDir)
+    // 只登记，不在这里压实——此刻内存还是旧态（见 pendingCompaction 注释）。
+    // 临界区末尾（enqueueWrite）会 flush。压实失败时 lineCount 不重置，下次
+    // 追加会再次登记，所以不会漏压、文件也不会无限增长。
+    if ((this.lineCount.get(projectDir) ?? 0) >= COMPACT_THRESHOLD) {
+      this.pendingCompaction.add(projectDir)
+    }
+  }
+
+  /** 临界区末尾压实：此时 operation 已成功、内存已是本次变更后的状态 */
+  private async flushPendingCompaction(): Promise<void> {
+    if (this.pendingCompaction.size === 0) return
+    const dirs = [...this.pendingCompaction]
+    // 先清空再压实：压实失败时靠 lineCount 未重置在下次追加时重新登记，
+    // 而不是靠这个集合一直挂着。
+    this.pendingCompaction.clear()
+    for (const dir of dirs) {
+      await this.compactIfNeeded(dir)
+    }
   }
 
   /**
    * 行数超阈值时压实：把内存态整体写成快照（每任务一行 created），
    * 经 atomicFs 的 renameWithRetry 原子替换——Windows 上 Defender 短暂持锁
    * 会让裸 rename 偶发 EPERM/EBUSY。
+   *
+   * **压实失败不抛**（架构评估 v1.7.0 补充裁决二）：调用方是在 appendEvents
+   * 追加**已经落盘之后**才走到这里，此时再把异常抛上去，用户会看到写入失败，
+   * 但数据其实已经在文件里了——重试还会撞 409（幂等键已存在）。压实只是把
+   * 追加日志折叠成快照的优化，不是数据本身，所以这里只记诊断并吞掉异常；
+   * `lineCount` 不重置，下次追加时会再试一次。
+   *
+   * 退避用后台档位（约 1.9s）：没有人在等这个请求的压实结果。
    */
   private async compactIfNeeded(projectDir: string): Promise<void> {
     if ((this.lineCount.get(projectDir) ?? 0) < COMPACT_THRESHOLD) return
@@ -724,12 +850,21 @@ export class CollabTaskService {
     const tasks = [...this.tasks.values()].filter((task) => sameProject(task.projectDir, projectDir))
     const snapshot = tasks.map((task) => JSON.stringify({ type: 'created', task })).join('\n')
     const tmpPath = `${filePath}.tmp`
-    // 第二道防线（审查 v1.6.0 低3）：加载期清扫只覆盖启动时点，这里再清一次，
-    // 防止上一次压实异常退出留下的同名 tmp 被误认作本次结果。
-    await fs.rm(tmpPath, { force: true }).catch(() => {})
-    await fs.writeFile(tmpPath, snapshot ? `${snapshot}\n` : '', 'utf-8')
-    await renameWithRetry(fs, tmpPath, filePath)
-    this.lineCount.set(projectDir, tasks.length)
+    try {
+      // 第二道防线（审查 v1.6.0 低3）：加载期清扫只覆盖启动时点，这里再清一次，
+      // 防止上一次压实异常退出留下的同名 tmp 被误认作本次结果。
+      await fs.rm(tmpPath, { force: true }).catch(() => {})
+      await fs.writeFile(tmpPath, snapshot ? `${snapshot}\n` : '', 'utf-8')
+      await renameWithRetry(fs, tmpPath, filePath, BACKGROUND_WRITE_RETRY)
+      this.lineCount.set(projectDir, tasks.length)
+    } catch (error) {
+      logForDiagnosticsNoPII('warn', 'collab_task_compact_failed', {
+        projectDir,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      // tmp 留着也无害：下次压实的 rm(force) 会清掉
+      await fs.rm(tmpPath, { force: true }).catch(() => {})
+    }
   }
 }
 

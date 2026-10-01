@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import { feature } from 'bun:bundle'
 import {
   resetSettingsCache,
@@ -8,14 +8,18 @@ import {
 process.env.ANTHROPIC_API_KEY = 'test-key'
 
 let capturedQuery: Record<string, unknown> | undefined
-mock.module('../../utils/sideQuery.js', () => ({
-  sideQuery: async (options: Record<string, unknown>) => {
+// 原为顶层 mock.module('../../utils/sideQuery.js')（进程级、跨文件可见）。
+// 改为 beforeEach 安装 spyOn、afterEach 统一 mock.restore()，作用域限本文件用例。
+import * as sideQueryModule from '../../utils/sideQuery.js'
+
+beforeEach(() => {
+  spyOn(sideQueryModule, 'sideQuery').mockImplementation((async (
+    options: Record<string, unknown>,
+  ) => {
     capturedQuery = options
-    return {
-      content: [{ type: 'text', text: 'critique complete' }],
-    }
-  },
-}))
+    return { content: [{ type: 'text', text: 'critique complete' }] }
+  }) as typeof sideQueryModule.sideQuery)
+})
 
 const transcriptClassifierEnabled = feature('TRANSCRIPT_CLASSIFIER')
   ? true

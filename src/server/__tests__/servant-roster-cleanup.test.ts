@@ -194,4 +194,31 @@ describe('花名册高危修复：读路径不删数据', () => {
     expect(await servantService.pruneForDeletedSessions([ID_B])).toEqual([])
     expect(await fs.readFile(rosterPath, 'utf-8')).toBe(before)
   })
+
+  /**
+   * v1.7.0 补充裁决二：**坏 JSON 不能被当成空表**。
+   *
+   * 若读失败退化为「空花名册」，紧接着的任何一次写（登记/移除）都会把好数据
+   * 抹成一份空表——坏数据永久丢失。花名册的损坏等级是「高」（守卫失败即全员
+   * 500、所有派活失败），所以这里必须抛错并由上层暴露，而不是静默吞掉。
+   */
+  it('花名册是坏 JSON → 读操作抛错，且**不把坏文件当空表覆盖**', async () => {
+    const broken = '{ "schemaVersion": 1, "servants": [ { "sessionId": "x"'
+    await fs.writeFile(rosterPath, broken, 'utf-8')
+
+    await expect(servantService.listServants()).rejects.toThrow(
+      /Failed to read servant sessions/,
+    )
+    // 坏文件保持原样（没有被解析失败后的写路径覆盖）
+    expect(await fs.readFile(rosterPath, 'utf-8')).toBe(broken)
+
+    // 再读仍抛错：没有把它「洗」成空表
+    await expect(servantService.listServants()).rejects.toThrow()
+    expect(await fs.readFile(rosterPath, 'utf-8')).toBe(broken)
+  })
+
+  it('花名册文件不存在（ENOENT）→ 空表，不是错误', async () => {
+    // 与上一条对照：只有「文件还不存在」才允许当空表，坏 JSON 不行
+    expect(await servantService.listServants()).toEqual([])
+  })
 })

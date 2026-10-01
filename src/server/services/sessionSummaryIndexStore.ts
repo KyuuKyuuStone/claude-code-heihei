@@ -18,7 +18,7 @@
 
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
-import { renameWithRetry } from '../../utils/atomicFs.js'
+import { BACKGROUND_WRITE_RETRY, renameWithRetry } from '../../utils/atomicFs.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 import type { SessionListSummary } from './localIndex/types.js'
@@ -311,7 +311,7 @@ export class SessionSummaryIndexStore {
     try {
       await fs.mkdir(path.dirname(indexPath), { recursive: true })
       await fs.writeFile(tmpPath, JSON.stringify(payload), 'utf-8')
-      await renameWithRetry(fs, tmpPath, indexPath)
+      await renameWithRetry(fs, tmpPath, indexPath, BACKGROUND_WRITE_RETRY)
     } catch (error) {
       logForDiagnosticsNoPII('warn', 'session_summary_index_write_failed', {
         indexPath,

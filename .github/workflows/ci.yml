@@ -58,6 +58,8 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Run layered dependency gate
         run: bun run lint:layers
+      - name: Run file size gate (v1.7.0 structure track)
+        run: bun run lint:file-size -- --baseline-ref origin/main
 
   docs:
     name: Docs site build & check

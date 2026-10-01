@@ -1,0 +1,105 @@
+{
+  "comment": "文件行数基线表（v1.7.0 结构专项，架构评估 §2.3 + 补充裁决二第四条）。由 scripts/check-file-size.ts --generate 首次运行生成，经架构师确认后提交。kind=own：自有代码，v1.7 必须降到 2500 行以下（豁免名额最多 1 个）；kind=upstream：上游 CLI 代码，只减不增，不纳入 v1.7 必降范围。基线只许下调；降至 2500 以下应移出本表。豁免走 file-size-allowlist.json（仅架构师可加）。",
+  "files": {
+    "src/bridge/bridgeMain.ts": {
+      "lines": 2999,
+      "kind": "upstream"
+    },
+    "src/cli/print.ts": {
+      "lines": 5563,
+      "kind": "upstream"
+    },
+    "src/commands/insights.ts": {
+      "lines": 3200,
+      "kind": "upstream"
+    },
+    "src/main.tsx": {
+      "lines": 4753,
+      "kind": "upstream"
+    },
+    "src/native-ts/yoga-layout/index.ts": {
+      "lines": 2578,
+      "kind": "upstream"
+    },
+    "src/screens/REPL.tsx": {
+      "lines": 5005,
+      "kind": "upstream"
+    },
+    "src/server/services/conversationService.ts": {
+      "lines": 2812,
+      "kind": "own"
+    },
+    "src/server/services/sessionService.ts": {
+      "lines": 4651,
+      "kind": "own"
+    },
+    "src/server/ws/handler.ts": {
+      "lines": 3793,
+      "kind": "own"
+    },
+    "src/services/api/claude.ts": {
+      "lines": 3831,
+      "kind": "upstream"
+    },
+    "src/services/mcp/client.ts": {
+      "lines": 3341,
+      "kind": "upstream"
+    },
+    "src/tools/BashTool/bashPermissions.ts": {
+      "lines": 2621,
+      "kind": "upstream"
+    },
+    "src/tools/BashTool/bashSecurity.ts": {
+      "lines": 2592,
+      "kind": "upstream"
+    },
+    "src/utils/attachments.ts": {
+      "lines": 3999,
+      "kind": "upstream"
+    },
+    "src/utils/bash/ast.ts": {
+      "lines": 2679,
+      "kind": "upstream"
+    },
+    "src/utils/bash/bashParser.ts": {
+      "lines": 4436,
+      "kind": "upstream"
+    },
+    "src/utils/hooks.ts": {
+      "lines": 5041,
+      "kind": "upstream"
+    },
+    "src/utils/messages.ts": {
+      "lines": 5683,
+      "kind": "upstream"
+    },
+    "src/utils/plugins/marketplaceManager.ts": {
+      "lines": 2645,
+      "kind": "upstream"
+    },
+    "src/utils/plugins/pluginLoader.ts": {
+      "lines": 3306,
+      "kind": "upstream"
+    },
+    "src/utils/sessionStorage.ts": {
+      "lines": 5153,
+      "kind": "upstream"
+    },
+    "src/vendor/computer-use-mcp/toolCalls.ts": {
+      "lines": 3661,
+      "kind": "upstream"
+    },
+    "desktop/src/components/chat/MessageList.tsx": {
+      "lines": 3006,
+      "kind": "own"
+    },
+    "desktop/src/pages/Settings.tsx": {
+      "lines": 3884,
+      "kind": "own"
+    },
+    "desktop/src/stores/chatStore.ts": {
+      "lines": 4496,
+      "kind": "own"
+    }
+  }
+}

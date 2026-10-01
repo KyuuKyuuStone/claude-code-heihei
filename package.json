@@ -17,7 +17,9 @@
     "check:docs": "npm --prefix site ci --loglevel=error && npm --prefix site run --loglevel=error build && npm --prefix site run --loglevel=error check",
     "check:persistence-upgrade": "bun test src/server/__tests__/persistence-upgrade.test.ts",
     "lint:layers": "node node_modules/dependency-cruiser/bin/dependency-cruiser.mjs src --config .dependency-cruiser.cjs --ignore-known",
+    "lint:file-size": "bun run scripts/check-file-size.ts",
     "hooks:install": "bun run scripts/git-hooks/install.ts",
+    "hooks:install:pre-commit": "bun run scripts/git-hooks/install-pre-commit.ts",
     "docs:dev": "npm --prefix site run dev",
     "docs:build": "npm --prefix site run build",
     "docs:preview": "npm --prefix site run preview"

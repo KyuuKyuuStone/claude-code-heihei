@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -35,9 +35,9 @@ const getImageProcessorMock = mock(async () => {
   }
 })
 
-mock.module('../../tools/FileReadTool/imageProcessor.js', () => ({
-  getImageProcessor: getImageProcessorMock,
-}))
+// 原为顶层 mock.module(...)：进程级替换，跨文件可见。改为 beforeEach 里 spyOnInstall、
+// afterEach 统一 mock.restore()，作用域限本文件用例。
+import * as imageProcessorModule from '../../tools/FileReadTool/imageProcessor.js'
 
 const { ConversationService } = await import('../services/conversationService.js')
 
@@ -45,6 +45,9 @@ let tmpDir: string
 let originalConfigDir: string | undefined
 
 beforeEach(async () => {
+  spyOn(imageProcessorModule, 'getImageProcessor').mockImplementation(
+    getImageProcessorMock as typeof imageProcessorModule.getImageProcessor,
+  )
   getImageProcessorMock.mockClear()
   imageProcessorShouldThrow = false
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'conversation-attachments-'))
@@ -53,6 +56,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  mock.restore()
   if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
   else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
   await fs.rm(tmpDir, { recursive: true, force: true })
