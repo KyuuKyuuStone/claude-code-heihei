@@ -77,6 +77,14 @@ import {
   streamJsonlFile,
   subagentTranscriptPath,
 } from './session/jsonlStorage.js'
+// v1.7 结构拆分（sessionService 第⑦批 · 纯移动）：workspace 可用性判定组。
+// 3 个方法以同名类字段委托保留（门面 6 处 this.xxx( 调用点文本一行未改）；
+// 另 3 个无组外调用点，未导入。SessionWorkspaceState 是门面导出类型，未搬动。
+import {
+  createCachedPathExists,
+  pathExists,
+  resolveWorkspaceAvailability,
+} from './session/workspaceAvailability.js'
 import type {
   PersistedWorktreeSession,
   SessionListSummary,
@@ -3771,107 +3779,16 @@ export class SessionService {
   // 第⑤批：entriesToMessages 已搬到 ./session/messageConversion.ts（同批，委托块见上）。
   private entriesToMessages = entriesToMessages
 
-  private async pathExists(targetPath: string | null): Promise<boolean> {
-    if (!targetPath) return false
+  // ── v1.7 结构拆分（sessionService 第⑦批）：workspace 工具组已搬到
+  // ./session/workspaceAvailability.ts（同批）。pathExists / createCachedPathExists /
+  // resolveWorkspaceAvailability 有组外调用点，改为同名类字段委托；
+  // matchesPersistedWorktree / sameWorkspacePath / normalizeWorkspacePath 的唯一调用点
+  // 全在搬走的函数体内（组外 0），**不留死委托**，直接删除。
+  private pathExists = pathExists
 
-    try {
-      const stat = await fs.stat(targetPath)
-      return stat.isDirectory()
-    } catch {
-      return false
-    }
-  }
+  private createCachedPathExists = createCachedPathExists
 
-  private createCachedPathExists(): (targetPath: string | null) => Promise<boolean> {
-    const cache = new Map<string, Promise<boolean>>()
-    return (targetPath) => {
-      if (!targetPath) return Promise.resolve(false)
-      const key = targetPath.normalize('NFC')
-      const cached = cache.get(key)
-      if (cached) return cached
-      const pending = this.pathExists(targetPath)
-      cache.set(key, pending)
-      return pending
-    }
-  }
-
-  private async resolveWorkspaceAvailability({
-    workDir,
-    projectRoot,
-    worktreeSession,
-    repository,
-    pathExists = (targetPath: string | null) => this.pathExists(targetPath),
-  }: {
-    workDir: string | null
-    projectRoot: string | null
-    worktreeSession?: PersistedWorktreeSession | null
-    repository?: PreparedSessionWorkspace['repository']
-    pathExists?: (targetPath: string | null) => Promise<boolean>
-  }): Promise<{ workDirExists: boolean; workspaceState: SessionWorkspaceState }> {
-    const workDirExists = await pathExists(workDir)
-    if (workDirExists) {
-      return { workDirExists: true, workspaceState: 'available' }
-    }
-
-    const projectRootIsDifferent = !this.sameWorkspacePath(workDir, projectRoot)
-    const projectRootExists = projectRootIsDifferent && await pathExists(projectRoot)
-    const removedPersistedWorktree = projectRootExists && this.matchesPersistedWorktree({
-      workDir,
-      projectRoot,
-      worktreeSession,
-      repository,
-    })
-
-    return {
-      workDirExists: false,
-      workspaceState: removedPersistedWorktree ? 'worktree_removed' : 'missing',
-    }
-  }
-
-  private matchesPersistedWorktree({
-    workDir,
-    projectRoot,
-    worktreeSession,
-    repository,
-  }: {
-    workDir: string | null
-    projectRoot: string | null
-    worktreeSession?: PersistedWorktreeSession | null
-    repository?: PreparedSessionWorkspace['repository']
-  }): boolean {
-    if (!workDir || !projectRoot) return false
-    if (this.sameWorkspacePath(workDir, worktreeSession?.worktreePath)) return true
-    if (
-      repository?.worktree &&
-      this.sameWorkspacePath(workDir, repository.worktreePath)
-    ) {
-      return true
-    }
-
-    const normalizedWorkDir = this.normalizeWorkspacePath(workDir)
-    const marker = '/.claude/worktrees/'
-    const markerIndex = normalizedWorkDir.indexOf(marker)
-    if (markerIndex <= 0) return false
-    return this.sameWorkspacePath(
-      normalizedWorkDir.slice(0, markerIndex),
-      projectRoot,
-    )
-  }
-
-  private sameWorkspacePath(
-    left: string | null | undefined,
-    right: string | null | undefined,
-  ): boolean {
-    if (!left || !right) return false
-    return this.normalizeWorkspacePath(left) === this.normalizeWorkspacePath(right)
-  }
-
-  private normalizeWorkspacePath(targetPath: string): string {
-    const normalized = normalizeDriveRootPathForPlatform(targetPath)
-      .normalize('NFC')
-      .replace(/\\/g, '/')
-    return normalized.length > 1 ? normalized.replace(/\/+$/, '') : normalized
-  }
+  private resolveWorkspaceAvailability = resolveWorkspaceAvailability
 }
 
 // Singleton instance for shared use across API handlers
