@@ -101,6 +101,8 @@ type AllowEntry = {
   reason: string
   decisionRef: string
   expiresInVersion: string
+  /** 该条目专属的发版行数上限（补充裁决十一）；缺省 3000，只紧不松 */
+  cap?: number
 }
 type Allowlist = { entries: AllowEntry[] }
 
@@ -159,7 +161,7 @@ if (referenceRaw !== null) {
 // 豁免清单校验：格式、过期（过期条目本身报失败）
 // ---------------------------------------------------------------------------
 
-const activeFileAllow = new Set<string>()
+const activeFileAllow = new Map<string, number>()
 const activeDirAllow = new Set<string>()
 for (const e of allowlist.entries) {
   if (!e.reason || !e.decisionRef || !e.expiresInVersion) {
@@ -173,7 +175,7 @@ for (const e of allowlist.entries) {
     continue
   }
   if (e.kind === 'directory') activeDirAllow.add(e.path)
-  else activeFileAllow.add(e.path)
+  else activeFileAllow.set(e.path, e.cap ?? ALLOWLIST_CAP)
 }
 
 // ---------------------------------------------------------------------------
@@ -284,10 +286,10 @@ if (releaseCheck) {
       failures.push(
         `RELEASE ${rel}: 当前 ${lines} 行 > 2500（v1.7 退出标准：own 文件发版时须 ≤2500）——无有效豁免；拆分或由架构师登记豁免（≤3000 行）`,
       )
-    } else if (lines > ALLOWLIST_CAP) {
-      failures.push(`RELEASE ${rel}: 当前 ${lines} 行 > 豁免上限 ${ALLOWLIST_CAP} 行`)
+    } else if (lines > activeFileAllow.get(rel)!) {
+      failures.push(`RELEASE ${rel}: 当前 ${lines} 行 > 豁免上限 ${activeFileAllow.get(rel)} 行`)
     } else {
-      notices.push(`RELEASE-PASS(豁免) ${rel}: ${lines} 行 ≤ 3000，豁免有效期至 allowlist 登记`)
+      notices.push(`RELEASE-PASS(豁免) ${rel}: ${lines} 行 ≤ 豁免上限 ${activeFileAllow.get(rel)}`)
     }
   }
 }
