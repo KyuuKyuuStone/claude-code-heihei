@@ -26,7 +26,7 @@
       "kind": "upstream"
     },
     "src/server/services/sessionService.ts": {
-      "lines": 4235,
+      "lines": 4178,
       "kind": "own"
     },
     "src/server/ws/handler.ts": {
@@ -86,7 +86,7 @@
       "kind": "upstream"
     },
     "desktop/src/stores/chatStore.ts": {
-      "lines": 4496,
+      "lines": 4377,
       "kind": "own"
     }
   }

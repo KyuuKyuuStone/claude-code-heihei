@@ -48,18 +48,17 @@ import {
 } from './sessionSummaryIndexStore.js'
 // v1.5.0 C12：会话列表失效信号（ws 层订阅后广播给 _events 通道）
 import { emitCollabPush } from '../../collaboration/collabPushSignals.js'
-import { cleanSessionTitleSource } from '../../utils/sessionTitleText.js'
 import {
   roughTokenCountEstimationForMessage,
 } from '../../services/tokenEstimation.js'
 import { ProviderService } from './providerService.js'
-import { shouldHideCommandMetadataContent } from '../../utils/commandMetadata.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
+import { reduceTranscript } from './localIndex/transcriptReducer.js'
 import {
-  extractGoalCreationTitle,
-  extractTranscriptUserTitle,
-  reduceTranscript,
-} from './localIndex/transcriptReducer.js'
+  extractTitle,
+  isVisibleTranscriptMessageEntry,
+  shouldHideTranscriptEntry,
+} from './session/transcriptEntries.js'
 import type {
   PersistedWorktreeSession,
   SessionListSummary,
@@ -1545,36 +1544,12 @@ export class SessionService {
   private parseTaskNotificationContent = parseTaskNotificationContent
   private parsePersistedTaskNotification = parsePersistedTaskNotification
 
-  private shouldHideTranscriptEntry(entry: RawEntry): boolean {
-    const role = entry.message?.role
-    const content = entry.message?.content
-
-    if (role === 'user') {
-      return (
-        shouldHideCommandMetadataContent(content) ||
-        this.isSyntheticUserInterruption(content) ||
-        this.isTaskNotificationContent(content)
-      )
-    }
-
-    if (role === 'assistant') {
-      return this.isSyntheticNoResponseAssistant(content)
-    }
-
-    return false
-  }
-
-  private isVisibleTranscriptMessageEntry(entry: RawEntry): boolean {
-    if (!entry.message?.role || entry.isMeta) return false
-    if (
-      entry.type !== 'user' &&
-      entry.type !== 'assistant' &&
-      entry.type !== 'system'
-    ) {
-      return false
-    }
-    return !this.shouldHideTranscriptEntry(entry)
-  }
+  // ── v1.7 结构拆分（sessionService 第④批）：转录条目可见性判定与标题提取共 3 个
+  // 方法搬到 ./session/transcriptEntries.ts，此处改为同名类字段委托。所有调用点
+  // （含组外的 loadSubagentToolMessages / getSessionTitleAndMeta /
+  // getIndexedSessionSearchMetadata 等）的 this.xxx(...) 文本一行未改。
+  private shouldHideTranscriptEntry = shouldHideTranscriptEntry
+  private isVisibleTranscriptMessageEntry = isVisibleTranscriptMessageEntry
 
   // ── v1.7 结构拆分（sessionService 第②批）：Agent 子链与 Goal 本地命令解析共 9 个
   // 方法搬到 ./session/transcriptAgents.ts，此处改为同名类字段委托。所有调用点
@@ -1718,40 +1693,8 @@ export class SessionService {
   // Title extraction
   // --------------------------------------------------------------------------
 
-  private extractTitle(entries: RawEntry[]): string {
-    // 1. Look for custom title entry (appended by renameSession) — highest priority
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const e = entries[i]!
-      if (e.type === 'custom-title' && e.customTitle) {
-        return e.customTitle
-      }
-    }
-
-    // 2. Goal sessions should keep the original objective as the stable title.
-    for (const e of entries) {
-      const goalTitle = extractGoalCreationTitle(e)
-      if (goalTitle) return goalTitle
-    }
-
-    // 3. Look for AI-generated title (written by titleService)
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const e = entries[i]!
-      if (e.type === 'ai-title' && e.aiTitle) {
-        const title = cleanSessionTitleSource(String(e.aiTitle))
-        if (title) return title
-      }
-    }
-
-    // 4. Look for first non-meta user message as title
-    for (const e of entries) {
-      if (e.type === 'user' && !e.isMeta && e.message?.role === 'user') {
-        const title = extractTranscriptUserTitle(e.message.content)
-        if (title) return title
-      }
-    }
-
-    return 'Untitled Session'
-  }
+  // 第④批：extractTitle 已搬到 ./session/transcriptEntries.ts（同批，委托块见上）。
+  private extractTitle = extractTitle
 
   // --------------------------------------------------------------------------
   // Session file discovery
