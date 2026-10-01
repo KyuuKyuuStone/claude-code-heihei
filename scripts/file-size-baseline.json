@@ -30,7 +30,7 @@
       "kind": "own"
     },
     "src/server/ws/handler.ts": {
-      "lines": 3737,
+      "lines": 3494,
       "kind": "own"
     },
     "src/services/api/claude.ts": {
