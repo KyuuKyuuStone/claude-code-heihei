@@ -109,6 +109,13 @@ import {
   writeUploadAttachment,
   type AttachmentRef,
 } from './conversation/attachments.js'
+// v1.7 结构拆分第②批（纯移动）：CLI 参数构造。SessionStartOptions 是这两个
+// 函数的必需参数类型（原是门面本地未导出类型），随本批一起搬；门面导出面不变。
+import {
+  getPermissionArgs,
+  getRuntimeArgs,
+  type SessionStartOptions,
+} from './conversation/cliArgs.js'
 export { MAX_CAPTURED_SDK_MESSAGE_BYTES, MAX_CAPTURED_SDK_TOTAL_BYTES }
 
 /**
@@ -268,14 +275,8 @@ export type PendingPermissionRequest = {
   description?: string
 }
 
-type SessionStartOptions = {
-  permissionMode?: string
-  model?: string
-  effort?: string
-  thinking?: 'enabled' | 'adaptive' | 'disabled'
-  providerId?: string | null
-  resumeInterruptedTurn?: boolean
-}
+// v1.7 结构拆分第②批：SessionStartOptions 搬到 conversation/cliArgs.ts，
+// 本文件改为从那里 import（类型仍不对外导出，门面导出面不变）。
 
 export class ConversationStartupError extends Error {
   constructor(
@@ -1606,54 +1607,11 @@ export class ConversationService {
     }
   }
 
-  private getPermissionArgs(
-    mode: string | undefined,
-    dangerousMode: boolean,
-    servantNonInteractive = false,
-  ): string[] {
-    if (dangerousMode) {
-      return ['--dangerously-skip-permissions']
-    }
+  // ── v1.7 结构拆分第②批：下面两个搬到 conversation/cliArgs.ts，同名类字段委托。
+  // 同批的 resolveCliArgs / buildSessionCliArgs 因 import.meta.dir 依赖未搬（见那里）。
+  private getPermissionArgs = getPermissionArgs
 
-    // v1.6.1（契约 §3.3 第 1 条）：员工会话强制免审批——不管元数据或界面选的是
-    // 什么模式。这不是新放宽：员工本来就是 bypass（既定设计），此处只是不让
-    // 「权限模式漂移」（登记后未重启、界面上切换）把员工改回会等人的模式。
-    // 安全边界仍由约束档位负责（CC_HEIHEI_SERVANT_CONSTRAINT，结构性收权，
-    // 不是靠逐次审批）。不设开关：这是收紧既定语义，不是可选项。
-    if (servantNonInteractive) {
-      return ['--dangerously-skip-permissions']
-    }
-
-    const resolvedMode = mode || 'default'
-    if (resolvedMode === 'bypassPermissions') {
-      return ['--dangerously-skip-permissions']
-    }
-
-    const args = [
-      '--allow-dangerously-skip-permissions',
-      '--permission-mode',
-      resolvedMode,
-    ]
-    return args
-  }
-
-  private getRuntimeArgs(options: SessionStartOptions | undefined): string[] {
-    const args: string[] = []
-
-    if (options?.model) {
-      args.push('--model', options.model)
-    }
-
-    if (options?.effort && !isOpenAIOfficialProviderId(options.providerId)) {
-      args.push('--effort', options.effort)
-    }
-
-    if (options?.thinking && !isOpenAIOfficialProviderId(options.providerId)) {
-      args.push('--thinking', options.thinking)
-    }
-
-    return args
-  }
+  private getRuntimeArgs = getRuntimeArgs
 
   /**
    * 协作身份缓存：sessionId → 主管标记与约束档位（负缓存也存，
