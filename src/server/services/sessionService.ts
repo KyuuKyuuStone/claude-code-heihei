@@ -12,7 +12,6 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import { createInterface } from 'node:readline'
 import { ApiError } from '../middleware/errorHandler.js'
-import { sanitizePath as sanitizePortablePath } from '../../utils/sessionStoragePortable.js'
 import type { FileHistorySnapshot } from '../../utils/fileHistory.js'
 // v1.7 结构拆分（sessionService 第③批）：findCanonicalGitRoot 的唯一使用者
 // resolveProjectRootFromSessionMetadata 已搬走，本文件不再需要该导入。
@@ -52,7 +51,6 @@ import {
   roughTokenCountEstimationForMessage,
 } from '../../services/tokenEstimation.js'
 import { ProviderService } from './providerService.js'
-import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { reduceTranscript } from './localIndex/transcriptReducer.js'
 import {
   extractTitle,
@@ -66,6 +64,19 @@ import {
   entryToMessage,
   normalizeMessageUsage,
 } from './session/messageConversion.js'
+// v1.7 结构拆分（sessionService 第⑥批 · 纯移动）：JSONL 读写与 Agent 子链装载。
+// 除 loadSubagentToolMessages（无组外调用点，未留委托）外，其余 8 个方法以同名
+// 类字段委托保留，门面 51 处 this.xxx( 调用点文本一行未改。
+import {
+  appendJsonlEntry,
+  appendSubagentToolMessages,
+  getConfigDir,
+  getProjectsDir,
+  readJsonlFile,
+  sanitizePath,
+  streamJsonlFile,
+  subagentTranscriptPath,
+} from './session/jsonlStorage.js'
 import type {
   PersistedWorktreeSession,
   SessionListSummary,
@@ -102,14 +113,12 @@ import {
 // 引用回来（门面导出面不变；类型擦除，不产生运行时循环）。
 import {
   extractAgentIdFromResultText,
-  extractAgentResultLinks,
   extractAgentToolUseId,
   extractAgentToolUseIdsFromMessage,
   extractTextFromContent,
   goalLocalCommandEntryToMessage,
   isGoalLocalCommandEntry,
   isGoalLocalCommandOutput,
-  namespaceSubagentContentIds,
 } from './session/transcriptAgents.js'
 import type { ContentBlock, RawEntry } from './session/transcriptAgents.js'
 // v1.7 结构拆分（sessionService 第③批 · 纯移动）：会话条目元数据解析。
@@ -935,49 +944,20 @@ export class SessionService {
   // Config helpers
   // --------------------------------------------------------------------------
 
-  private getConfigDir(): string {
-    return path.resolve(getClaudeConfigHomeDir())
-  }
+  // ── v1.7 结构拆分（sessionService 第⑥批）：getConfigDir / getProjectsDir /
+  // sanitizePath 已搬到 ./session/jsonlStorage.ts（同批），此处改为同名类字段委托。
+  private getConfigDir = getConfigDir
 
-  private getProjectsDir(): string {
-    return path.join(this.getConfigDir(), 'projects')
-  }
+  private getProjectsDir = getProjectsDir
 
-  /**
-   * Sanitize a path the same way the shared session storage does.
-   * This must remain Windows-safe, so reserved characters such as ':' are normalized too.
-   */
-  private sanitizePath(dirPath: string): string {
-    return sanitizePortablePath(dirPath)
-  }
+  private sanitizePath = sanitizePath
 
   // --------------------------------------------------------------------------
   // JSONL parsing
   // --------------------------------------------------------------------------
 
-  private async readJsonlFile(filePath: string): Promise<RawEntry[]> {
-    let content: string
-    try {
-      content = await fs.readFile(filePath, 'utf-8')
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return []
-      }
-      throw err
-    }
-
-    const entries: RawEntry[] = []
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim()
-      if (!trimmed) continue
-      try {
-        entries.push(JSON.parse(trimmed) as RawEntry)
-      } catch {
-        // skip malformed lines
-      }
-    }
-    return entries
-  }
+  // 第⑥批：readJsonlFile 已搬到 ./session/jsonlStorage.ts（同批）。
+  private readJsonlFile = readJsonlFile
 
   private async readTargetedJsonlEntries(
     found: { filePath: string; projectDir: string },
@@ -1079,35 +1059,8 @@ export class SessionService {
     }
   }
 
-  private async streamJsonlFile(
-    filePath: string,
-    onEntry: (entry: RawEntry) => void,
-  ): Promise<void> {
-    const stream = createReadStream(filePath, { encoding: 'utf8' })
-    const lines = createInterface({
-      input: stream,
-      crlfDelay: Infinity,
-    })
-
-    try {
-      for await (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed) continue
-        try {
-          onEntry(JSON.parse(trimmed) as RawEntry)
-        } catch {
-          // skip malformed lines
-        }
-      }
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw err
-      }
-    } finally {
-      lines.close()
-      stream.destroy()
-    }
-  }
+  // 第⑥批：streamJsonlFile 已搬到 ./session/jsonlStorage.ts（同批）。
+  private streamJsonlFile = streamJsonlFile
 
   private async scanSessionListSummary(
     filePath: string,
@@ -1422,10 +1375,8 @@ export class SessionService {
     }
   }
 
-  private async appendJsonlEntry(filePath: string, entry: Record<string, unknown>): Promise<void> {
-    const line = JSON.stringify(entry) + '\n'
-    await fs.appendFile(filePath, line, 'utf-8')
-  }
+  // 第⑥批：appendJsonlEntry 已搬到 ./session/jsonlStorage.ts（同批）。
+  private appendJsonlEntry = appendJsonlEntry
 
   // ── v1.7 结构拆分（sessionService 第③批）：会话条目元数据解析 13 个名字搬到
   // ./session/sessionEntryMetadata.ts，此处为其中 11 个保留同名类字段委托。所有调用点
@@ -1494,77 +1445,13 @@ export class SessionService {
   private extractAgentToolUseIdsFromMessage = extractAgentToolUseIdsFromMessage
   private extractTextFromContent = extractTextFromContent
   private extractAgentIdFromResultText = extractAgentIdFromResultText
-  private extractAgentResultLinks = extractAgentResultLinks
-  private namespaceSubagentContentIds = namespaceSubagentContentIds
+  // 第⑥批：subagentTranscriptPath / loadSubagentToolMessages / appendSubagentToolMessages
+  // 已搬到 ./session/jsonlStorage.ts（同批）。其中 loadSubagentToolMessages 的唯一调用点在
+  // appendSubagentToolMessages 内部（随之搬走），门面已无组外调用点，**不留死委托**；
+  // 另两个有组外调用点，改为同名类字段委托。
+  private subagentTranscriptPath = subagentTranscriptPath
 
-  private subagentTranscriptPath(
-    projectDir: string,
-    sessionId: string,
-    agentId: string,
-  ): string {
-    const normalizedAgentId = agentId.startsWith('agent-') ? agentId : `agent-${agentId}`
-    return path.join(
-      this.getProjectsDir(),
-      projectDir,
-      sessionId,
-      'subagents',
-      `${normalizedAgentId}.jsonl`,
-    )
-  }
-
-  private async loadSubagentToolMessages(
-    projectDir: string,
-    sessionId: string,
-    parentToolUseId: string,
-    agentId: string,
-  ): Promise<MessageEntry[]> {
-    const filePath = this.subagentTranscriptPath(projectDir, sessionId, agentId)
-    const entries = await this.readJsonlFile(filePath)
-    const namespace = `${parentToolUseId}/${agentId}`
-    const messages: MessageEntry[] = []
-
-    for (const entry of entries) {
-      if (!entry.message?.role || entry.isMeta) continue
-      if (this.shouldHideTranscriptEntry(entry)) continue
-      if (entry.type !== 'user' && entry.type !== 'assistant' && entry.type !== 'system') {
-        continue
-      }
-
-      const message = this.entryToMessage(
-        {
-          ...entry,
-          message: {
-            ...entry.message,
-            content: this.namespaceSubagentContentIds(entry.message.content, namespace),
-          },
-        },
-        parentToolUseId,
-      )
-      if (message && (message.type === 'tool_use' || message.type === 'tool_result')) {
-        messages.push(message)
-      }
-    }
-
-    return messages
-  }
-
-  private async appendSubagentToolMessages(
-    projectDir: string,
-    sessionId: string,
-    messages: MessageEntry[],
-  ): Promise<MessageEntry[]> {
-    const resultLinks = this.extractAgentResultLinks(messages)
-    if (resultLinks.size === 0) {
-      return messages
-    }
-
-    const childMessages = await Promise.all(
-      [...resultLinks.entries()].map(([parentToolUseId, agentId]) =>
-        this.loadSubagentToolMessages(projectDir, sessionId, parentToolUseId, agentId),
-      ),
-    )
-    return [...messages, ...childMessages.flat()]
-  }
+  private appendSubagentToolMessages = appendSubagentToolMessages
 
   // --------------------------------------------------------------------------
   // Title extraction

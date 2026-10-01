@@ -26,7 +26,7 @@
       "kind": "upstream"
     },
     "src/server/services/sessionService.ts": {
-      "lines": 3991,
+      "lines": 3878,
       "kind": "own"
     },
     "src/server/ws/handler.ts": {
