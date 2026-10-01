@@ -3,6 +3,7 @@ import { Check, ChevronDown, Clock, Folder, FolderOpen, FolderPlus, GitBranch, I
 import { useSessionStore } from '../../stores/sessionStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useTranslation, type TranslationKey } from '../../i18n'
+import { describeApiFailure } from '../../lib/apiErrorMessage'
 import { BrandSeal } from '@/components/composite/BrandSeal'
 import { Badge, StatusDot } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -51,6 +52,9 @@ import { desktopUiPreferencesApi, type SidebarProjectPreferences } from '../../a
 import { getDesktopHost } from '../../lib/desktopHost'
 import { getSessionWorkspaceState } from '../../lib/sessionWorkspace'
 
+/** C3：首屏加载超过该时长即切换「加载较慢」文案。 */
+const SLOW_LOAD_HINT_MS = 3_000
+
 const desktopHost = getDesktopHost()
 const isDesktopRuntime = desktopHost.isDesktop
 const canUseNativeDialogs = desktopHost.capabilities.dialogs
@@ -94,6 +98,7 @@ export function Sidebar({ isMobile = false, onRequestClose }: SidebarProps) {
   const sessions = useSessionStore((s) => s.sessions)
   const isLoading = useSessionStore((s) => s.isLoading)
   const error = useSessionStore((s) => s.error)
+  const errorKind = useSessionStore((s) => s.errorKind)
   const indexStatus = useSessionStore((s) => s.indexStatus)
   const fetchSessions = useSessionStore((s) => s.fetchSessions)
   const deleteSession = useSessionStore((s) => s.deleteSession)
@@ -246,6 +251,16 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
     ))
   }, [hiddenProjectKeys, orderedProjectGroups])
   const showInitialLoading = isLoading && sessions.length === 0
+  // C3（裁决十）：等待期给可读反馈——超过 3s 仍处首屏加载时提示加载较慢，不再让用户在 120s 超时窗口内只看到「加载中」。
+  const [isSlowLoad, setIsSlowLoad] = useState(false)
+  useEffect(() => {
+    if (!showInitialLoading) {
+      setIsSlowLoad(false)
+      return
+    }
+    const timer = setTimeout(() => setIsSlowLoad(true), SLOW_LOAD_HINT_MS)
+    return () => clearTimeout(timer)
+  }, [showInitialLoading])
   const showRefreshLoading = showInitialLoading
   // Index building/ready/off are implementation details of how the list is
   // loaded, not something the user acts on, so they stay silent in both the
@@ -972,14 +987,14 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
                   size="sm"
                   tone="strong"
                   title={t('sidebar.sessionListFailed')}
-                  detail={error}
+                  detail={describeApiFailure(errorKind, error, t)}
                   onRetry={() => fetchSessions()}
                   retryLabel={t('common.retry')}
                 />
               )}
               {showInitialLoading ? (
                 <div className="px-3 py-4 text-center text-xs text-[var(--color-text-tertiary)]">
-                  {t('common.loading')}
+                  {isSlowLoad ? t('sidebar.slowLoading') : t('common.loading')}
                 </div>
               ) : !error && filteredSessions.length === 0 && (
                 <div className="px-3 py-2">

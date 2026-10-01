@@ -70,6 +70,15 @@ export class ApiError extends Error {
 }
 
 /**
+ * C1（缺陷裁决九）：错误分类标注。request() 抛错时给错误实例附加 kind——
+ * 不改抛出时机、不改抛出条件、不改 message 本身；消费方按需读取做展示映射，
+ * 业务 message（ApiError 直出契约）不受影响。
+ */
+export type ApiFailureKind = 'timeout' | 'network' | 'business' | 'server'
+
+export type ApiErrorWithKind = Error & { kind?: ApiFailureKind }
+
+/**
  * 「会话已不存在」登记表（2026-09-21 诊断）。
  *
  * 会话被删除后，渲染层仍有 1-1.5s 级的按会话轮询（任务列表、成员 transcript）。
@@ -135,7 +144,8 @@ async function request<T>(method: string, path: string, body?: unknown, options?
     return await res.json() as T
   } catch (err) {
     if (timedOut) {
-      const timeoutError = new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s`)
+      const timeoutError = new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s`) as ApiErrorWithKind
+      timeoutError.kind = 'timeout'
       reportApiFailure(method, path, timeoutError)
       throw timeoutError
     }
@@ -145,6 +155,18 @@ async function request<T>(method: string, path: string, body?: unknown, options?
         : new DOMException('The operation was aborted', 'AbortError')
     }
     reportApiFailure(method, path, err)
+    // C1：附加错误分类标注（不改 err 的消息与身份；已有 kind 不覆盖）。
+    const kinded = err as ApiErrorWithKind
+    if (kinded.kind === undefined) {
+      if (err instanceof ApiError) {
+        const body = err.body as { message?: unknown } | null | undefined
+        kinded.kind = typeof body?.message === 'string' && body.message.trim() !== ''
+          ? 'business'
+          : 'server'
+      } else {
+        kinded.kind = 'network'
+      }
+    }
     throw err
   } finally {
     clearTimeout(timeout)

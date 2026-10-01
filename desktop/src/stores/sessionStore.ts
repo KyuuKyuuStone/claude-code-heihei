@@ -1,3 +1,4 @@
+import type { ApiErrorWithKind, ApiFailureKind } from '../api/client'
 import { create } from 'zustand'
 import {
   sessionsApi,
@@ -32,6 +33,8 @@ type SessionStore = {
   activeSessionId: string | null
   isLoading: boolean
   error: string | null
+  /** C1：fetchSessions 失败的错误分类（timeout/network/business/server），供展示层映射人话。 */
+  errorKind?: ApiFailureKind
   indexStatus: LocalIndexStatus | null
   sessionListRequestId: number
   isBatchMode: boolean
@@ -80,7 +83,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   fetchSessions: async (project?: string) => {
     const requestId = ++fetchSessionsRequestId
-    set({ isLoading: true, error: null, sessionListRequestId: requestId })
+    set({ isLoading: true, error: null, errorKind: undefined, sessionListRequestId: requestId })
     try {
       const response = await sessionsApi.list(buildSessionListParams(project))
       if (requestId !== get().sessionListRequestId) return
@@ -106,7 +109,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       syncOpenSessionTabTitles(syncedSessions)
     } catch (err) {
       if (requestId !== get().sessionListRequestId) return
-      set({ error: (err as Error).message, isLoading: false })
+      set({ error: (err as Error).message, errorKind: (err as ApiErrorWithKind).kind, isLoading: false })
     }
   },
 
