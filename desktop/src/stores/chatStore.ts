@@ -39,6 +39,52 @@ import type {
   SlashCommandOption,
   SlashCommandSource,
 } from '../types/slashCommand'
+import {
+  AGENT_COMPLETION_NOTIFICATION_PREVIEW_CHARS,
+  COMMAND_METADATA_BLOCK_RE,
+  COMMAND_METADATA_TAGS,
+  COMPACT_SUMMARY_CUTOFFS,
+  COMPACT_SUMMARY_PREFIX,
+  DETAILED_IMAGE_SOURCE_RE,
+  GOAL_EVENT_ACTIONS,
+  HISTORY_PAGE_SIZE,
+  IMAGE_ONLY_REPLAY_FALLBACK,
+  IMAGE_RESIZE_METADATA_RE,
+  MATERIALIZED_UPLOAD_NAME_RE,
+  SIMPLE_IMAGE_SOURCE_RE,
+  TASK_NOTIFICATION_RE,
+  TASK_RELATED_TOOL_NAMES,
+  TASK_STOP_TOOL_NAMES,
+  TASK_TOOL_NAMES,
+  TEAMMATE_CONTENT_REGEX,
+  VISUAL_SELECTION_PROMPT_FOOTER,
+  VISUAL_SELECTION_PROMPT_HEADER,
+} from './chat/chatConstants'
+import {
+  addPendingTaskToolUseId,
+  appendPendingDelta,
+  appendPendingToolInputDelta,
+  clearPendingDelta,
+  clearPendingTaskToolUseIds,
+  clearPendingToolInputDelta,
+  clearPendingToolParentUseIds,
+  consumeAllPendingTaskToolUseIds,
+  consumePendingDelta,
+  consumePendingTaskToolUseId,
+  consumePendingToolInputDelta,
+  consumePendingToolParentUseId,
+  getPendingToolParentUseId,
+  rememberPendingToolParentUseId,
+  clearPendingDeltaFlushTimer,
+  dropPendingDelta,
+  hasPendingDelta,
+  hasPendingDeltaFlushTimer,
+  hasPendingToolInputFlushTimer,
+  peekPendingDelta,
+  setPendingDeltaFlushTimer,
+  setPendingToolInputFlushTimer,
+} from './chat/chatPendingRegistry'
+export { HISTORY_PAGE_SIZE } from './chat/chatConstants'
 
 type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting'
 type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
@@ -353,71 +399,6 @@ type ChatStore = {
   handleServerMessage: (sessionId: string, msg: ServerMessage) => void
 }
 
-const TASK_TOOL_NAMES = new Set(['TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList', 'TodoWrite'])
-const TASK_STOP_TOOL_NAMES = new Set(['TaskStop', 'KillShell'])
-const pendingTaskToolUseIdsBySession = new Map<string, Set<string>>()
-const pendingToolParentUseIdsBySession = new Map<string, Map<string, string>>()
-
-function addPendingTaskToolUseId(sessionId: string, toolUseId: string): void {
-  const ids = pendingTaskToolUseIdsBySession.get(sessionId) ?? new Set<string>()
-  ids.add(toolUseId)
-  pendingTaskToolUseIdsBySession.set(sessionId, ids)
-}
-
-function consumePendingTaskToolUseId(sessionId: string, toolUseId: string): boolean {
-  const ids = pendingTaskToolUseIdsBySession.get(sessionId)
-  if (!ids?.has(toolUseId)) return false
-  ids.delete(toolUseId)
-  if (ids.size === 0) pendingTaskToolUseIdsBySession.delete(sessionId)
-  return true
-}
-
-function clearPendingTaskToolUseIds(sessionId: string): void {
-  pendingTaskToolUseIdsBySession.delete(sessionId)
-}
-
-function consumeAllPendingTaskToolUseIds(sessionId: string): boolean {
-  const hasPendingTaskTools =
-    (pendingTaskToolUseIdsBySession.get(sessionId)?.size ?? 0) > 0
-  pendingTaskToolUseIdsBySession.delete(sessionId)
-  return hasPendingTaskTools
-}
-
-function rememberPendingToolParentUseId(
-  sessionId: string,
-  toolUseId: string | null | undefined,
-  parentToolUseId: string | undefined,
-): void {
-  if (!toolUseId || !parentToolUseId) return
-  const parentUseIds = pendingToolParentUseIdsBySession.get(sessionId) ?? new Map<string, string>()
-  parentUseIds.set(toolUseId, parentToolUseId)
-  pendingToolParentUseIdsBySession.set(sessionId, parentUseIds)
-}
-
-function getPendingToolParentUseId(sessionId: string, toolUseId: string): string | undefined {
-  return pendingToolParentUseIdsBySession.get(sessionId)?.get(toolUseId)
-}
-
-function consumePendingToolParentUseId(sessionId: string, toolUseId: string): string | undefined {
-  const parentUseIds = pendingToolParentUseIdsBySession.get(sessionId)
-  if (!parentUseIds) return undefined
-  const parentToolUseId = parentUseIds.get(toolUseId)
-  parentUseIds.delete(toolUseId)
-  if (parentUseIds.size === 0) pendingToolParentUseIdsBySession.delete(sessionId)
-  return parentToolUseId
-}
-
-function clearPendingToolParentUseIds(sessionId: string): void {
-  pendingToolParentUseIdsBySession.delete(sessionId)
-}
-const AGENT_COMPLETION_NOTIFICATION_PREVIEW_CHARS = 160
-const COMPACT_SUMMARY_PREFIX =
-  'This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.'
-const COMPACT_SUMMARY_CUTOFFS = [
-  '\n\nIf you need specific details from before compaction',
-  '\n\nContinue the conversation from where it left off',
-  '\nContinue the conversation from where it left off',
-]
 
 let msgCounter = 0
 const nextId = () => `msg-${++msgCounter}-${Date.now()}`
@@ -523,64 +504,6 @@ function markPendingToolUseMessagesStopped(messages: UIMessage[]): UIMessage[] {
 
 // Streaming throttle for content_delta. Buffers must be per-session because
 // multiple desktop tabs can stream at the same time.
-const pendingDeltaBySession = new Map<string, string>()
-const flushTimerBySession = new Map<string, ReturnType<typeof setTimeout>>()
-const pendingToolInputDeltaBySession = new Map<string, string>()
-const toolInputFlushTimerBySession = new Map<string, ReturnType<typeof setTimeout>>()
-
-function consumePendingDelta(sessionId: string): string {
-  const flushTimer = flushTimerBySession.get(sessionId)
-  if (flushTimer) {
-    clearTimeout(flushTimer)
-    flushTimerBySession.delete(sessionId)
-  }
-  const text = pendingDeltaBySession.get(sessionId) ?? ''
-  pendingDeltaBySession.delete(sessionId)
-  return text
-}
-
-function appendPendingDelta(sessionId: string, text: string): void {
-  pendingDeltaBySession.set(
-    sessionId,
-    `${pendingDeltaBySession.get(sessionId) ?? ''}${text}`,
-  )
-}
-
-function clearPendingDelta(sessionId: string): void {
-  const flushTimer = flushTimerBySession.get(sessionId)
-  if (flushTimer) {
-    clearTimeout(flushTimer)
-    flushTimerBySession.delete(sessionId)
-  }
-  pendingDeltaBySession.delete(sessionId)
-}
-
-function consumePendingToolInputDelta(sessionId: string): string {
-  const flushTimer = toolInputFlushTimerBySession.get(sessionId)
-  if (flushTimer) {
-    clearTimeout(flushTimer)
-    toolInputFlushTimerBySession.delete(sessionId)
-  }
-  const text = pendingToolInputDeltaBySession.get(sessionId) ?? ''
-  pendingToolInputDeltaBySession.delete(sessionId)
-  return text
-}
-
-function appendPendingToolInputDelta(sessionId: string, text: string): void {
-  pendingToolInputDeltaBySession.set(
-    sessionId,
-    `${pendingToolInputDeltaBySession.get(sessionId) ?? ''}${text}`,
-  )
-}
-
-function clearPendingToolInputDelta(sessionId: string): void {
-  const flushTimer = toolInputFlushTimerBySession.get(sessionId)
-  if (flushTimer) {
-    clearTimeout(flushTimer)
-    toolInputFlushTimerBySession.delete(sessionId)
-  }
-  pendingToolInputDeltaBySession.delete(sessionId)
-}
 
 /**
  * 后台（异步）子 agent 的工具活动会带着 parentToolUseId 冒泡进主消息流，但
@@ -1128,9 +1051,6 @@ function summarizeTokenUsageFromHistory(messages: MessageEntry[]): TokenUsage | 
   }
 }
 
-/** v1.5.0 首开窗口大小：只拉最近一页历史，向上滚动再按游标翻更早页。 */
-export const HISTORY_PAGE_SIZE = 200
-
 async function fetchAndMapSessionHistory(
   sessionId: string,
   params?: { limit?: number; before?: number },
@@ -1252,7 +1172,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   disconnectSession: (sessionId) => {
     const session = get().sessions[sessionId]
     if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
-    if (pendingDeltaBySession.has(sessionId)) {
+    if (hasPendingDelta(sessionId)) {
       const text = consumePendingDelta(sessionId)
       set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, (sess) => ({ streamingText: sess.streamingText + text })) }))
     }
@@ -2274,23 +2194,23 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           if (!get().sessions[sessionId]) break
           receivedLiveDelta = true
           appendPendingDelta(sessionId, msg.text)
-          if (!flushTimerBySession.has(sessionId)) {
+          if (!hasPendingDeltaFlushTimer(sessionId)) {
             const timer = setTimeout(() => {
-              const text = pendingDeltaBySession.get(sessionId) ?? ''
-              pendingDeltaBySession.delete(sessionId)
-              flushTimerBySession.delete(sessionId)
+              const text = peekPendingDelta(sessionId) ?? ''
+              dropPendingDelta(sessionId)
+              clearPendingDeltaFlushTimer(sessionId)
               update((s) => ({
                 streamingText: s.streamingText + text,
                 streamingResponseChars: s.streamingResponseChars + text.length,
               }))
             }, 50)
-            flushTimerBySession.set(sessionId, timer)
+            setPendingDeltaFlushTimer(sessionId, timer)
           }
         }
         if (msg.toolInput !== undefined) {
           receivedLiveDelta = true
           appendPendingToolInputDelta(sessionId, msg.toolInput)
-          if (!toolInputFlushTimerBySession.has(sessionId)) {
+          if (!hasPendingToolInputFlushTimer(sessionId)) {
             const timer = setTimeout(() => {
               const text = consumePendingToolInputDelta(sessionId)
               if (!text) return
@@ -2321,7 +2241,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                 }
               })
             }, 50)
-            toolInputFlushTimerBySession.set(sessionId, timer)
+            setPendingToolInputFlushTimer(sessionId, timer)
           }
         }
         if (receivedLiveDelta && get().sessions[sessionId]?.chatState !== 'idle') ensureTurnStartedAt()
@@ -3077,16 +2997,6 @@ function updateOptimisticSessionTitle(sessionId: string, content: string): void 
 type AssistantHistoryBlock = { type: string; text?: string; thinking?: string; name?: string; id?: string; input?: unknown }
 type UserHistoryBlock = { type: string; text?: string; tool_use_id?: string; content?: unknown; is_error?: boolean; source?: { data?: string; media_type?: string }; mimeType?: string; media_type?: string; name?: string }
 
-const TASK_NOTIFICATION_RE = /^<task-notification>\s*[\s\S]*<\/task-notification>$/i
-const GOAL_EVENT_ACTIONS = new Set<GoalEventAction>([
-  'created',
-  'replaced',
-  'status',
-  'paused',
-  'resumed',
-  'completed',
-  'cleared',
-  'message',
 ])
 
 /**
@@ -3097,12 +3007,6 @@ const GOAL_EVENT_ACTIONS = new Set<GoalEventAction>([
 function isTeammateMessage(text: string): boolean {
   return text.includes('<teammate-message') && text.includes('</teammate-message>')
 }
-
-const SIMPLE_IMAGE_SOURCE_RE = /^\[Image source: (.+)\]$/
-const DETAILED_IMAGE_SOURCE_RE = /^\[Image: source: (.+?)(?:, original \d+x\d+, displayed at \d+x\d+\. Multiply coordinates by \d+(?:\.\d+)? to map to original image\.)?\]$/
-const IMAGE_RESIZE_METADATA_RE = /^\[Image: original \d+x\d+, displayed at \d+x\d+\. Multiply coordinates by \d+(?:\.\d+)? to map to original image\.\]$/
-const VISUAL_SELECTION_PROMPT_HEADER = '请根据截图中编号 1 的蓝色标注修改本地前端。'
-const VISUAL_SELECTION_PROMPT_FOOTER = '请优先依据截图里的编号标注定位元素，selector 只作为辅助线索。'
 
 type VisualSelectionHistoryDisplay = {
   displayName: string
@@ -3237,15 +3141,6 @@ function extractHistoryTextBlocks(content: unknown): string[] {
     .map((text) => text.trim())
     .filter(Boolean)
 }
-
-const COMMAND_METADATA_TAGS = new Set([
-  'command-name',
-  'command-message',
-  'command-args',
-  'local-command-caveat',
-  'skill-format',
-])
-const COMMAND_METADATA_BLOCK_RE = /<([a-z][\w-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1>\s*/gi
 
 function hasCommandMetadataTag(text: string): boolean {
   return (
@@ -3699,8 +3594,6 @@ function mergeBackgroundAgentTaskRecords(
   )
 }
 
-const TEAMMATE_CONTENT_REGEX = /<teammate-message\s+teammate_id="([^"]+)"[^>]*>\n?([\s\S]*?)\n?<\/teammate-message>/g
-
 function extractVisibleTeammateMessageContents(text: string): string[] {
   const contents: string[] = []
 
@@ -3943,8 +3836,6 @@ function extractRestoredUserDisplay(text: string): RestoredUserDisplay {
 
 // ConversationService stores data-only files as `${randomUUID()}-${sanitizedName}`
 // and omits successfully inlined images from the replayed text content.
-const MATERIALIZED_UPLOAD_NAME_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}-(.+)$/i
-const IMAGE_ONLY_REPLAY_FALLBACK = 'Please analyze the attached image.'
 
 function isLikelyInlineImageAttachment(attachment: UIAttachment): boolean {
   if (attachment.type === 'image') return true
@@ -4478,8 +4369,6 @@ function extractLastTodoWriteFromHistory(messages: MessageEntry[]): Array<{ cont
   }
   return todos
 }
-
-const TASK_RELATED_TOOL_NAMES = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList'])
 
 function hasUserMessagesAfterTaskCompletion(messages: MessageEntry[]): boolean {
   let lastTaskIndex = -1
