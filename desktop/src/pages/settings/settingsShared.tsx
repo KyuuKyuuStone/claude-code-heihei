@@ -20,3 +20,12 @@ export function SettingsCheckboxMark({ checked, disabled = false }: { checked: b
     </span>
   )
 }
+
+export function isValidHttpProxyUrl(value: string) {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
