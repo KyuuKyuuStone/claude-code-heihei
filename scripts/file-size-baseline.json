@@ -85,10 +85,6 @@
       "lines": 3661,
       "kind": "upstream"
     },
-    "desktop/src/components/chat/MessageList.tsx": {
-      "lines": 2091,
-      "kind": "own"
-    },
     "desktop/src/stores/chatStore.ts": {
       "lines": 4496,
       "kind": "own"
