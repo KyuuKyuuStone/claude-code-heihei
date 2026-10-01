@@ -75,6 +75,21 @@ import type {
 } from './localIndex/sessionIndex.js'
 import type { LocalIndexStatus } from './localIndex/types.js'
 import { diagnosticsService } from './diagnosticsService.js'
+// v1.7 结构拆分（sessionService 第①批 · 纯移动）：转录内容分类与任务通知解析。
+// 下面 4 个常量只被这 10 个函数使用；SessionTaskNotification 是门面导出类型，
+// 新模块以 import type 引用（类型擦除，不引入运行时循环）。
+import {
+  decodeXmlText,
+  extractTaskNotificationXml,
+  extractTextBlocks,
+  isSyntheticNoResponseAssistant,
+  isSyntheticUserInterruption,
+  isTaskNotificationContent,
+  isToolResultContent,
+  parsePersistedTaskNotification,
+  parseTaskNotificationContent,
+  readXmlTag,
+} from './session/transcriptContent.js'
 
 // ============================================================================
 // Types
@@ -398,14 +413,9 @@ const VALID_SESSION_EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'xhigh', '
 
 type ContentBlock = Record<string, unknown>
 
-const USER_INTERRUPTION_TEXTS = new Set([
-  '[Request interrupted by user]',
-  '[Request interrupted by user for tool use]',
-])
-
-const NO_RESPONSE_REQUESTED_TEXT = 'No response requested.'
-const TASK_NOTIFICATION_RE = /^<task-notification>\s*[\s\S]*<\/task-notification>$/i
-const TASK_NOTIFICATION_BLOCK_RE = /<task-notification>\s*[\s\S]*?<\/task-notification>/i
+// v1.7 结构拆分（sessionService 第①批）：USER_INTERRUPTION_TEXTS /
+// NO_RESPONSE_REQUESTED_TEXT / TASK_NOTIFICATION_RE / TASK_NOTIFICATION_BLOCK_RE
+// 只被转录内容解析那 10 个方法使用，已随它们搬到 ./session/transcriptContent.js。
 const PERSISTED_TASK_NOTIFICATION_ENTRY_TYPE = 'cc-heihei-task-notification'
 const PROVIDER_MODEL_ALIAS_SEPARATORS = ['-', '_', ':', '/', '.', ' ']
 
@@ -1691,141 +1701,20 @@ export class SessionService {
     }
   }
 
-  private extractTextBlocks(content: unknown): string[] {
-    if (typeof content === 'string') return [content]
-    if (!Array.isArray(content)) return []
-
-    return content
-      .flatMap((block) => {
-        if (!block || typeof block !== 'object') return []
-        const record = block as Record<string, unknown>
-        return record.type === 'text' && typeof record.text === 'string'
-          ? [record.text]
-          : []
-      })
-      .map((text) => text.trim())
-      .filter(Boolean)
-  }
-
-  private isSyntheticUserInterruption(content: unknown): boolean {
-    const textBlocks = this.extractTextBlocks(content)
-    return (
-      textBlocks.length > 0 &&
-      textBlocks.every((text) => USER_INTERRUPTION_TEXTS.has(text))
-    )
-  }
-
-  private isSyntheticNoResponseAssistant(content: unknown): boolean {
-    const textBlocks = this.extractTextBlocks(content)
-    return (
-      textBlocks.length > 0 &&
-      textBlocks.every((text) => text === NO_RESPONSE_REQUESTED_TEXT)
-    )
-  }
-
-  private isToolResultContent(content: unknown): boolean {
-    return (
-      Array.isArray(content) &&
-      content.some((block) =>
-        block &&
-        typeof block === 'object' &&
-        (block as Record<string, unknown>).type === 'tool_result'
-      )
-    )
-  }
-
-  private isTaskNotificationContent(content: unknown): boolean {
-    const textBlocks = this.extractTextBlocks(content)
-    return (
-      textBlocks.length > 0 &&
-      textBlocks.every((text) => this.extractTaskNotificationXml(text) !== null)
-    )
-  }
-
-  private extractTaskNotificationXml(text: string): string | null {
-    const trimmed = text.trim()
-    if (TASK_NOTIFICATION_RE.test(trimmed)) return trimmed
-    return trimmed.match(TASK_NOTIFICATION_BLOCK_RE)?.[0] ?? null
-  }
-
-  private decodeXmlText(text: string): string {
-    return text
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/&amp;/g, '&')
-  }
-
-  private readXmlTag(xml: string, tag: string): string | undefined {
-    const match = xml.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i'))
-    return match?.[1] ? this.decodeXmlText(match[1].trim()) : undefined
-  }
-
-  private parseTaskNotificationContent(
-    content: unknown,
-    timestamp?: string,
-  ): SessionTaskNotification | null {
-    const xml = this.extractTextBlocks(content)
-      .map((text) => this.extractTaskNotificationXml(text))
-      .find((value): value is string => value !== null)
-    if (!xml) return null
-
-    const toolUseId = this.readXmlTag(xml, 'tool-use-id')
-    const status = this.readXmlTag(xml, 'status')
-    if (
-      !toolUseId ||
-      (status !== 'completed' && status !== 'failed' && status !== 'stopped')
-    ) {
-      return null
-    }
-
-    const taskId = this.readXmlTag(xml, 'task-id') || toolUseId
-    const summary = this.readXmlTag(xml, 'summary')
-    const result = this.readXmlTag(xml, 'result')
-    const outputFile = this.readXmlTag(xml, 'output-file')
-    return {
-      taskId,
-      toolUseId,
-      status,
-      ...(summary ? { summary } : {}),
-      ...(result ? { result } : {}),
-      ...(outputFile ? { outputFile } : {}),
-      ...(timestamp ? { timestamp } : {}),
-    }
-  }
-
-  private parsePersistedTaskNotification(
-    value: unknown,
-    timestamp?: string,
-  ): SessionTaskNotification | null {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-    const notification = value as Record<string, unknown>
-    const toolUseId = typeof notification.toolUseId === 'string'
-      ? notification.toolUseId
-      : null
-    const status = notification.status
-    if (
-      !toolUseId ||
-      (status !== 'completed' && status !== 'failed' && status !== 'stopped')
-    ) {
-      return null
-    }
-
-    const optionalString = (key: string) =>
-      typeof notification[key] === 'string' && notification[key]
-        ? notification[key] as string
-        : undefined
-    return {
-      taskId: optionalString('taskId') ?? toolUseId,
-      toolUseId,
-      status,
-      ...(optionalString('summary') ? { summary: optionalString('summary') } : {}),
-      ...(optionalString('result') ? { result: optionalString('result') } : {}),
-      ...(optionalString('outputFile') ? { outputFile: optionalString('outputFile') } : {}),
-      ...(timestamp ? { timestamp } : {}),
-    }
-  }
+  // ── v1.7 结构拆分（sessionService 第①批）：转录内容分类与任务通知解析共 10 个
+  // 方法搬到 ./session/transcriptContent.ts，此处改为同名类字段委托。组外调用点
+  // （shouldHideTranscriptEntry / isGoalLocalCommandEntry / entriesToMessages 等）
+  // 的 this.xxx(...) 文本一行未改。
+  private extractTextBlocks = extractTextBlocks
+  private isSyntheticUserInterruption = isSyntheticUserInterruption
+  private isSyntheticNoResponseAssistant = isSyntheticNoResponseAssistant
+  private isToolResultContent = isToolResultContent
+  private isTaskNotificationContent = isTaskNotificationContent
+  private extractTaskNotificationXml = extractTaskNotificationXml
+  private decodeXmlText = decodeXmlText
+  private readXmlTag = readXmlTag
+  private parseTaskNotificationContent = parseTaskNotificationContent
+  private parsePersistedTaskNotification = parsePersistedTaskNotification
 
   private shouldHideTranscriptEntry(entry: RawEntry): boolean {
     const role = entry.message?.role
