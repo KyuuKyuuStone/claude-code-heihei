@@ -59,6 +59,13 @@ import {
   isVisibleTranscriptMessageEntry,
   shouldHideTranscriptEntry,
 } from './session/transcriptEntries.js'
+// normalizeMessageUsage 随第⑤批搬到 messageConversion.ts 并导出；它仍被本文件
+// 红灯段 accumulateUsageFromLine 使用，故以值导入引回（门面导出面零变化）。
+import {
+  entriesToMessages,
+  entryToMessage,
+  normalizeMessageUsage,
+} from './session/messageConversion.js'
 import type {
   PersistedWorktreeSession,
   SessionListSummary,
@@ -337,8 +344,6 @@ export type TranscriptContextEstimate = {
 // v1.7 结构拆分（sessionService 第②批）：RawEntry 随 Agent 子链 / Goal 本地命令
 // 解析方法搬到 ./session/transcriptAgents.ts，本文件改为 import type（仍不对外导出）。
 
-type RawMessageUsage = NonNullable<RawEntry['message']>['usage']
-
 /**
  * 摘要取不到时的兜底（v1.5.0 花名册高危修复）：**仅在文件存在、摘要这一步
  * 失败**时使用——让花名册条目照常显示（title 退化为 id 前缀、workDir 未知），
@@ -361,32 +366,6 @@ type UsageAccumulator = {
   outputTokens: number
   cacheReadTokens: number
   cacheCreationTokens: number
-}
-
-function normalizeMessageUsage(usage: RawMessageUsage): MessageUsage | undefined {
-  if (!usage) return undefined
-
-  const normalized: MessageUsage = {}
-  if (typeof usage.input_tokens === 'number' && Number.isFinite(usage.input_tokens)) {
-    normalized.input_tokens = usage.input_tokens
-  }
-  if (typeof usage.output_tokens === 'number' && Number.isFinite(usage.output_tokens)) {
-    normalized.output_tokens = usage.output_tokens
-  }
-  if (
-    typeof usage.cache_read_input_tokens === 'number' &&
-    Number.isFinite(usage.cache_read_input_tokens)
-  ) {
-    normalized.cache_read_input_tokens = usage.cache_read_input_tokens
-  }
-  if (
-    typeof usage.cache_creation_input_tokens === 'number' &&
-    Number.isFinite(usage.cache_creation_input_tokens)
-  ) {
-    normalized.cache_creation_input_tokens = usage.cache_creation_input_tokens
-  }
-
-  return Object.keys(normalized).length > 0 ? normalized : undefined
 }
 
 type SessionListSummaryCacheEntry = {
@@ -1474,60 +1453,13 @@ export class SessionService {
   // Entry → MessageEntry conversion
   // --------------------------------------------------------------------------
 
-  private entryToMessage(
-    entry: RawEntry,
-    parentToolUseId?: string,
-  ): MessageEntry | null {
-    const msg = entry.message
-    if (!msg || !msg.role) return null
-
-    // Determine our normalized type
-    let type: MessageEntry['type']
-    const role = msg.role
-
-    if (role === 'user') {
-      // Check if the content is a tool_result array
-      if (Array.isArray(msg.content)) {
-        const hasToolResult = msg.content.some(
-          (block: Record<string, unknown>) => block.type === 'tool_result'
-        )
-        if (hasToolResult) {
-          type = 'tool_result'
-        } else {
-          type = 'user'
-        }
-      } else {
-        type = 'user'
-      }
-    } else if (role === 'assistant') {
-      // Check if the content contains tool_use blocks
-      if (Array.isArray(msg.content)) {
-        const hasToolUse = msg.content.some(
-          (block: Record<string, unknown>) => block.type === 'tool_use'
-        )
-        type = hasToolUse ? 'tool_use' : 'assistant'
-      } else {
-        type = 'assistant'
-      }
-    } else {
-      type = 'system'
-    }
-
-    const usage = normalizeMessageUsage(msg.usage)
-
-    return {
-      id: entry.uuid || crypto.randomUUID(),
-      type,
-      content: msg.content,
-      ...(entry.toolUseResult !== undefined ? { toolUseResult: entry.toolUseResult } : {}),
-      timestamp: entry.timestamp || new Date().toISOString(),
-      model: msg.model,
-      ...(usage ? { usage } : {}),
-      parentUuid: entry.parentUuid ?? undefined,
-      parentToolUseId,
-      isSidechain: entry.isSidechain,
-    }
-  }
+  // ── v1.7 结构拆分（sessionService 第⑤批）：RawEntry → MessageEntry 转换共 3 个
+  // 方法搬到 ./session/messageConversion.ts。其中 entryToMessage / entriesToMessages
+  // 有组外调用点（loadSubagentToolMessages 1 处、getSessionMessages 系列 5 处，共 6 处），
+  // 此处改为同名类字段委托，调用点 this.xxx(...) 文本一行未改；
+  // resolveParentToolUseId 的唯一调用点在 entriesToMessages 内部（已随本批搬走），
+  // 门面已无组外调用点，**不留死委托**，直接由新模块内部裸调用。
+  private entryToMessage = entryToMessage
 
   // ── v1.7 结构拆分（sessionService 第①批）：转录内容分类与任务通知解析共 10 个
   // 方法搬到 ./session/transcriptContent.ts，此处改为同名类字段委托。组外调用点
@@ -1632,61 +1564,6 @@ export class SessionService {
       ),
     )
     return [...messages, ...childMessages.flat()]
-  }
-
-  private resolveParentToolUseId(
-    entry: RawEntry,
-    entriesByUuid: Map<string, RawEntry>,
-    cache: Map<string, string | undefined>,
-  ): string | undefined {
-    if (
-      typeof entry.parent_tool_use_id === 'string' &&
-      entry.parent_tool_use_id.length > 0
-    ) {
-      return entry.parent_tool_use_id
-    }
-
-    if (entry.isSidechain !== true) {
-      return undefined
-    }
-
-    const cacheKey = entry.uuid
-    if (cacheKey && cache.has(cacheKey)) {
-      return cache.get(cacheKey)
-    }
-
-    let resolved: string | undefined
-    let currentParentUuid =
-      typeof entry.parentUuid === 'string' ? entry.parentUuid : undefined
-    const visited = new Set<string>()
-
-    while (currentParentUuid && !visited.has(currentParentUuid)) {
-      visited.add(currentParentUuid)
-      const parentEntry = entriesByUuid.get(currentParentUuid)
-      if (!parentEntry) break
-
-      const directAgentToolUseId = this.extractAgentToolUseId(parentEntry)
-      if (directAgentToolUseId) {
-        resolved = directAgentToolUseId
-        break
-      }
-
-      if (parentEntry.uuid && cache.has(parentEntry.uuid)) {
-        resolved = cache.get(parentEntry.uuid)
-        break
-      }
-
-      currentParentUuid =
-        typeof parentEntry.parentUuid === 'string'
-          ? parentEntry.parentUuid
-          : undefined
-    }
-
-    if (cacheKey) {
-      cache.set(cacheKey, resolved)
-    }
-
-    return resolved
   }
 
   // --------------------------------------------------------------------------
@@ -4004,72 +3881,8 @@ export class SessionService {
   // Private helpers
   // --------------------------------------------------------------------------
 
-  private entriesToMessages(entries: RawEntry[]): MessageEntry[] {
-    const messages: MessageEntry[] = []
-    const entriesByUuid = new Map<string, RawEntry>()
-    const parentToolUseIdCache = new Map<string, string | undefined>()
-    let suppressTaskNotificationResponse = false
-
-    for (const entry of entries) {
-      if (typeof entry.uuid === 'string' && entry.uuid.length > 0) {
-        entriesByUuid.set(entry.uuid, entry)
-      }
-    }
-
-    for (const entry of entries) {
-      const goalLocalCommandMessage = this.goalLocalCommandEntryToMessage(entry)
-      if (goalLocalCommandMessage) {
-        messages.push(goalLocalCommandMessage)
-        continue
-      }
-
-      // Only process transcript entries (user / assistant / system with messages)
-      if (!entry.message?.role) continue
-
-      // Skip meta entries (CLI internal bookkeeping)
-      if (entry.isMeta) continue
-
-      const isTaskNotification =
-        entry.message.role === 'user' &&
-        this.isTaskNotificationContent(entry.message.content)
-      if (isTaskNotification) {
-        suppressTaskNotificationResponse = true
-        continue
-      }
-
-      if (
-        entry.message.role === 'user' &&
-        !this.isToolResultContent(entry.message.content)
-      ) {
-        suppressTaskNotificationResponse = false
-      } else if (suppressTaskNotificationResponse) {
-        continue
-      }
-
-      if (this.shouldHideTranscriptEntry(entry)) continue
-
-      // Skip non-transcript entry types
-      const entryType = entry.type
-      if (
-        entryType !== 'user' &&
-        entryType !== 'assistant' &&
-        entryType !== 'system'
-      ) {
-        continue
-      }
-
-      const parentToolUseId = this.resolveParentToolUseId(
-        entry,
-        entriesByUuid,
-        parentToolUseIdCache,
-      )
-      const msg = this.entryToMessage(entry, parentToolUseId)
-      if (msg) {
-        messages.push(msg)
-      }
-    }
-    return messages
-  }
+  // 第⑤批：entriesToMessages 已搬到 ./session/messageConversion.ts（同批，委托块见上）。
+  private entriesToMessages = entriesToMessages
 
   private async pathExists(targetPath: string | null): Promise<boolean> {
     if (!targetPath) return false
