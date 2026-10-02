@@ -6,7 +6,7 @@ type EnvLike = Record<string, string | undefined>
 
 /**
  * Get the default timeout for bash operations in milliseconds
- * Checks BASH_DEFAULT_TIMEOUT_MS environment variable or returns 2 minutes default
+ * Checks BASH_DEFAULT_TIMEOUT_MS environment variable or returns the default (320s)
  * @param env Environment variables to check (defaults to process.env for production use)
  */
 export function getDefaultBashTimeoutMs(env: EnvLike = process.env): number {
