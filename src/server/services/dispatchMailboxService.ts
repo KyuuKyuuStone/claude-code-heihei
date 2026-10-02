@@ -26,7 +26,11 @@ import { servantService, type ServantInfo } from './servantService.js'
 import { sessionService } from './sessionService.js'
 import { sessionMessenger } from './sessionMessenger.js'
 import { collabTaskService } from './collabTaskService.js'
-import { appendReportFooter, resolveReportTarget } from './reportTargetResolver.js'
+import {
+  appendReportFooter,
+  appendReportFooterForReport,
+  resolveReportTarget,
+} from './reportTargetResolver.js'
 import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 
 export type DispatchPayload = {
@@ -468,12 +472,17 @@ export class DispatchMailboxService {
       const isDispatch =
         Boolean(targetServant?.enabled) && !targetServant?.supervisor && !resolution.isReport
       const dispatchTaskId = isDispatch ? payload.taskId?.trim() || crypto.randomUUID() : ''
+      // 员工汇报（信箱通道）：与 HTTP 通道同款——投递前追加可识别页脚，
+      // 让接收侧 UI 能把汇报折叠成一行卡片。非汇报消息原样投递。
+      const deliveredContent = isDispatch
+        ? appendReportFooter(payload.content, dispatchTaskId, payload.fromSessionId ?? '')
+        : resolution.isReport && resolution.reportTaskId
+          ? appendReportFooterForReport(payload.content, resolution.reportTaskId)
+          : payload.content
       try {
         const delivered = await this.deps.deliver(
           targetSessionId,
-          isDispatch
-            ? appendReportFooter(payload.content, dispatchTaskId, payload.fromSessionId ?? '')
-            : payload.content,
+          deliveredContent,
           host,
         )
         if (!delivered) {

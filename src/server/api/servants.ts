@@ -29,7 +29,11 @@ import {
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { collabTaskService } from '../services/collabTaskService.js'
 import { withBroadcastLock } from '../services/broadcastLock.js'
-import { appendReportFooter, resolveReportTarget } from '../services/reportTargetResolver.js'
+import {
+  appendReportFooter,
+  appendReportFooterForReport,
+  resolveReportTarget,
+} from '../services/reportTargetResolver.js'
 import { sameProject } from '../../collaboration/projectPath.js'
 import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 
@@ -308,13 +312,19 @@ export async function handleSessionMessagesApi(
       const dispatchTaskId = isDispatch ? explicitTaskId || crypto.randomUUID() : ''
       const content = String(body.content ?? '')
 
+      // 员工汇报：投递前在末尾追加可识别页脚（接收侧 UI 据此折叠汇报卡）。
+      // 仅在确实是汇报且定位到任务时追加；派活走上一分支，其他消息原样投递。
+      const deliveredContent = isDispatch
+        ? appendReportFooter(content, dispatchTaskId, fromSessionId ?? '')
+        : resolution.isReport && resolution.reportTaskId
+          ? appendReportFooterForReport(content, resolution.reportTaskId)
+          : content
+
       let sent = false
       try {
         sent = await sessionMessenger.deliver(
           targetSessionId,
-          isDispatch
-            ? appendReportFooter(content, dispatchTaskId, fromSessionId ?? '')
-            : content,
+          deliveredContent,
           req.headers.get('host') || '127.0.0.1',
         )
       } catch (error) {

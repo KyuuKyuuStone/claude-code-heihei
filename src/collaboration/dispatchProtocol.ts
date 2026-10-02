@@ -147,7 +147,7 @@ git bash 写 > /dev/null（勿写 > nul，会落成真实文件），PowerShell 
 
 ## 安全手动兜底（原生工具缺失或信箱不可写）
 
-仅未注入工具或传输失败且信箱不可写时使用。业务拒绝（not_on_roster、not_reviewable、task_closed、ledger_unsupported、invalid_target、cross_project、403、409）不可绕过；queued 不补发。读 desktop-server.json 先验 pid 存活，GET /api/whoami 核 startedAt，否则验 CC_HEIHEI_DESKTOP_SERVER_URL。Write 写 UTF-8 JSON + curl --data-binary @文件；禁内联中文、heredoc、curl 与 rm 不得 && 串联。派活 POST /api/session-messages；响应含 messageId 才算派活送达，否则留 payload；无 Bash 写信箱。汇报目标唯一取该条派活页脚；页脚缺失/不可读即停止并报告派活方。旧服务端只回退同项目唯一主管，否则拒绝；信箱 report 附 taskId/summary/deliverables。payload 写工作目录外，信箱例外。
+仅未注入工具或传输失败且信箱不可写时使用。业务拒绝（not_on_roster、not_reviewable、task_closed、ledger_unsupported、invalid_target、cross_project、403、409）不可绕过；queued 不补发。读 desktop-server.json 先验 pid 存活，GET /api/whoami 核 startedAt，否则验 CC_HEIHEI_DESKTOP_SERVER_URL。Write 写 UTF-8 JSON + curl --data-binary @文件；禁内联中文、heredoc、curl 与 rm 不得 && 串联。派活 POST /api/session-messages；响应含 messageId 才算派活送达，否则留 payload；无 Bash 写信箱。汇报目标唯一取该条派活页脚；页脚缺失/不可读即停止并报告派活方。**汇报走 curl 兜底时 payload 必须附 taskId**：接收侧据此把该条识别为汇报并折叠；不附则该条不会被折叠（宁可少折叠，也不要错折叠）。旧服务端只回退同项目唯一主管，否则拒绝；信箱 report 附 taskId/summary/deliverables。payload 写工作目录外，信箱例外。
 
 ## 失败处理与主管职责
 

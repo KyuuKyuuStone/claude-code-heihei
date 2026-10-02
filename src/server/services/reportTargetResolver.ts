@@ -57,6 +57,34 @@ export function appendReportFooter(
   )
 }
 
+/**
+ * 汇报正文末尾的可信系统页脚（接收侧据此把汇报折叠成一行卡片）。
+ *
+ * 与派活页脚 `appendReportFooter` 配对：派活侧写「任务 ID：…；完工汇报目标：…；」
+ * 让员工知道回邮地址，汇报侧写「汇报 · 任务 ID：…；」让**接收方 UI** 能识别这是
+ * 汇报并折叠——用户不需要看见员工之间的互相通知。
+ *
+ * 形态受前端折叠判定约束（消息**最后一个非空行**须匹配
+ * `/【系统】(汇报 · )?任务 ID：([0-9a-fA-F-]{36})；/`），因此：
+ *   - 只在末尾追加，正文其余部分逐字节不变；
+ *   - 页脚独占一行，且必须是最后一个非空行。
+ *
+ * 幂等：末个非空行已是同形页脚（无论派活形还是汇报形）时原样返回，
+ * 重复投递（HTTP 重试、信箱重投）不会叠加第二行。
+ */
+const SYSTEM_FOOTER_LINE_RE = /^【系统】(?:汇报 · )?任务 ID：[0-9a-fA-F-]{36}；/
+
+export function appendReportFooterForReport(content: string, taskId: string): string {
+  const lines = content.split(/\r?\n/)
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!.trim()
+    if (!line) continue
+    if (SYSTEM_FOOTER_LINE_RE.test(line)) return content
+    break
+  }
+  return `${content}\n\n【系统】汇报 · 任务 ID：${taskId}；`
+}
+
 /** 命中的解析步骤（响应字段 resolvedBy） */
 export type ResolveBasis =
   | 'task-id'
@@ -78,16 +106,31 @@ export type ReportTargetResolution = {
    * 汇报不是派活，不该在台账里造出一条 dispatched 任务。
    */
   isReport: boolean
+  /**
+   * 该汇报对应的任务 ID——**仅当请求显式带了 `taskId`（且归属校验通过）时才有值**。
+   * 调用方据此在投递前追加汇报页脚（appendReportFooterForReport）。
+   *
+   * 刻意**不**从 `latest-open-task` 兜底路径取值（架构师裁决：误判方向必须是
+   * 「少折叠」而非「错折叠」）。理由：员工在任务执行期间的常态沟通（提问、
+   * 澄清、中断请求）同样会命中「名下有未结任务」，若据此追加页脚，会把提问
+   * 误标成汇报，并让页脚**永久写进 transcript**（不可逆）。故收紧后：
+   *   - `task-id` 路径：带页脚、折叠 ✓
+   *   - `latest-open-task` 路径：**改投语义照旧**，但不带 taskId、不加页脚、不折叠
+   * 人工 curl 兜底若不带 taskId，同样不折叠——该通道由协议要求补带 taskId 解决
+   * （dispatchProtocol 的兜底段），不靠放松判别。
+   */
+  reportTaskId?: string
 }
 
 function unchanged(
   targetSessionId: string,
-  extra?: { warning?: string; isReport?: boolean },
+  extra?: { warning?: string; isReport?: boolean; reportTaskId?: string },
 ): ReportTargetResolution {
   return {
     targetSessionId,
     isReport: extra?.isReport ?? false,
     ...(extra?.warning ? { warning: extra.warning } : {}),
+    ...(extra?.reportTaskId ? { reportTaskId: extra.reportTaskId } : {}),
   }
 }
 
@@ -161,14 +204,21 @@ export async function resolveReportTarget(input: {
         return unchanged(original, {
           warning: `ambiguous-dispatchers:${[...senders].sort().join(',')}`,
           isReport: true,
+          ...(explicitTaskId ? { reportTaskId: explicitTaskId } : {}),
         })
       }
       const latest = open[0]!
       dispatcherId = latest.fromSessionId
       dispatcherRole = latest.fromRole
       basis = 'latest-open-task'
+      // 注意：此处**不**设置 reportTaskId。这条路径只用于确定「回给谁」，
+      // 不能用来判定「这是汇报」——员工任务期间的提问/澄清同样会命中未结任务。
+      // 改投照旧发生，只是不追加汇报页脚（误判方向取「少折叠」）。
     }
   }
+
+  // 页脚用的任务 ID：**仅取请求里显式带的 taskId**（见 ReportTargetResolution.reportTaskId）。
+  const footerTaskId = explicitTaskId || undefined
 
   // ── 第 3 步：主管交接修正 ─────────────────────────────────────────
   // 派活时快照是 supervisor 的任务，如果派活人现在已经不是主管（例如卸任转岗），
@@ -182,12 +232,18 @@ export async function resolveReportTarget(input: {
         // 请求目标**已经是**现任主管 → 员工写对了，直接放行。
         // 这里必须显式返回：若只是跳过改投，控制流会穿出交接分支落进下面的
         // 「投给派活人」分支，把员工写对的现任主管目标又逆改回旧派活人。
-        if (successor.sessionId === original) return unchanged(original, { isReport: true })
+        if (successor.sessionId === original) {
+          return unchanged(original, {
+            isReport: true,
+            ...(footerTaskId ? { reportTaskId: footerTaskId } : {}),
+          })
+        }
         return {
           targetSessionId: successor.sessionId,
           redirectedFrom: original,
           resolvedBy: 'successor-supervisor',
           isReport: true,
+          ...(footerTaskId ? { reportTaskId: footerTaskId } : {}),
         }
       }
     }
@@ -196,12 +252,16 @@ export async function resolveReportTarget(input: {
   // 第 1、2 步查到了派活人 → 投给它（等于原目标就不算改投）
   if (dispatcherId && basis) {
     return dispatcherId === original
-      ? unchanged(original, { isReport: true })
+      ? unchanged(original, {
+          isReport: true,
+          ...(footerTaskId ? { reportTaskId: footerTaskId } : {}),
+        })
       : {
           targetSessionId: dispatcherId,
           redirectedFrom: original,
           resolvedBy: basis,
           isReport: true,
+          ...(footerTaskId ? { reportTaskId: footerTaskId } : {}),
         }
   }
 
@@ -210,12 +270,16 @@ export async function resolveReportTarget(input: {
     const supervisor = await servantService.findSupervisorForProject(workDir)
     if (supervisor) {
       return supervisor.sessionId === original
-        ? unchanged(original, { isReport: true })
+        ? unchanged(original, {
+            isReport: true,
+            ...(footerTaskId ? { reportTaskId: footerTaskId } : {}),
+          })
         : {
             targetSessionId: supervisor.sessionId,
             redirectedFrom: original,
             resolvedBy: 'project-supervisor',
             isReport: true,
+            ...(footerTaskId ? { reportTaskId: footerTaskId } : {}),
           }
     }
   }
@@ -223,5 +287,8 @@ export async function resolveReportTarget(input: {
   // ── 第 5 步：仍无结果 → 不改投 ─────────────────────────────────────
   // 原目标不在册时由调用方沿用现有的可行动 404，不凭空编造收件人。
   // 到这里说明发送方是员工且名下有未结任务（或带了 taskId），仍算汇报。
-  return unchanged(original, { isReport: explicitTaskId !== undefined && explicitTaskId !== '' })
+  return unchanged(original, {
+    isReport: explicitTaskId !== undefined && explicitTaskId !== '',
+    ...(footerTaskId ? { reportTaskId: footerTaskId } : {}),
+  })
 }
