@@ -64,6 +64,7 @@ export const MessageBlock = memo(function MessageBlock({
             branchAction={branchAction}
             timestamp={message.timestamp}
             sessionId={sessionId ?? undefined}
+            pending={message.pending}
           />
         </SelectableChatMessage>
       )
