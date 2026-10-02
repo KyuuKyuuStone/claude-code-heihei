@@ -20,6 +20,7 @@ import {
 import {
   collabRequest,
   collabToolDeps,
+  getCollabServer,
   type CollabHttpResult,
   type CollabServerInfo,
   type CollabToolDeps,
