@@ -515,9 +515,32 @@ async function writeFileAndFlush(
   flag: 'w' | 'wx' = 'w',
   rejectFinalSymlink = false,
 ): Promise<void> {
-  const openFlag = rejectFinalSymlink
-    ? fsConstants.O_WRONLY | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW
-    : flag
+  // 平台分叉（v1.7.0 真缺陷修复：Windows 上「保存仓储 agent 编辑」必失败）。
+  //
+  // 本机实测（Bun/Node on win32）：
+  //   · `fs.constants.O_NOFOLLOW` 在 win32 上是 **undefined**（该平台无此语义），
+  //     所以 `O_WRONLY|O_TRUNC|O_NOFOLLOW` 求值实为 513 = O_WRONLY|O_TRUNC；
+  //   · 513 在 Windows 上被 open 直接拒为 **EINVAL**（数值 flag 带 O_TRUNC 却不带
+  //     O_CREAT）；而 O_WRONLY|O_TRUNC|O_CREAT(769) 与字符串 'w' 都正常写入。
+  //   → 失败真因是「win32 上这条数值 flag 组合本身不可用」，O_NOFOLLOW 只是把代码
+  //     引到了这条数值路径。updateAgentFile 的正常路径恒有 rejectFinalSymlink=true
+  //     （仓储 agent 且 assertSafeRepositoryAgentMutation 预检全过 → 返回 true），
+  //     故 Windows 用户保存项目/本地 agent 必失败；createAgent 走字符串 'wx'/'w'、
+  //     不传该参数，不受影响。
+  //
+  // 处置：
+  //   · win32  ：退回**字符串 flag**（等价 O_WRONLY|O_CREAT|O_TRUNC，语义不变：创建
+  //     或截断写）。防符号链接由 assertSafeRepositoryAgentMutation 的预检承担——
+  //     lstat 发现符号链接即 throw、realpath 越出 agents 目录即 throw；语义损失仅剩
+  //     「预检与 open 之间的极窄 TOCTOU 窗口」，本机单用户场景风险极低。
+  //   · 非 win32：维持原状，继续带 O_NOFOLLOW（lstat 之后、open 之前的 TOCTOU 二次
+  //     防线），安全语义整体保留。
+  // 备注：换 utils/atomicFs 的 tmp+rename 对 symlink 天然安全但会换 inode，属更大
+  // 改动，列 v1.7.1 候选，不在本批。
+  const openFlag =
+    rejectFinalSymlink && process.platform !== 'win32'
+      ? fsConstants.O_WRONLY | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW
+      : flag
   const handle = await open(filePath, openFlag)
   try {
     await handle.writeFile(content, { encoding: 'utf-8' })
