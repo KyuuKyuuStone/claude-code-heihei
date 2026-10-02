@@ -1,6 +1,5 @@
 {
-  "comment": "文件行数豁免清单（v1.7.0 结构专项，架构评估 §2.3 + 补充裁决十一）。**只有架构师能添加条目**，实施者不得自行添加。每条必须含 path、kind（file|directory）、reason（拆不动的具体原因）、decisionRef（决策文档名）、expiresInVersion（计划降到 2500 行的版本）；expiresInVersion ≤ 当前 desktop/package.json 版本即过期，过期条目本身会导致门禁失败。kind=directory 用于上游整目录排除（同样走本豁免流程）。可选 cap 为该条目专属发版行数上限（缺省 3000），只紧不松。豁免是有时效的债务登记，own 文件 ≤2500 的文字标准不变。初始条目见 entries。"
-  ,
+  "comment": "文件行数豁免清单（v1.7.0 结构专项，架构评估 §2.3 + 补充裁决十一）。**只有架构师能添加条目**，实施者不得自行添加。每条必须含 path、kind（file|directory）、reason（拆不动的具体原因）、decisionRef（决策文档名）、expiresInVersion（计划降到 2500 行的版本）；expiresInVersion ≤ 当前 desktop/package.json 版本即过期，过期条目本身会导致门禁失败。kind=directory 用于上游整目录排除（同样走本豁免流程）。可选 cap 为该条目专属发版行数上限（缺省 3000），只紧不松。豁免是有时效的债务登记，own 文件 ≤2500 的文字标准不变。初始条目见 entries。",
   "entries": [
     {
       "path": "src/server/services/sessionService.ts",
@@ -17,6 +16,14 @@
       "decisionRef": "架构评估_v1.7.0范围与遗留问题.md 补充裁决十一",
       "expiresInVersion": "1.7.1",
       "cap": 3500
+    },
+    {
+      "path": "desktop/src/stores/chatStore.ts",
+      "kind": "file",
+      "reason": "v1.7 结构专项主体文件，结构批已落定，终值 2504 行，发版时按 cap 2504 放行（补充裁决十一）",
+      "decisionRef": "架构评估_v1.7.0范围与遗留问题.md 补充裁决十一",
+      "expiresInVersion": "1.7.1",
+      "cap": 2504
     }
   ]
 }
