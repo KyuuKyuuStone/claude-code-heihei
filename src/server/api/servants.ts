@@ -317,7 +317,11 @@ export async function handleSessionMessagesApi(
       const deliveredContent = isDispatch
         ? appendReportFooter(content, dispatchTaskId, fromSessionId ?? '')
         : resolution.isReport && resolution.reportTaskId
-          ? appendReportFooterForReport(content, resolution.reportTaskId)
+          ? appendReportFooterForReport(
+            content,
+            resolution.reportTaskId,
+            resolution.reportFromRole,
+          )
           : content
 
       let sent = false

@@ -477,7 +477,11 @@ export class DispatchMailboxService {
       const deliveredContent = isDispatch
         ? appendReportFooter(payload.content, dispatchTaskId, payload.fromSessionId ?? '')
         : resolution.isReport && resolution.reportTaskId
-          ? appendReportFooterForReport(payload.content, resolution.reportTaskId)
+          ? appendReportFooterForReport(
+              payload.content,
+              resolution.reportTaskId,
+              resolution.reportFromRole,
+            )
           : payload.content
       try {
         const delivered = await this.deps.deliver(

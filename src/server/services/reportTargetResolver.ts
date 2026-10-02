@@ -93,7 +93,11 @@ export function appendReportFooter(
  */
 const SYSTEM_FOOTER_LINE_RE = /^【系统】(?:汇报 · )?任务 ID：[0-9a-fA-F-]{36}；/
 
-export function appendReportFooterForReport(content: string, taskId: string): string {
+export function appendReportFooterForReport(
+  content: string,
+  taskId: string,
+  fromRole?: string,
+): string {
   const lines = content.split(/\r?\n/)
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i]!.trim()
@@ -101,7 +105,11 @@ export function appendReportFooterForReport(content: string, taskId: string): st
     if (SYSTEM_FOOTER_LINE_RE.test(line)) return content
     break
   }
-  return `${content}\n\n【系统】汇报 · 任务 ID：${taskId}；`
+  // 「汇报自：<role>」**并入同一行页脚**：折叠判定要求最后一个非空行匹配页脚正则，
+  // 另起一行会让该行不再是最后非空行、汇报将失去折叠。角色拿不到时整条省略，
+  // 页脚退回原形——干净降级，不写空值、不猜角色。
+  const roleClause = fromRole ? `汇报自：${fromRole}；` : ''
+  return `${content}\n\n【系统】汇报 · 任务 ID：${taskId}；${roleClause}`
 }
 
 /** 命中的解析步骤（响应字段 resolvedBy） */
@@ -139,17 +147,29 @@ export type ReportTargetResolution = {
    * （dispatchProtocol 的兜底段），不靠放松判别。
    */
   reportTaskId?: string
+  /**
+   * 汇报发起方的花名册角色（仅判定为汇报、且发送方在册时有值）。
+   * 调用方据此在页脚写入「汇报自：<role>」——**并入页脚同一行**；
+   * 拿不到时**整条省略**（干净降级，不写空值、不猜角色）。
+   */
+  reportFromRole?: string
 }
 
 function unchanged(
   targetSessionId: string,
-  extra?: { warning?: string; isReport?: boolean; reportTaskId?: string },
+  extra?: {
+    warning?: string
+    isReport?: boolean
+    reportTaskId?: string
+    reportFromRole?: string
+  },
 ): ReportTargetResolution {
   return {
     targetSessionId,
     isReport: extra?.isReport ?? false,
     ...(extra?.warning ? { warning: extra.warning } : {}),
     ...(extra?.reportTaskId ? { reportTaskId: extra.reportTaskId } : {}),
+    ...(extra?.reportFromRole ? { reportFromRole: extra.reportFromRole } : {}),
   }
 }
 
@@ -166,6 +186,9 @@ export async function resolveReportTarget(input: {
   // 一律不解析——决策明确要求这两类永不改投。
   const sender = await servantService.getServant(from)
   if (!sender?.enabled || sender.supervisor) return unchanged(original)
+
+  // 页脚「汇报自：<role>」用的角色——就是发送方在册登记的角色；空/缺失则整条省略。
+  const reportFromRole = sender.role?.trim() || undefined
 
   const workDir = await sessionService.getSessionWorkDir(from)
 
@@ -224,6 +247,7 @@ export async function resolveReportTarget(input: {
           warning: `ambiguous-dispatchers:${[...senders].sort().join(',')}`,
           isReport: true,
           ...(explicitTaskId ? { reportTaskId: explicitTaskId } : {}),
+          ...(reportFromRole ? { reportFromRole } : {}),
         })
       }
       const latest = open[0]!
@@ -255,6 +279,7 @@ export async function resolveReportTarget(input: {
           return unchanged(original, {
             isReport: true,
             ...(footerTaskId ? { reportTaskId: footerTaskId } : {}),
+            ...(reportFromRole ? { reportFromRole } : {}),
           })
         }
         return {
@@ -263,6 +288,7 @@ export async function resolveReportTarget(input: {
           resolvedBy: 'successor-supervisor',
           isReport: true,
           ...(footerTaskId ? { reportTaskId: footerTaskId } : {}),
+          ...(reportFromRole ? { reportFromRole } : {}),
         }
       }
     }
@@ -274,6 +300,7 @@ export async function resolveReportTarget(input: {
       ? unchanged(original, {
           isReport: true,
           ...(footerTaskId ? { reportTaskId: footerTaskId } : {}),
+          ...(reportFromRole ? { reportFromRole } : {}),
         })
       : {
           targetSessionId: dispatcherId,
@@ -281,6 +308,7 @@ export async function resolveReportTarget(input: {
           resolvedBy: basis,
           isReport: true,
           ...(footerTaskId ? { reportTaskId: footerTaskId } : {}),
+          ...(reportFromRole ? { reportFromRole } : {}),
         }
   }
 
@@ -292,6 +320,7 @@ export async function resolveReportTarget(input: {
         ? unchanged(original, {
             isReport: true,
             ...(footerTaskId ? { reportTaskId: footerTaskId } : {}),
+            ...(reportFromRole ? { reportFromRole } : {}),
           })
         : {
             targetSessionId: supervisor.sessionId,
@@ -299,6 +328,7 @@ export async function resolveReportTarget(input: {
             resolvedBy: 'project-supervisor',
             isReport: true,
             ...(footerTaskId ? { reportTaskId: footerTaskId } : {}),
+            ...(reportFromRole ? { reportFromRole } : {}),
           }
     }
   }
@@ -309,5 +339,6 @@ export async function resolveReportTarget(input: {
   return unchanged(original, {
     isReport: explicitTaskId !== undefined && explicitTaskId !== '',
     ...(footerTaskId ? { reportTaskId: footerTaskId } : {}),
+    ...(reportFromRole ? { reportFromRole } : {}),
   })
 }
