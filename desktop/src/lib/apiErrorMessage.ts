@@ -5,22 +5,22 @@
 //   'timeout'  → 'api.error.timeout'  服务暂时无响应（120s 超时）
 //   'network'  → 'api.error.network'  本地服务不可达（fetch 失败）
 //   'server'   → 'api.error.server'   服务端错误（无业务 message 的 4xx/5xx）
-//   'business' → 原样返回 originalMessage（ApiError 业务 message 直出契约不动）
+//   'business' → 原样返回 originalMessage（ApiError 业务 message 直出契约不动；
+//                 映射表中无此键——Partial 把「可能缺」写进类型）
 //   undefined  → 原样返回 originalMessage（未经新分类的旧路径/其它调用方，行为不变）
 import type { ApiFailureKind } from '../api/client'
+import type { TranslationKey } from '../i18n/locales/en'
 
-type Translate = (key: keyof typeof MAPPING_KEYS) => string
-
-const MAPPING_KEYS = {
+const MAPPING_KEYS: Partial<Record<ApiFailureKind, TranslationKey>> = {
   timeout: 'api.error.timeout',
   network: 'api.error.network',
   server: 'api.error.server',
-} as const
+}
 
 export function describeApiFailure(
   kind: ApiFailureKind | undefined,
   originalMessage: string,
-  t: Translate,
+  t: (key: TranslationKey) => string,
 ): string {
   const mapped = kind !== undefined ? MAPPING_KEYS[kind] : undefined
   return mapped ? t(mapped) : originalMessage

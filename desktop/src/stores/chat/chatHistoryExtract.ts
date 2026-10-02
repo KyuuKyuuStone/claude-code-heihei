@@ -20,6 +20,7 @@ import {
   TASK_STOP_TOOL_NAMES,
 } from './chatConstants'
 import { nextId } from './messageTree'
+import type { ToolCall } from './messageTree'
 import { AGENT_LIFECYCLE_TYPES } from '../../types/team'
 import type {
   ActiveGoalState,

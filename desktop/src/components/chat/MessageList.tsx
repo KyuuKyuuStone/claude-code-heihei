@@ -1,4 +1,4 @@
-import { useRef, useEffect, useMemo, memo, useState, useCallback, useDeferredValue, useLayoutEffect } from 'react'
+import { useRef, useEffect, useMemo, useState, useCallback, useDeferredValue, useLayoutEffect } from 'react'
 import { ArrowDown } from 'lucide-react'
 import {
   buildRenderModel,
@@ -47,6 +47,7 @@ import {
   VirtualSpacer,
   type VirtualViewport,
 } from './messagelist/virtualization'
+import { sessionsApi } from '../../api/sessions'
 import {
   clearConversationFindHighlights,
   CONVERSATION_FIND_CONTENT_REFRESH_MS,
@@ -75,9 +76,7 @@ import { useTeamStore } from '../../stores/teamStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useTranslation } from '../../i18n'
 import { AssistantMessage } from './AssistantMessage'
-import { ThinkingBlock } from './ThinkingBlock'
 import { ToolCallGroup } from './ToolCallGroup'
-import { AskUserQuestion } from './AskUserQuestion'
 import { StreamingIndicator } from './StreamingIndicator'
 import { CurrentTurnChangeCard } from './CurrentTurnChangeCard'
 import {

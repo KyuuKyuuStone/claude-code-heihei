@@ -198,7 +198,7 @@ function getMessageContentWeight(message: UIMessage): number {
   }
 }
 
-function getRenderItemContentWeight(item: RenderItem): number {
+export function getRenderItemContentWeight(item: RenderItem): number {
   if (item.kind === 'message') return getMessageContentWeight(item.message)
   return item.toolCalls.reduce((total, toolCall) => total + getMessageContentWeight(toolCall), 0)
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { useTranslation, type TranslationKey } from '../i18n'
+import { useTranslation } from '../i18n'
 import { ComputerUseSettings } from './ComputerUseSettings'
 import { McpSettings } from './McpSettings'
 import { TerminalSettings } from './TerminalSettings'

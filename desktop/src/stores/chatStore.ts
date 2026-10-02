@@ -101,7 +101,7 @@ import {
   reconstructAgentNotifications,
   summarizeTokenUsageFromHistory,
 } from './chat/chatHistoryMapping'
-import { appendOptimisticQueuedUserMessage, replaceQueuedMessageDisplayContent } from './chat/messageTree'
+import { appendOptimisticQueuedUserMessage, replaceQueuedMessageDisplayContent, type QueuedUserMessage } from './chat/messageTree'
 export type { QueuedUserMessage } from './chat/messageTree'
 export { appendReplayedUserMessage, reconstructAgentNotifications, mapHistoryMessagesToUiMessages } from './chat/chatHistoryMapping'
 export { stripGeneratedImageMetadataLines } from './chat/chatHistoryExtract'

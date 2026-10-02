@@ -14,7 +14,7 @@ import {
   COMPACT_SUMMARY_CUTOFFS,
   COMPACT_SUMMARY_PREFIX,
 } from './chatConstants'
-import type { BackgroundAgentTask, MemoryEventFile, UIMessage } from '../../types/chat'
+import type { AttachmentRef, BackgroundAgentTask, MemoryEventFile, UIAttachment, UIMessage } from '../../types/chat'
 
 export type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
 export type CompactSummaryMessage = Extract<UIMessage, { type: 'compact_summary' }>

@@ -29,7 +29,9 @@ import {
   extractVisibleTeammateMessageContents,
   normalizeHistoryImageAttachment,
   applyImageMetadataSourcePaths,
+  agentNotificationRecordFromList,
   extractImageMetadataSourcePath,
+  isGeneratedImageMetadataText,
   parseVisualSelectionHistoryPrompt,
   applyVisualSelectionHistoryDisplay,
   normalizeHistoryToolResultContent,
@@ -43,7 +45,7 @@ import type {
   UserHistoryBlock,
 } from './chatHistoryExtract'
 import type { MessageEntry } from '../../types/session'
-import type { AgentTaskNotification, UIAttachment, UIMessage } from '../../types/chat'
+import type { AgentTaskNotification, TokenUsage, UIAttachment, UIMessage } from '../../types/chat'
 import { AGENT_LIFECYCLE_TYPES } from '../../types/team'
 
 function readUsageToken(value: unknown): number {
@@ -405,7 +407,7 @@ export function mapHistoryMessagesToUiMessages(
   return uiMessages
 }
 
-function extractLastTodoWriteFromHistory(messages: MessageEntry[]): Array<{ content: string; status: string; activeForm?: string }> | null {
+export function extractLastTodoWriteFromHistory(messages: MessageEntry[]): Array<{ content: string; status: string; activeForm?: string }> | null {
   let foundIndex = -1
   let todos: Array<{ content: string; status: string; activeForm?: string }> | null = null
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -436,7 +438,7 @@ function extractLastTodoWriteFromHistory(messages: MessageEntry[]): Array<{ cont
   return todos
 }
 
-function hasUserMessagesAfterTaskCompletion(messages: MessageEntry[]): boolean {
+export function hasUserMessagesAfterTaskCompletion(messages: MessageEntry[]): boolean {
   let lastTaskIndex = -1
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i]!
@@ -463,4 +465,31 @@ function findCurrentTurnUserMessageIndex(
     return replayMatchesCurrentUserMessage(message, replayDisplay, modelContent) ? index : -1
   }
   return -1
+}
+
+export function summarizeTokenUsageFromHistory(messages: MessageEntry[]): TokenUsage | null {
+  let inputTokens = 0
+  let outputTokens = 0
+  let cacheReadTokens = 0
+  let cacheCreationTokens = 0
+
+  for (const message of messages) {
+    const usage = message.usage
+    if (!usage) continue
+    inputTokens += readUsageToken(usage.input_tokens)
+    outputTokens += readUsageToken(usage.output_tokens)
+    cacheReadTokens += readUsageToken(usage.cache_read_input_tokens)
+    cacheCreationTokens += readUsageToken(usage.cache_creation_input_tokens)
+  }
+
+  if (inputTokens === 0 && outputTokens === 0 && cacheReadTokens === 0 && cacheCreationTokens === 0) {
+    return null
+  }
+
+  return {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    ...(cacheReadTokens > 0 ? { cache_read_tokens: cacheReadTokens } : {}),
+    ...(cacheCreationTokens > 0 ? { cache_creation_tokens: cacheCreationTokens } : {}),
+  }
 }
