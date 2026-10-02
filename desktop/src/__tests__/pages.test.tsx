@@ -7,6 +7,7 @@ import { skillsApi } from '../api/skills'
 import { mcpApi } from '../api/mcp'
 import { sessionsApi } from '../api/sessions'
 import { useUIStore } from '../stores/uiStore'
+import { t as translateKey } from '../i18n'
 
 vi.mock('../api/skills', () => ({
   skillsApi: {
@@ -1250,14 +1251,19 @@ describe('Content-only pages render without errors', () => {
 
   it('ScheduledTasks reports a failed load instead of showing the empty state', async () => {
     const fetchTasks = vi.fn().mockResolvedValue(undefined)
-    useTaskStore.setState({ tasks: [], isLoading: false, error: 'tasks unreachable', fetchTasks })
+    useTaskStore.setState({
+      tasks: [], isLoading: false, error: 'tasks unreachable', errorKind: 'network', fetchTasks,
+    })
 
     // `fetchTasks` resolves and flips `initialized` after mount; awaiting the
     // render keeps that state update inside act().
     await act(async () => { render(<ScheduledTasks />) })
 
     const alert = await screen.findByRole('alert')
-    expect(alert).toHaveTextContent('tasks unreachable')
+    // v1.7.1: failures go through describeApiFailure, so the user sees mapped,
+    // localized copy instead of the raw technical string.
+    expect(alert).toHaveTextContent(translateKey('api.error.network'))
+    expect(alert).not.toHaveTextContent('tasks unreachable')
     // The empty state invites creating a task; a failed load must not.
     expect(screen.queryByText('No scheduled tasks yet.')).not.toBeInTheDocument()
 
@@ -1265,7 +1271,7 @@ describe('Content-only pages render without errors', () => {
     fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
     expect(fetchTasks).toHaveBeenCalled()
 
-    act(() => { useTaskStore.setState({ error: null }) })
+    act(() => { useTaskStore.setState({ error: null, errorKind: undefined }) })
   })
 })
 
