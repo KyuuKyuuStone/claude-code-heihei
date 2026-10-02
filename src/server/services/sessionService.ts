@@ -5,6 +5,7 @@
  * 确保 Desktop App 与 CLI 的数据完全互通。
  */
 
+import { readTranscriptCached } from './session/transcriptReadCache.js'
 import { createReadStream, type Stats } from 'node:fs'
 import { createHash } from 'node:crypto'
 import * as fs from 'node:fs/promises'
@@ -3385,7 +3386,7 @@ export class SessionService {
     const found = await this.findSessionFile(sessionId)
     if (!found) return null
 
-    const entries = await this.readJsonlFile(found.filePath)
+    const entries = await readTranscriptCached(found.filePath)
     return this.resolveWorkDirFromEntries(entries, found.projectDir)
   }
 
@@ -3396,7 +3397,7 @@ export class SessionService {
     const found = await this.findSessionFile(sessionId)
     if (!found) return null
 
-    const entries = await this.readJsonlFile(found.filePath)
+    const entries = await readTranscriptCached(found.filePath)
     const entry = entries.find((candidate) => candidate.uuid === messageId)
     return typeof entry?.cwd === 'string' && entry.cwd.trim() ? entry.cwd : null
   }
@@ -3409,7 +3410,7 @@ export class SessionService {
     const found = await this.findSessionFile(sessionId)
     if (!found) return null
 
-    const entries = await this.readJsonlFile(found.filePath)
+    const entries = await readTranscriptCached(found.filePath)
     const workDir = this.resolveWorkDirFromEntries(entries, found.projectDir) || process.cwd()
     const repository = this.resolveRepositoryFromEntries(entries)
     const worktreeSession = this.resolveWorktreeSessionFromEntries(entries)
