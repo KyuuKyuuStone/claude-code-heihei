@@ -87,9 +87,13 @@ function run(cmd, cmdArgs, opts = {}) {
     return { code: 0, stdout: '', stderr: '' }
   }
   return new Promise((resolve) => {
+    // envUnset：真删除语义（env -u）——赋空串是「存在但为空」，测试代码按
+    // 「变量是否存在」分支时二者结果完全不同（2026-10-03 Wave 2 假红 243 的根因）
+    const env = { ...process.env, ...(opts.env ?? {}) }
+    for (const k of opts.envUnset ?? []) delete env[k]
     const child = spawn(cmd, cmdArgs, {
       cwd: opts.cwd ?? ROOT,
-      env: { ...process.env, ...(opts.env ?? {}) },
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     childPid = child.pid
@@ -247,7 +251,7 @@ async function runBunTest(target, label) {
   return run('bun', ['test', target], {
     label,
     guard: true,
-    env: { CLAUDE_COMPUTER_USE_ENABLED: '' },
+    envUnset: ['CLAUDE_COMPUTER_USE_ENABLED'],
   })
 }
 
@@ -285,14 +289,15 @@ async function stageTest() {
   for (let i = 0; i < batches.length; i++) {
     if (aborted) break
     process.stdout.write(`  [desktop ${i + 1}/${batches.length}] ${batches[i].length} 文件 …`)
-    const r = await run('bun', ['run', 'test', '--', '--run', ...batches[i]], {
+    const r = await run('bun', ['run', 'test', '--', '--run', ...batches[i].map((f) => f.replace('desktop/', ''))], {
       cwd: join(ROOT, 'desktop'),
       label: `desktop batch ${i + 1}`,
       guard: true,
-      env: { CLAUDE_COMPUTER_USE_ENABLED: '' },
+      envUnset: ['CLAUDE_COMPUTER_USE_ENABLED'],
     })
     if (r.code !== 0) {
-      console.log(' 红')
+      console.log(` 红（诊断落盘 /tmp/preflight-desktop-${i + 1}.log）`)
+      writeFileSync(`/tmp/preflight-desktop-${i + 1}.log`, `exit=${r.code}\n=== stderr 尾部 ===\n${r.stderr.slice(-3000)}\n=== stdout 尾部 ===\n${r.stdout.slice(-3000)}`)
       red.push({ kind: 'desktop-batch', target: batches[i].join(' '), stdout: r.stdout, stderr: r.stderr })
     } else {
       console.log(' 绿')
@@ -320,7 +325,7 @@ async function stageTest() {
       : seg.target.split(' ')
     for (const f of files) {
       const r = seg.kind === 'desktop-batch'
-        ? await run('bun', ['run', 'test', '--', '--run', f], { cwd: join(ROOT, 'desktop'), label: f, guard: true, env: { CLAUDE_COMPUTER_USE_ENABLED: '' } })
+        ? await run('bun', ['run', 'test', '--', '--run', f.replace('desktop/', '')], { cwd: join(ROOT, 'desktop'), label: f, guard: true, envUnset: ['CLAUDE_COMPUTER_USE_ENABLED'] })
         : await runBunTest(`./${f.replace(/^\.\//, '')}`, f)
       if (r.code === 0) rerunPass.push(f)
       else if (flakyKnown.some((k) => r.stdout.includes(k) || f.includes(k))) pendingManual.push(f)
@@ -413,17 +418,19 @@ async function stageSmoke() {
 
   const port = 4280 + Math.floor(Math.random() * 100)
   console.log(`  启动 sidecar（隔离，端口 ${port}，fixture ${fx}）…`)
+  // 隔离环境同样真删除该变量（同类风险：存在与否影响被测行为；不用 undefined 赋值——
+  // spawn 对 undefined 值键的处理有歧义，显式 delete 才是 env -u 语义）
+  const smokeEnv = { ...process.env }
+  delete smokeEnv.CLAUDE_COMPUTER_USE_ENABLED
+  smokeEnv.CLAUDE_CONFIG_DIR = join(fx, 'cfg')
+  smokeEnv.USERPROFILE = join(fx, 'home')
+  smokeEnv.HOME = join(fx, 'home')
+  smokeEnv.APPDATA = join(fx, 'appdata')
+  smokeEnv.SERVER_PORT = String(port)
+  smokeEnv.NO_PROXY = '*'
   const proc = spawn(sidecar, ['server'], {
     cwd: fx,
-    env: {
-      ...process.env,
-      CLAUDE_CONFIG_DIR: join(fx, 'cfg'),
-      USERPROFILE: join(fx, 'home'),
-      HOME: join(fx, 'home'),
-      APPDATA: join(fx, 'appdata'),
-      SERVER_PORT: String(port),
-      NO_PROXY: '*',
-    },
+    env: smokeEnv,
     stdio: 'ignore',
   })
   childPid = proc.pid
