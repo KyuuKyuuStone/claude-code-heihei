@@ -1250,6 +1250,8 @@ async function restartSessionWithPermissionMode(
     const runtimeSettings = {
       ...await getRuntimeSettings(sessionId),
       permissionMode: mode,
+      // v1.7.2 裁决二十一④：WS 拉起来源标注（诊断事件 cli_start_unconfirmed 用）
+      startSource: 'ws' as const,
     }
     const sdkUrl = buildSdkWebSocketUrl(ws, sessionId)
     await conversationService.startSession(sessionId, workDir, sdkUrl, runtimeSettings)
@@ -1303,7 +1305,10 @@ async function restartSessionWithRuntimeConfig(
 
     const runtimeSettings = await getRuntimeSettings(sessionId)
     const sdkUrl = buildSdkWebSocketUrl(ws, sessionId)
-    await conversationService.startSession(sessionId, workDir, sdkUrl, runtimeSettings)
+    await conversationService.startSession(sessionId, workDir, sdkUrl, {
+      ...runtimeSettings,
+      startSource: 'ws' as const,
+    })
 
     rebindClientOutputForSession(sessionId)
     sendMessage(ws, { type: 'status', state: 'idle' })
@@ -1801,8 +1806,8 @@ async function ensureCliSessionStarted(
     lastResolvedStartupWorkDirs.set(sessionId, workDir)
     const runtimeSettings = await getRuntimeSettings(sessionId)
     const startupSettings = reason === 'prewarm_session'
-      ? { ...runtimeSettings, resumeInterruptedTurn: false }
-      : runtimeSettings
+      ? { ...runtimeSettings, resumeInterruptedTurn: false, startSource: 'ws' as const }
+      : { ...runtimeSettings, startSource: 'ws' as const }
     const sdkUrl = buildSdkWebSocketUrl(ws, sessionId)
     await sendRepositoryStartupStatus(ws, sessionId, reason)
     console.log(`[WS] Starting CLI for ${sessionId} due to ${reason}`)

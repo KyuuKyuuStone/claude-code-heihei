@@ -19,6 +19,8 @@ import { isOpenAIOfficialProviderId } from '../openaiOfficialProvider.js'
 
 export type SessionStartOptions = {
   permissionMode?: string
+  /** 拉起来源（诊断用，裁决二十一④的 cli_start_unconfirmed 会带上）。 */
+  startSource?: 'delivery' | 'ws' | 'unknown'
   model?: string
   effort?: string
   thinking?: 'enabled' | 'adaptive' | 'disabled'

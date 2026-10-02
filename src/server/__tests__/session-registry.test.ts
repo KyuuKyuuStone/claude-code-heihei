@@ -161,6 +161,21 @@ describe('合法迁移表（§1 表格逐条锁定）', () => {
     markStarting(id)
     expect(phaseOf(id)).toBe('starting')
   })
+  // v1.7.2 裁决二十一④ 合同补充：SDK 未确认时的「拉起中」是**稳定态**——
+  // 超时不是终局：phase 停在 starting，直到（可能迟到的）markRunning 才转 running。
+  test('starting 是稳定态：未 markRunning 前保持 starting，迟到 markRunning 仍合法', () => {
+    const id = 's1'
+    registerSession(id)
+    markStarting(id)
+    expect(phaseOf(id)).toBe('starting')
+    // 重复 markStarting = 幂等 no-op，不会自行升级为 running
+    markStarting(id)
+    expect(phaseOf(id)).toBe('starting')
+    // 迟到确认（子预算超时后 attach）仍走合法迁移 starting → running
+    markRunning(id)
+    expect(phaseOf(id)).toBe('running')
+  })
+
 })
 
 describe('非法迁移（表外拒绝并记诊断，不静默失败）', () => {

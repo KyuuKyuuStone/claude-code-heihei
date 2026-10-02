@@ -64,7 +64,6 @@ import {
   dropActiveTurn,
   getSessionSnapshot,
   markCrashed,
-  markRunning,
   markStarting,
   markStopped,
   registerSession,
@@ -116,6 +115,7 @@ import {
   getRuntimeArgs,
   type SessionStartOptions,
 } from './conversation/cliArgs.js'
+import { completeSdkStartupConfirmation } from './conversation/sdkStartupConfirmation.js'
 export { MAX_CAPTURED_SDK_MESSAGE_BYTES, MAX_CAPTURED_SDK_TOTAL_BYTES }
 
 /**
@@ -672,8 +672,7 @@ export class ConversationService {
       })
     }
 
-    console.log(`[ConversationService] CLI started successfully for ${sessionId}`)
-    markRunning(sessionId)
+    completeSdkStartupConfirmation(sessionId, session, { sessions: this.sessions }, options)
   }
 
   onOutput(sessionId: string, callback: (msg: any) => void): void {
