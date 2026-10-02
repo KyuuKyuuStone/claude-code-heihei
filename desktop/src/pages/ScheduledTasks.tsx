@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { describeApiFailure } from '../lib/apiErrorMessage'
+
 import { useTaskStore } from '../stores/taskStore'
 import { useUIStore } from '../stores/uiStore'
 import { useTranslation } from '../i18n'
@@ -10,7 +12,7 @@ import { TaskEmptyState } from '../components/tasks/TaskEmptyState'
 import { NewTaskModal } from '../components/tasks/NewTaskModal'
 
 export function ScheduledTasks() {
-  const { tasks, fetchTasks, isLoading, error } = useTaskStore()
+  const { tasks, fetchTasks, isLoading, error, errorKind } = useTaskStore()
   const { activeModal, openModal, closeModal } = useUIStore()
   const t = useTranslation()
   const [initialized, setInitialized] = useState(false)
@@ -71,7 +73,7 @@ export function ScheduledTasks() {
             // so a failed load reads as "you have no tasks".
             <ErrorState
               title={t('common.error')}
-              detail={error}
+              detail={describeApiFailure(errorKind, error, t)}
               onRetry={() => void fetchTasks()}
               retryLabel={t('common.retry')}
             />

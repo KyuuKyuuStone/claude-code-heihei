@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { ApiErrorWithKind, ApiFailureKind } from '../api/client'
 import { collabTasksApi, type CollabTask, type CollabTaskStatus } from '../api/collabTasks'
 import type { ServerMessage } from '../types/chat'
 import type { WebSocketConnectionState } from '../api/websocket'
@@ -14,6 +15,8 @@ type CollabTaskStore = {
   activeProjectSessionId: string | null
   isLoading: boolean
   error: string | null
+  /** [defect] 裁决十四：与 sessionStore.errorKind 同构，供展示层 describeApiFailure 映射。 */
+  errorKind?: ApiFailureKind
   connectionState: WebSocketConnectionState
   serverReady: boolean
   refreshDispatched: () => Promise<void>
@@ -58,7 +61,7 @@ export const useCollabTaskStore = create<CollabTaskStore>((set, get) => ({
   activeProjectDir: null,
   activeProjectSessionId: null,
   isLoading: false,
-  error: null,
+  error: null, errorKind: undefined,
   connectionState: 'disconnected',
   serverReady: false,
 
@@ -86,33 +89,33 @@ export const useCollabTaskStore = create<CollabTaskStore>((set, get) => ({
 
   refreshForSession: async (sessionId, options) => {
     const requestId = ++taskGeneration
-    set({ activeProjectSessionId: sessionId, activeProjectDir: null, error: null, isLoading: true, ...(options?.clear ? { tasksById: {} } : {}) })
+    set({ activeProjectSessionId: sessionId, activeProjectDir: null, error: null, errorKind: undefined, isLoading: true, ...(options?.clear ? { tasksById: {} } : {}) })
     try {
       const { tasks, projectDir } = await collabTasksApi.listForSession(sessionId)
       if (requestId !== taskGeneration) return
-      set({ tasksById: toTaskMap(tasks), activeProjectDir: typeof projectDir === 'string' ? projectDir : null, error: null })
+      set({ tasksById: toTaskMap(tasks), activeProjectDir: typeof projectDir === 'string' ? projectDir : null, error: null, errorKind: undefined })
       void get().refreshDispatched()
     } catch (error) {
-      if (requestId === taskGeneration) set({ error: error instanceof Error ? error.message : '任务列表加载失败' })
+      if (requestId === taskGeneration) set({ errorKind: (error as ApiErrorWithKind).kind, error: error instanceof Error ? error.message : '任务列表加载失败' })
     } finally { if (requestId === taskGeneration) set({ isLoading: false }) }
   },
 
   refreshForProject: async (projectDir, options) => {
     const requestId = ++taskGeneration
-    set({ activeProjectSessionId: null, activeProjectDir: projectDir, error: null, isLoading: Object.keys(get().tasksById).length === 0 || Boolean(options?.clear), ...(options?.clear ? { tasksById: {} } : {}) })
+    set({ activeProjectSessionId: null, activeProjectDir: projectDir, error: null, errorKind: undefined, isLoading: Object.keys(get().tasksById).length === 0 || Boolean(options?.clear), ...(options?.clear ? { tasksById: {} } : {}) })
     try {
       const { tasks } = await collabTasksApi.listForProject(projectDir)
       if (requestId !== taskGeneration) return
-      set({ tasksById: toTaskMap(tasks), error: null })
+      set({ tasksById: toTaskMap(tasks), error: null, errorKind: undefined })
       void get().refreshDispatched()
     } catch (error) {
-      if (requestId === taskGeneration) set({ error: error instanceof Error ? error.message : '任务列表加载失败' })
+      if (requestId === taskGeneration) set({ errorKind: (error as ApiErrorWithKind).kind, error: error instanceof Error ? error.message : '任务列表加载失败' })
     } finally { if (requestId === taskGeneration) set({ isLoading: false }) }
   },
 
   clearProjectTasks: () => {
     taskGeneration += 1
-    set({ tasksById: {}, activeProjectSessionId: null, activeProjectDir: null, isLoading: false, error: null })
+    set({ tasksById: {}, activeProjectSessionId: null, activeProjectDir: null, isLoading: false, error: null, errorKind: undefined })
   },
 
   checkServerIdentity: (retryIfInFlight = false) => {

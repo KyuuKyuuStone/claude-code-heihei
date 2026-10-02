@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { ApiErrorWithKind, ApiFailureKind } from '../api/client'
 import { tasksApi } from '../api/tasks'
 import type { CronTask, CreateTaskInput, TaskRun } from '../types/task'
 
@@ -7,6 +8,8 @@ type TaskStore = {
   recentRuns: TaskRun[]
   isLoading: boolean
   error: string | null
+  /** [defect] 裁决十四：与 sessionStore.errorKind 同构，供展示层 describeApiFailure 映射。 */
+  errorKind?: ApiFailureKind
 
   fetchTasks: () => Promise<void>
   createTask: (input: CreateTaskInput) => Promise<void>
@@ -27,14 +30,15 @@ export const useTaskStore = create<TaskStore>((set) => ({
   recentRuns: [],
   isLoading: false,
   error: null,
+  errorKind: undefined,
 
   fetchTasks: async () => {
-    set({ isLoading: true, error: null })
+    set({ isLoading: true, error: null, errorKind: undefined })
     try {
       const { tasks } = await tasksApi.list()
       set({ tasks, isLoading: false })
     } catch (err) {
-      set({ error: (err as Error).message, isLoading: false })
+    set({ error: (err as Error).message, errorKind: (err as ApiErrorWithKind).kind, isLoading: false })
     }
   },
 

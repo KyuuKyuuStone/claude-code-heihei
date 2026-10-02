@@ -47,7 +47,7 @@ export const kr: Record<TranslationKey, string> = {
   'sidebar.sessionListFailed': '세션 목록을 불러오지 못했습니다',
   'sidebar.slowLoading': '불러오는 중입니다. 잠시만 기다려 주세요…',
   'api.error.timeout': '서비스가 응답하지 않습니다. 잠시 후 다시 시도해 주세요.',
-  'api.error.network': '로컬 서비스에 연결할 수 없습니다. 앱이 실행 중인지 확인해 주세요.',
+  'api.error.network': '로컬 백엔드 서비스에 연결할 수 없습니다.',
   'api.error.server': '서비스에서 오류가 반환되었습니다. 잠시 후 다시 시도해 주세요.',
   'sidebar.refreshSessions': '세션 새로 고침',
   'sidebar.indexDegraded': '표준 기록 불러오기를 사용하고 있습니다',

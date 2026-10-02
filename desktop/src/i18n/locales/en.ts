@@ -45,7 +45,7 @@ export const en = {
   'sidebar.sessionListFailed': 'Session list failed to load',
   'sidebar.slowLoading': 'Taking a while to load, hang tight…',
   'api.error.timeout': 'The service is not responding. Please try again later.',
-  'api.error.network': 'Cannot reach the local service. Make sure the app is still running.',
+  'api.error.network': 'Cannot reach the local backend service.',
   'api.error.server': 'The service returned an error. Please try again later.',
   'sidebar.refreshSessions': 'Refresh sessions',
   'sidebar.indexDegraded': 'Using standard history loading',

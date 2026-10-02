@@ -47,7 +47,7 @@ export const zh: Record<TranslationKey, string> = {
   'sidebar.sessionListFailed': '会话列表加载失败',
   'sidebar.slowLoading': '加载较慢，请稍候…',
   'api.error.timeout': '服务暂时无响应，请稍后重试',
-  'api.error.network': '无法连接本地服务，请确认应用仍在运行',
+  'api.error.network': '无法连接本地后台服务',
   'api.error.server': '服务返回错误，请稍后重试',
   'sidebar.refreshSessions': '刷新会话列表',
   'sidebar.indexDegraded': '正在使用标准历史记录加载',

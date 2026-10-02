@@ -47,7 +47,7 @@ export const zh: Record<TranslationKey, string> = {
   'sidebar.sessionListFailed': '會話列表載入失敗',
   'sidebar.slowLoading': '載入較慢，請稍候…',
   'api.error.timeout': '服務暫時無回應，請稍後重試',
-  'api.error.network': '無法連線本機服務，請確認應用仍在執行',
+  'api.error.network': '無法連線本機後台服務',
   'api.error.server': '服務回傳錯誤，請稍後重試',
   'sidebar.refreshSessions': '重新整理會話列表',
   'sidebar.indexDegraded': '正在使用標準歷史記錄載入',

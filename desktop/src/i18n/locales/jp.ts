@@ -47,7 +47,7 @@ export const jp: Record<TranslationKey, string> = {
   'sidebar.sessionListFailed': 'セッション一覧の読み込みに失敗しました',
   'sidebar.slowLoading': '読み込みに時間がかかっています…',
   'api.error.timeout': 'サービスが応答しません。しばらくしてから再試行してください。',
-  'api.error.network': 'ローカルサービスに接続できません。アプリが起動中か確認してください。',
+  'api.error.network': 'ローカルバックエンドサービスに接続できません。',
   'api.error.server': 'サービスがエラーを返しました。しばらくしてから再試行してください。',
   'sidebar.refreshSessions': 'セッションを更新',
   'sidebar.indexDegraded': '標準の履歴読み込みを使用しています',

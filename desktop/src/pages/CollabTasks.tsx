@@ -9,6 +9,12 @@ import { MarkdownRenderer } from '@/components/markdown/MarkdownRenderer'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { api } from '../api/client'
 import type { CollabTask, CollabTaskStatus } from '../api/collabTasks'
+import { useTranslation } from '../i18n'
+
+import { describeApiFailure } from '../lib/apiErrorMessage'
+import type { ApiErrorWithKind, ApiFailureKind } from '../api/client'
+
+
 import { useSessionStore } from '../stores/sessionStore'
 import { useServantStore } from '../stores/servantStore'
 import { useCollabTaskStore } from '../stores/collabTaskStore'
@@ -34,16 +40,20 @@ type TaskDetail = CollabTask & {
 
 export function CollabTasks() {
   const activeSessionId = useSessionStore((state) => state.activeSessionId)
+  const t = useTranslation()
   const tasksById = useCollabTaskStore((state) => state.tasksById)
+
   const activeProjectDir = useCollabTaskStore((state) => state.activeProjectDir)
   const isLoading = useCollabTaskStore((state) => state.isLoading)
   const error = useCollabTaskStore((state) => state.error)
+  const errorKind = useCollabTaskStore((state) => state.errorKind)
   const connectionState = useCollabTaskStore((state) => state.connectionState)
   const serverReady = useCollabTaskStore((state) => state.serverReady)
   const [filter, setFilter] = useState<Filter>('open')
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [selectedTaskDetail, setSelectedTaskDetail] = useState<TaskDetail | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
+  const [detailErrorKind, setDetailErrorKind] = useState<ApiFailureKind | undefined>(undefined)
   const detailRequestRef = useRef(0)
   const loadTaskDetail = (taskId: string) => {
     const requestId = ++detailRequestRef.current
@@ -52,6 +62,7 @@ export function CollabTasks() {
     void api.get<{ task: TaskDetail }>(`/api/collab-tasks/${encodeURIComponent(taskId)}`)
       .then(({ task }) => { if (requestId === detailRequestRef.current) setSelectedTaskDetail(task) })
       .catch((fetchError: unknown) => {
+        if (requestId === detailRequestRef.current) setDetailErrorKind((fetchError as ApiErrorWithKind).kind)
         if (requestId === detailRequestRef.current) setDetailError(fetchError instanceof Error ? fetchError.message : "详情加载失败")
       })
   }
@@ -152,7 +163,7 @@ export function CollabTasks() {
           ))}
         </div>
 
-        {error && <ErrorState title="加载失败，正在展示本地缓存" detail={error} onRetry={refresh} retryLabel="重试" />}
+        {error && <ErrorState title="加载失败，正在展示本地缓存" detail={describeApiFailure(errorKind, error, t)} onRetry={refresh} retryLabel="重试" />}
 
         <div className="min-h-0 flex-1 overflow-auto rounded-[var(--radius-xl)] border border-[var(--color-border)]">
           {!activeSessionId ? (
@@ -174,7 +185,7 @@ export function CollabTasks() {
         <p className="mt-3 text-xs text-[var(--color-text-secondary)]">共 {visibleTasks.length} 个{filter === 'open' ? '进行中' : filter === 'closed' ? '已结束' : ''}任务</p>
       </div>
 
-      {selectedTaskId && selectedTask && <TaskDetails task={selectedTaskDetail ?? selectedTask} loading={!selectedTaskDetail && !detailError} error={detailError} offline={offline} onClose={() => setSelectedTaskId(null)} onRetry={retryTaskDetail} onCopy={copy} />}
+      {selectedTaskId && selectedTask && <TaskDetails task={selectedTaskDetail ?? selectedTask} loading={!selectedTaskDetail && !detailError} error={detailError ? describeApiFailure(detailErrorKind, detailError, t) : null} offline={offline} onClose={() => setSelectedTaskId(null)} onRetry={retryTaskDetail} onCopy={copy} />}
       {offline && <div className="absolute inset-0 z-20 flex items-center justify-center bg-[var(--color-surface)]/70 backdrop-blur-sm"><div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container)] px-5 py-4 text-sm text-[var(--color-text-secondary)]">协作服务未就绪，正在重新连接……</div></div>}
     </div>
   )
