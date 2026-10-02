@@ -12,6 +12,8 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import { servantService } from './servantService.js'
 import { sessionMessenger } from './sessionMessenger.js'
+import { ProviderService } from './providerService.js'
+import { diagnosticsService } from './diagnosticsService.js'
 
 /** 每次协议硬规则升级时递增版本号即可重触达一轮 */
 const PROTOCOL_NOTICE_VERSION = '1'
@@ -39,12 +41,25 @@ function buildProtocolNotice(): string {
 export type SupervisorNoticeDeps = {
   listServants: typeof servantService.listServants
   deliver: (targetSessionId: string, content: string, serverHost: string) => Promise<boolean>
+  /** 本机服务端口：用于拼真实投递地址（裁决二十②，禁止再用端口 0 的假值）。 */
+  getServerPort: () => number
+  recordEvent: (input: {
+    type: string
+    severity?: 'info' | 'warn' | 'error'
+    summary: string
+    sessionId?: string
+    details?: unknown
+  }) => void
 }
 
 const defaultDeps: SupervisorNoticeDeps = {
   listServants: (options) => servantService.listServants(options),
   deliver: (targetSessionId, content, serverHost) =>
     sessionMessenger.deliver(targetSessionId, content, serverHost),
+  getServerPort: () => ProviderService.getServerPort(),
+  recordEvent: (input) => {
+    void diagnosticsService.recordEvent(input).catch(() => {})
+  },
 }
 
 let noticeDeps: SupervisorNoticeDeps = defaultDeps
@@ -62,7 +77,7 @@ export async function notifySupervisorsOfProtocolUpdate(): Promise<void> {
     // marker 不存在 → 投递
   }
 
-  let supervisors: Array<{ sessionId: string }> = []
+  let supervisors: Awaited<ReturnType<SupervisorNoticeDeps['listServants']>> = []
   try {
     const all = await noticeDeps.listServants({ includeAll: true })
     supervisors = all.filter((s) => s.supervisor)
@@ -80,10 +95,27 @@ export async function notifySupervisorsOfProtocolUpdate(): Promise<void> {
   }
 
   const notice = buildProtocolNotice()
+  // 裁决二十②：走**真实** host（本机服务端口），不再用 '127.0.0.1:0' 这类假值。
+  const serverHost = `127.0.0.1:${noticeDeps.getServerPort()}`
   let delivered = 0
+  let skipped = 0
   for (const supervisor of supervisors) {
+    // 裁决二十①：本通知是「触达存量对话」的运维性通知——**只对正在运行的主管投递**。
+    // 为发一条通知把没运行的主管拉起来，即便地址为真也是错的（凭空创建会话 + 烧 token）。
+    // 可达性损失可接受（协议文档才是真源）；跳过者记诊断，不做静默。
+    if (!supervisor.running) {
+      skipped++
+      noticeDeps.recordEvent({
+        type: 'supervisor_protocol_notice_skipped',
+        severity: 'info',
+        summary: '主管会话未运行，跳过协议更新通知（不代为拉起）',
+        sessionId: supervisor.sessionId,
+        details: { sessionId: supervisor.sessionId, reason: 'not-running' },
+      })
+      continue
+    }
     try {
-      const ok = await noticeDeps.deliver(supervisor.sessionId, notice, '127.0.0.1:0')
+      const ok = await noticeDeps.deliver(supervisor.sessionId, notice, serverHost)
       if (ok) delivered++
     } catch (error) {
       console.warn(
@@ -91,7 +123,10 @@ export async function notifySupervisorsOfProtocolUpdate(): Promise<void> {
       )
     }
   }
-  console.log(`[SupervisorNotice] Protocol update notified to ${delivered}/${supervisors.length} supervisor(s)`)
+  console.log(
+    `[SupervisorNotice] Protocol update notified to ${delivered}/${supervisors.length} supervisor(s)` +
+      (skipped > 0 ? `, skipped ${skipped} not-running` : ''),
+  )
 
   await fs.mkdir(path.dirname(markerPath), { recursive: true }).catch(() => {})
   await fs.writeFile(markerPath, new Date().toISOString(), 'utf-8').catch(() => {})
