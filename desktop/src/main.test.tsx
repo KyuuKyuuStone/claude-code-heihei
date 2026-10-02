@@ -62,7 +62,16 @@ describe('desktop bootstrap', () => {
       throw new Error('bootstrap failed')
     })
 
-    expect(root.textContent).toBe('bootstrap failed')
+    // 守护语义：启动失败必须以「双语静态标题 + 原始错误串」呈现到根元素上，用户看得见。
+    // 旧写法断言 root.textContent 恰为原始串——C1 根崩溃屏改造（设计师裁决接受
+    // 「双语静态标题 + <pre> 原始串」最小可行做法）后呈现升级为 heading + pre，
+    // 故分别断言标题与 <pre> 里的原始串（<pre> 即「可复制的技术信息」承诺本体）。
+    const heading = root.querySelector('div')
+    expect(heading?.textContent).toContain('应用启动失败 — 以下为技术信息，可复制反馈')
+    expect(heading?.textContent).toContain('Startup failed — technical details below')
+    const pre = root.querySelector('pre')
+    expect(pre?.textContent).toBe('bootstrap failed')
+    expect(root.textContent).toContain('bootstrap failed')
     expect(consoleError).toHaveBeenCalledWith('[desktop] Failed to bootstrap app', expect.any(Error))
   })
 
