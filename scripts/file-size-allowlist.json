@@ -4,26 +4,18 @@
     {
       "path": "src/server/services/sessionService.ts",
       "kind": "file",
-      "reason": "v1.7 结构专项主体文件，拆分进行中，终值接近当前值，发版时按 cap 3800 放行（补充裁决十一）",
-      "decisionRef": "架构评估_v1.7.0范围与遗留问题.md 补充裁决十一",
-      "expiresInVersion": "1.7.1",
+      "reason": "收口论证（复核抽样成立）：剩余全为实例状态耦合/公开 API/红灯区，无纯移动与 (C) 空间；v1.7.1 已产出红灯批设计稿（Wave 0）。附加条件：v1.7.2 必须含红灯批首批实施（补充裁决十六/十七）",
+      "decisionRef": "架构决策_v1.7结构拆分边界.md 补充裁决十七",
+      "expiresInVersion": "1.7.2",
       "cap": 3800
     },
     {
       "path": "src/server/ws/handler.ts",
       "kind": "file",
-      "reason": "v1.7 结构专项主体文件，拆分进行中，终值接近当前值，发版时按 cap 3500 放行（补充裁决十一）",
-      "decisionRef": "架构评估_v1.7.0范围与遗留问题.md 补充裁决十一",
-      "expiresInVersion": "1.7.1",
-      "cap": 3500
-    },
-    {
-      "path": "desktop/src/stores/chatStore.ts",
-      "kind": "file",
-      "reason": "v1.7 结构专项主体文件，结构批已落定，终值 2504 行，发版时按 cap 2504 放行（补充裁决十一）",
-      "decisionRef": "架构评估_v1.7.0范围与遗留问题.md 补充裁决十一",
-      "expiresInVersion": "1.7.1",
-      "cap": 2504
+      "reason": "v1.7.1 已落地降量：9 个零依赖纯函数簇搬入 handlerPures.ts（净 −184）；状态族 25 个经普查证搬迁净增（裁决十二门槛不过）不搬；剩余耦合区红灯批排 1.7.2（补充裁决十七）",
+      "decisionRef": "架构决策_v1.7结构拆分边界.md 补充裁决十七",
+      "expiresInVersion": "1.7.2",
+      "cap": 3372
     }
   ]
 }

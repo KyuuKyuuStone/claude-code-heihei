@@ -81,11 +81,8 @@ import {
   upsertToolUseMessage,
 } from './chat/messageTree'
 import {
-  agentNotificationRecordFromList,
   applyGoalEventToActiveGoal,
-  backgroundTaskRecordFromNotifications,
   buildModelContent,
-  deriveActiveGoalFromMessages,
   getStoppedBackgroundTaskFromToolResult,
   mergeBackgroundAgentTaskRecords,
   normalizeBackgroundAgentTaskEvent,
@@ -95,11 +92,7 @@ import {
 } from './chat/chatHistoryExtract'
 import {
   appendReplayedUserMessage,
-  extractLastTodoWriteFromHistory,
-  hasUserMessagesAfterTaskCompletion,
-  mapHistoryMessagesToUiMessages,
-  reconstructAgentNotifications,
-  summarizeTokenUsageFromHistory,
+  fetchAndMapSessionHistory,
 } from './chat/chatHistoryMapping'
 import { appendOptimisticQueuedUserMessage, replaceQueuedMessageDisplayContent, type QueuedUserMessage } from './chat/messageTree'
 export type { QueuedUserMessage } from './chat/messageTree'
@@ -561,34 +554,6 @@ function mergeSlashCommandUpdates(
   return [...merged.values()]
 }
 
-
-async function fetchAndMapSessionHistory(
-  sessionId: string,
-  params?: { limit?: number; before?: number },
-) {
-  const { messages, taskNotifications, total, hasMore, nextBefore } = params
-    ? await sessionsApi.getMessages(sessionId, params)
-    : await sessionsApi.getMessages(sessionId)
-  const uiMessages = mapHistoryMessagesToUiMessages(messages)
-  const restoredNotifications = {
-    ...reconstructAgentNotifications(messages),
-    ...agentNotificationRecordFromList(taskNotifications ?? []),
-  }
-  return {
-    rawMessages: messages,
-    uiMessages,
-    activeGoal: deriveActiveGoalFromMessages(uiMessages),
-    restoredNotifications,
-    restoredBackgroundTasks: backgroundTaskRecordFromNotifications(Object.values(restoredNotifications)),
-    lastTodos: extractLastTodoWriteFromHistory(messages),
-    hasMessagesAfterTaskCompletion: hasUserMessagesAfterTaskCompletion(messages),
-    tokenUsage: summarizeTokenUsageFromHistory(messages),
-    // 旧服务端忽略 limit 且不带 hasMore 字段 → 视为"已给全量"。
-    historyHasMore: hasMore === true,
-    historyNextBefore: typeof nextBefore === 'number' ? nextBefore : null,
-    historyTotal: typeof total === 'number' ? total : null,
-  }
-}
 
 const historyLoadsInFlight = new Map<string, Promise<void>>()
 const earlierHistoryLoadsInFlight = new Map<string, Promise<void>>()

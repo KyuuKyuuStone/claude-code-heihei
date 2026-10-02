@@ -5,6 +5,7 @@
 // queued 域（appendOptimisticQueuedUserMessage / mapQueuedDisplayAttachments /
 // replaceQueuedMessageDisplayContent）因 QueuedUserMessage 类型定义在门面而留守，不搬。
 
+import { sessionsApi } from '../../api/sessions'
 import { TEAMMATE_CONTENT_REGEX, TASK_RELATED_TOOL_NAMES } from './chatConstants'
 import {
   appendOrUpdateTailCompactSummary,
@@ -29,7 +30,9 @@ import {
   extractVisibleTeammateMessageContents,
   normalizeHistoryImageAttachment,
   applyImageMetadataSourcePaths,
+  deriveActiveGoalFromMessages,
   agentNotificationRecordFromList,
+  backgroundTaskRecordFromNotifications,
   extractImageMetadataSourcePath,
   isGeneratedImageMetadataText,
   parseVisualSelectionHistoryPrompt,
@@ -491,5 +494,33 @@ export function summarizeTokenUsageFromHistory(messages: MessageEntry[]): TokenU
     output_tokens: outputTokens,
     ...(cacheReadTokens > 0 ? { cache_read_tokens: cacheReadTokens } : {}),
     ...(cacheCreationTokens > 0 ? { cache_creation_tokens: cacheCreationTokens } : {}),
+  }
+}
+
+export async function fetchAndMapSessionHistory(
+  sessionId: string,
+  params?: { limit?: number; before?: number },
+) {
+  const { messages, taskNotifications, total, hasMore, nextBefore } = params
+    ? await sessionsApi.getMessages(sessionId, params)
+    : await sessionsApi.getMessages(sessionId)
+  const uiMessages = mapHistoryMessagesToUiMessages(messages)
+  const restoredNotifications = {
+    ...reconstructAgentNotifications(messages),
+    ...agentNotificationRecordFromList(taskNotifications ?? []),
+  }
+  return {
+    rawMessages: messages,
+    uiMessages,
+    activeGoal: deriveActiveGoalFromMessages(uiMessages),
+    restoredNotifications,
+    restoredBackgroundTasks: backgroundTaskRecordFromNotifications(Object.values(restoredNotifications)),
+    lastTodos: extractLastTodoWriteFromHistory(messages),
+    hasMessagesAfterTaskCompletion: hasUserMessagesAfterTaskCompletion(messages),
+    tokenUsage: summarizeTokenUsageFromHistory(messages),
+    // 旧服务端忽略 limit 且不带 hasMore 字段 → 视为"已给全量"。
+    historyHasMore: hasMore === true,
+    historyNextBefore: typeof nextBefore === 'number' ? nextBefore : null,
+    historyTotal: typeof total === 'number' ? total : null,
   }
 }

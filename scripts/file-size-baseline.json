@@ -30,7 +30,7 @@
       "kind": "own"
     },
     "src/server/ws/handler.ts": {
-      "lines": 3500,
+      "lines": 3322,
       "kind": "own"
     },
     "src/services/api/claude.ts": {
@@ -84,10 +84,6 @@
     "src/vendor/computer-use-mcp/toolCalls.ts": {
       "lines": 3661,
       "kind": "upstream"
-    },
-    "desktop/src/stores/chatStore.ts": {
-      "lines": 2504,
-      "kind": "own"
     }
   }
 }
