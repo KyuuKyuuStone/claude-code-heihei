@@ -68,6 +68,7 @@ import {
   markStopped,
   registerSession,
   setAwaitingPermission,
+  isSessionClientAttached,
   tombstoneSession,
 } from './sessionRegistry.js'
 // v1.7 结构拆分第①批：logError 与 imageResizer 的两个工具函数随附件子系统
@@ -116,6 +117,17 @@ import {
   type SessionStartOptions,
 } from './conversation/cliArgs.js'
 import { completeSdkStartupConfirmation } from './conversation/sdkStartupConfirmation.js'
+import {
+  armPermissionTimeout,
+  buildPendingPermissionRecord,
+  clearAllPermissionTimeouts,
+  clearPermissionTimeout,
+  extendPermissionTimeoutsForClient,
+  handleCanUseToolRequest,
+  PERMISSION_TIMEOUT_DENY_MESSAGE,
+  type PendingPermission,
+  type PermissionTimeoutDeps,
+} from './conversation/permissionTimeout.js'
 export { MAX_CAPTURED_SDK_MESSAGE_BYTES, MAX_CAPTURED_SDK_TOTAL_BYTES }
 
 /**
@@ -256,16 +268,7 @@ type SessionProcess = {
   initMessage: any | null
   usesOfficialOAuth: boolean
   officialOAuthToken: string | null
-  pendingPermissionRequests: Map<
-    string,
-    {
-      toolName: string
-      toolUseId?: string
-      description?: string
-      input: Record<string, unknown>
-      permissionSuggestions?: unknown[]
-    }
-  >
+  pendingPermissionRequests: Map<string, PendingPermission>
   /**
    * v1.6.1：本会话是不是「员工」（花名册在册且非主管）。拉起时按花名册定格，
    * 用于 can_use_tool 自动拒绝——员工不得停在等用户点击。主管一律 false。
@@ -273,13 +276,8 @@ type SessionProcess = {
   servantNonInteractive: boolean
 }
 
-export type PendingPermissionRequest = {
-  requestId: string
-  toolName: string
-  toolUseId?: string
-  input: Record<string, unknown>
-  description?: string
-}
+/** P0-b：值类型（含超时计时器）搬到 conversation/permissionTimeout.ts；门面导出名不变。 */
+export type PendingPermissionRequest = PendingPermission & { requestId: string }
 
 // v1.7 结构拆分第②批：SessionStartOptions 搬到 conversation/cliArgs.ts，
 // 本文件改为从那里 import（类型仍不对外导出，门面导出面不变）。
@@ -778,6 +776,14 @@ export class ConversationService {
   ): boolean {
     const session = this.sessions.get(sessionId)
     const pendingRequest = session?.pendingPermissionRequests.get(requestId)
+    if (!pendingRequest) {
+      // P0-b（裁决十九③）：无 pending 即 no-op —— 对不存在的 pending 发 control_response
+      // 在任何路径都不合法（客户端双击竞态今天就有），故收紧契约。debug 留痕便于复核。
+      logForDiagnosticsNoPII('debug', 'permission_response_without_pending', { sessionId, requestId })
+      return false
+    }
+    // P0-b（裁决十八②）：清理挂在既有删除路径上。
+    clearPermissionTimeout(pendingRequest)
     if (session) {
       session.pendingPermissionRequests.delete(requestId)
       // registry 记账（阶段2 · 5c）：权限等待状态单一权威源同步
@@ -1177,57 +1183,11 @@ export class ConversationService {
           session.initMessage = msg
         }
         if (
-          msg?.type === 'control_request' &&
+          msg?.type == 'control_request' &&
           msg.request?.subtype === 'can_use_tool' &&
           typeof msg.request_id === 'string'
         ) {
-          // v1.6.1（契约 §3.3 第 3 条）：员工会话不得停在等用户点击——无人可
-          // 审批。不登记、不转发给客户端，直接 deny 并附汇报指引；诊断留痕便于
-          // 下次判定事故走的是哪条路径。主管不走这条（AskUserQuestion 是其唯一
-          // 升级出口，必须照常推给用户，见契约 §3.3 第 4 条）。
-          if (session.servantNonInteractive && isServantNonInteractiveEnabled()) {
-            const toolName =
-              typeof msg.request.tool_name === 'string' ? msg.request.tool_name : 'Unknown'
-            this.respondToPermission(
-              sessionId,
-              msg.request_id,
-              false,
-              undefined,
-              undefined,
-              COLLAB_SERVANT_PERMISSION_DENIED_MESSAGE,
-            )
-            void diagnosticsService.recordEvent({
-              type: 'collab_servant_permission_auto_denied',
-              severity: 'warning',
-              sessionId,
-              summary: `员工会话的 ${toolName} 权限请求已自动拒绝（无人可审批）`,
-              details: { sessionId, toolName, at: Date.now() },
-            })
-            continue
-          }
-          session.pendingPermissionRequests.set(msg.request_id, {
-            toolName:
-              typeof msg.request.tool_name === 'string'
-                ? msg.request.tool_name
-                : 'Unknown',
-            toolUseId:
-              typeof msg.request.tool_use_id === 'string' && msg.request.tool_use_id.trim()
-                ? msg.request.tool_use_id
-                : undefined,
-            input:
-              msg.request.input && typeof msg.request.input === 'object'
-                ? (msg.request.input as Record<string, unknown>)
-                : {},
-            description:
-              typeof msg.request.description === 'string' && msg.request.description.trim()
-                ? msg.request.description
-                : undefined,
-            permissionSuggestions: Array.isArray(msg.request.permission_suggestions)
-              ? msg.request.permission_suggestions
-              : undefined,
-          })
-          // registry 记账（阶段2 · 5c）：权限等待状态单一权威源同步
-          setAwaitingPermission(sessionId, true)
+          if (this.handleCanUseToolRequest(sessionId, session, msg)) continue
         }
         if (
           (msg?.type === 'control_cancel_request' || msg?.type === 'control_response') &&
@@ -1359,6 +1319,44 @@ export class ConversationService {
     return `${truncated}\n[truncated]`
   }
 
+  /**
+   * 客户端**中途接入**（P0-b 裁决十九）：把该会话未决权限请求的超时**只延长**到
+   * 「有客户端」档（15min）；不做缩短。由 handler 在 addActiveClient 唯一写入点调用。
+   */
+  onClientAttached(sessionId: string): void {
+    const session = this.sessions.get(sessionId)
+    if (!session) return
+    extendPermissionTimeoutsForClient(
+      sessionId,
+      session.pendingPermissionRequests,
+      this.permissionTimeoutDeps(sessionId),
+    )
+  }
+
+  /** P0-b：can_use_tool 收口——实现见 conversation/permissionTimeout.ts。 */
+  private handleCanUseToolRequest(sessionId: string, session: SessionProcess, msg: any): boolean {
+    return handleCanUseToolRequest({
+      sessionId,
+      requestId: msg.request_id,
+      request: (msg.request ?? {}) as Record<string, unknown>,
+      servantAutoDeny: session.servantNonInteractive && isServantNonInteractiveEnabled(),
+      records: session.pendingPermissionRequests,
+      deps: {
+        ...this.permissionTimeoutDeps(sessionId),
+        denyServant: (rid) => this.respondToPermission(sessionId, rid, false, undefined, undefined, COLLAB_SERVANT_PERMISSION_DENIED_MESSAGE),
+      },
+    })
+  }
+  /** P0-b：权限超时的门面侧依赖（登记与「客户端接入延长」共用）。 */
+  private permissionTimeoutDeps(sessionId: string): PermissionTimeoutDeps {
+    return {
+      clientAttached: () => isSessionClientAttached(sessionId),
+      hasSession: () => this.sessions.has(sessionId),
+      deny: (rid) =>
+        this.respondToPermission(sessionId, rid, false, undefined, undefined, PERMISSION_TIMEOUT_DENY_MESSAGE),
+    }
+  }
+
   stopSession(sessionId: string): void {
     const session = this.sessions.get(sessionId)
     if (!session) return
@@ -1370,6 +1368,7 @@ export class ConversationService {
     // map 条目同步移除（阶段4 全量质检修复）：stopped 条目残留 map 会让
     // startSession 的防重复拉起守卫（hasSession）在 clearSession 删掉 registry
     // 条目后因 phase-undefined 保守保留而恒 true → 重启静默失效
+    clearAllPermissionTimeouts(session.pendingPermissionRequests)
     this.sessions.delete(sessionId)
     this.killProcess(sessionId, session)
   }
@@ -1383,6 +1382,7 @@ export class ConversationService {
 
     markStopped(sessionId)
     clearSession(sessionId)
+    clearAllPermissionTimeouts(session.pendingPermissionRequests)
     this.sessions.delete(sessionId)
     await this.stopProcessAndWait(sessionId, session, timeoutMs)
   }
@@ -1460,6 +1460,7 @@ export class ConversationService {
     tombstoneSession(sessionId)
     const session = this.sessions.get(sessionId)
     if (session) {
+      clearAllPermissionTimeouts(session.pendingPermissionRequests)
       this.sessions.delete(sessionId)
       this.killProcess(sessionId, session)
     }

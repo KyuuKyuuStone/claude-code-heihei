@@ -342,7 +342,12 @@ describe('ConversationService', () => {
       pendingOutbound: [],
       stderrLines: [],
       sdkMessages: [],
-      pendingPermissionRequests: new Map(),
+      // P0-b：respondToPermission 现要求先有 pending（无 pending 即 no-op）。
+      // 桌面 plan approval 的真实路径**必然**有 pending（对话框只由服务端已登记的
+      // permission_request 驱动），此处按同文件既有约定（见上方 always-rule 那条）补夹具。
+      pendingPermissionRequests: new Map([
+        ['req-1', { toolName: 'ExitPlanMode', input: {} }],
+      ]),
     })
 
     const result = svc.respondToPermission(
@@ -365,6 +370,41 @@ describe('ConversationService', () => {
         },
       },
     })
+  })
+
+  // P0-b（裁决十九③）：对**不存在的 pending** 发 control_response 在任何路径都不合法
+  // （客户端双击竞态今天就有）——本用例锁住「收紧契约」的核心收益：
+  // 同一 requestId 的**第二次应答必须 no-op**（返回 false 且**不再发** control_response）。
+  // 若将来有人撤掉 no-op 守卫，第二次会再发一条 control_response，本用例即判红。
+  it('should not send a second control_response when responding twice to the same requestId', () => {
+    const svc = new ConversationService()
+    const sent: unknown[] = []
+
+    ;(svc as any).sessions.set('session-1', {
+      proc: null,
+      outputCallbacks: [],
+      workDir: process.cwd(),
+      sdkToken: 'token',
+      sdkSocket: {
+        send(data: string) {
+          sent.push(JSON.parse(data))
+        },
+      },
+      pendingOutbound: [],
+      stderrLines: [],
+      sdkMessages: [],
+      pendingPermissionRequests: new Map([
+        ['req-1', { toolName: 'Bash', input: { command: 'ls' } }],
+      ]),
+    })
+
+    const first = svc.respondToPermission('session-1', 'req-1', true)
+    const second = svc.respondToPermission('session-1', 'req-1', true)
+
+    expect(first).toBe(true)
+    expect(second).toBe(false)
+    // 关键断言：只发了一条 control_response（双击不产生第二次应答）
+    expect(sent.filter((m: any) => m.type === 'control_response')).toHaveLength(1)
   })
 
   it('should forward explicit denial feedback from desktop plan rejection', () => {

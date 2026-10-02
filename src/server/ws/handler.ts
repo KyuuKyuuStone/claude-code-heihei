@@ -29,6 +29,7 @@ import {
   markTurnSent,
   resetRegistryForTests,
   settleTurnIfOwner,
+  setSessionClientAttached,
   type TurnHandle,
 } from '../services/sessionRegistry.js'
 import { onCollabPush, type CollabPushSignal } from '../../collaboration/collabPushSignals.js'
@@ -2583,6 +2584,10 @@ function addActiveClient(
     activeSessions.set(sessionId, clients)
   }
   clients.add(ws)
+  // P0-b（裁决十九·选 a）：handler 是 clientAttached 的唯一写入方
+  setSessionClientAttached(sessionId, true)
+  // 中途接入只延长（重置到 15min 档）；幂等，重复 add 无害
+  conversationService.onClientAttached(sessionId)
 }
 
 function removeActiveClient(
@@ -2594,6 +2599,8 @@ function removeActiveClient(
   clients.delete(ws)
   if (clients.size === 0) {
     activeSessions.delete(sessionId)
+    // P0-b：仅更新在线状态；**断开不降档、不重置**既有计时（裁决十九）
+    setSessionClientAttached(sessionId, false)
   }
   return true
 }
@@ -3177,10 +3184,23 @@ function handleRosterRunningChange(event: SessionEvent): void {
     })
 }
 
+/** P0-b（裁决十九⑤）：权限请求超时 → 向前端补发 permission_resolved（reason:'timeout'），不静默。 */
+function broadcastPermissionTimeout(e: SessionEvent): void {
+  if (e.type !== 'permission_timeout') return
+  sendToSession(e.sessionId, {
+    type: 'permission_resolved',
+    requestId: e.requestId,
+    permissionType: 'tool',
+    allowed: false,
+    reason: 'timeout',
+  })
+}
+
 /** ensure 模式（同 ensureTurnChangeBroadcastSubscribed）：被 reset 清空后可重调恢复 */
 export function ensureCollabPushBroadcastSubscribed(): void {
   onCollabPush(broadcastCollabPush)
   onSessionEvent(handleRosterRunningChange, { types: ['phase_changed'] })
+  onSessionEvent(broadcastPermissionTimeout, { types: ['permission_timeout'] })
 }
 
 ensureCollabPushBroadcastSubscribed()

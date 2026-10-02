@@ -78,6 +78,8 @@ export type ServerMessage =
       requestId: string
       permissionType: 'tool' | 'computer_use'
       allowed?: boolean
+      /** P0-b：超时自动拒绝时标记来源（服务端补发，非 CLI 应答）。 */
+      reason?: 'timeout'
     }
   | {
       type: 'permission_requests_snapshot'
