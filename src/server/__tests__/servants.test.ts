@@ -1396,9 +1396,13 @@ describe('Session Messages API', () => {
     deliverMock.mockClear()
     // 用**用户会话**发起：主管此时是「enabled 且非发起者」，只有 !supervisor 这一条
     // 能把它排除。若换成主管自己发起，「非发起者」会顺带排除，测不出主管过滤。
+    // B2（v1.7.0 广播同项目守卫，d419b5d）：发送方必须是**可解析 workDir 的真实落盘
+    // 会话**，否则一律 409——原夹具的幽灵 id 在旧语义下侥幸通过。registerRealSender
+    // 建的会话不入花名册、也不是主管，上面这条设计意图保持不变。
+    const userSender = await registerRealSender()
     const resp = await postMsg({
       broadcast: true,
-      fromSessionId: '99999999-8888-4777-8666-555555555555',
+      fromSessionId: userSender,
       content: '做功能',
     })
     expect(resp.status).toBe(201)
@@ -1551,6 +1555,10 @@ describe('Session Messages API', () => {
   })
 
   it('should 404 a broadcast when no enabled servants exist', async () => {
+    // B2（v1.7.0 广播同项目守卫）：发送方须为可解析 workDir 的真实落盘会话，
+    // 否则新守卫会在走到「无 enabled 员工」判定之前就返回 409。用 registerRealSender
+    // 建真实会话后，仍无任何在册员工 → 期望值保持 404 不变。
+    const sender = await registerRealSender()
     const res = await handleSessionMessagesApi(
       new Request('http://localhost/api/session-messages', {
         method: 'POST',
@@ -1558,7 +1566,7 @@ describe('Session Messages API', () => {
         body: JSON.stringify({
           broadcast: true,
           content: '停工',
-          fromSessionId: 'someone',
+          fromSessionId: sender,
         }),
       }),
       new URL('http://localhost/api/session-messages'),
