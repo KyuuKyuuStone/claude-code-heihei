@@ -17,11 +17,41 @@ const MAPPING_KEYS: Partial<Record<ApiFailureKind, TranslationKey>> = {
   server: 'api.error.server',
 }
 
+// C2a：已知服务端业务错误串的人话映射（服务端 message 精确/前缀匹配；命中即
+// 替换，未命中维持业务直出契约原样）。技术详情对 business 一律不补（同既有
+// 裁决），被本表命中的串视为已被人话完整表述。
+const KNOWN_SERVER_MESSAGES: ReadonlyArray<{ match: RegExp; key: TranslationKey }> = [
+  {
+    // 服务端 servants.ts：跨项目派活拒绝（sender workDir 无法解析）
+    match: /^Cross-project dispatch is not allowed/,
+    key: 'api.error.crossProjectDispatch',
+  },
+]
+
 export function describeApiFailure(
   kind: ApiFailureKind | undefined,
   originalMessage: string,
   t: (key: TranslationKey) => string,
 ): string {
+  if (kind === 'business' || kind === undefined) {
+    const known = KNOWN_SERVER_MESSAGES.find((entry) => entry.match.test(originalMessage))
+    if (known) return t(known.key)
+    return originalMessage
+  }
   const mapped = kind !== undefined ? MAPPING_KEYS[kind] : undefined
   return mapped ? t(mapped) : originalMessage
+}
+
+/**
+ * v1.7.1 P0（设计稿：错误技术详情折叠）：从错误分类与原始串构造 ErrorState 的
+ * technicalDetail。business 类的 originalMessage 本身就是人话业务提示（直出
+ * 契约），不补「原始错误」块；未分类（undefined）同样不补。
+ */
+export function technicalDetailFrom(
+  kind: ApiFailureKind | undefined,
+  originalMessage: string,
+): { message: string; kind: string } | undefined {
+  if (kind === undefined || kind === 'business') return undefined
+  if (originalMessage.trim() === '') return undefined
+  return { message: originalMessage, kind }
 }

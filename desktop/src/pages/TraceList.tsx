@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ApiErrorWithKind } from '../api/client'
+import { describeApiFailure } from '../lib/apiErrorMessage'
 import type { KeyboardEvent } from 'react'
 import { ExternalLink, RefreshCw, Trash2, Workflow } from 'lucide-react'
 import { tracesApi } from '../api/traces'
@@ -74,7 +76,7 @@ export function TraceList() {
     } catch (error) {
       setState({
         status: 'error',
-        message: error instanceof Error ? error.message : t('trace.list.loadFailed'),
+        message: error instanceof Error ? describeApiFailure((error as ApiErrorWithKind).kind, error.message, t) : t('trace.list.loadFailed'),
       })
     } finally {
       if (append) setIsLoadingMore(false)
@@ -131,7 +133,7 @@ export function TraceList() {
     } catch (error) {
       setState({
         status: 'error',
-        message: error instanceof Error ? error.message : t('trace.list.deleteFailed'),
+        message: error instanceof Error ? describeApiFailure((error as ApiErrorWithKind).kind, error.message, t) : t('trace.list.deleteFailed'),
       })
     } finally {
       setDeletingSessionId(null)

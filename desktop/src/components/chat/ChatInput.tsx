@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo, useId } from 'react'
+import type { ApiErrorWithKind } from '../../api/client'
+import { describeApiFailure } from '../../lib/apiErrorMessage'
 import { useDismissable } from '@/hooks/useDismissable'
 import { Button } from '@/components/ui/Button'
 import { IconButton } from '@/components/ui/IconButton'
@@ -670,7 +672,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
     } catch (error) {
       useUIStore.getState().addToast({
         type: 'error',
-        message: error instanceof Error ? error.message : t('empty.failedToCreate'),
+        message: error instanceof Error ? describeApiFailure((error as ApiErrorWithKind).kind, error.message, t) : t('empty.failedToCreate'),
       })
     } finally {
       setLaunchTransitioning(false)
@@ -776,7 +778,7 @@ export function ChatInput({ variant = 'default', compact = false }: ChatInputPro
         } catch (error) {
           useUIStore.getState().addToast({
             type: 'error',
-            message: error instanceof Error ? error.message : t('empty.failedToCreate'),
+            message: error instanceof Error ? describeApiFailure((error as ApiErrorWithKind).kind, error.message, t) : t('empty.failedToCreate'),
           })
           return
         } finally {

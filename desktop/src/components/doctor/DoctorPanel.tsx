@@ -1,4 +1,6 @@
 import { RotateCcw, Stethoscope } from 'lucide-react'
+import type { ApiErrorWithKind } from '../../api/client'
+import { describeApiFailure } from '../../lib/apiErrorMessage'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DoctorReport, DoctorReportItem } from '../../api/doctor'
 import { useTranslation } from '../../i18n'
@@ -73,7 +75,7 @@ export function DoctorPanel({ compact = false }: DoctorPanelProps) {
       if (!isCurrentRequest(request.requestId, request.requestCwd)) return
       addToast({
         type: 'error',
-        message: error instanceof Error ? error.message : t('settings.diagnostics.doctorFailed'),
+        message: error instanceof Error ? describeApiFailure((error as ApiErrorWithKind).kind, error.message, t) : t('settings.diagnostics.doctorFailed'),
       })
     } finally {
       setRunningRequestId((current) => current === request.requestId ? null : current)
@@ -104,7 +106,7 @@ export function DoctorPanel({ compact = false }: DoctorPanelProps) {
       if (requestId !== null && !isCurrentRequest(requestId, requestCwd)) return
       addToast({
         type: 'error',
-        message: error instanceof Error ? error.message : t('settings.diagnostics.doctorFailed'),
+        message: error instanceof Error ? describeApiFailure((error as ApiErrorWithKind).kind, error.message, t) : t('settings.diagnostics.doctorFailed'),
       })
     } finally {
       setResettingRequestId((current) => current === requestId ? null : current)

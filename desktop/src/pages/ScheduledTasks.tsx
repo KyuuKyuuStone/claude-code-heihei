@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { describeApiFailure } from '../lib/apiErrorMessage'
+import { describeApiFailure, technicalDetailFrom } from '../lib/apiErrorMessage'
 
 import { useTaskStore } from '../stores/taskStore'
 import { useUIStore } from '../stores/uiStore'
@@ -74,6 +74,7 @@ export function ScheduledTasks() {
             <ErrorState
               title={t('common.error')}
               detail={describeApiFailure(errorKind, error, t)}
+              technicalDetail={technicalDetailFrom(errorKind, error)}
               onRetry={() => void fetchTasks()}
               retryLabel={t('common.retry')}
             />

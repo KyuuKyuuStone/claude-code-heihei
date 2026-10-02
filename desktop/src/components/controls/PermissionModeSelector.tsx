@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useId } from 'react'
+import type { ApiErrorWithKind } from '../../api/client'
+import { describeApiFailure } from '../../lib/apiErrorMessage'
 import DOMPurify from 'dompurify'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -416,7 +418,7 @@ export function PermissionModeSelector({ workDir: workDirProp, compact = false, 
           } catch (err) {
             useUIStore.getState().addToast({
               type: 'error',
-              message: err instanceof Error ? err.message : t('common.error'),
+              message: err instanceof Error ? describeApiFailure((err as ApiErrorWithKind).kind, err.message, t) : t('common.error'),
             })
           } finally {
             setAutoConsentPending(false)

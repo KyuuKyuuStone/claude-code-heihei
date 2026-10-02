@@ -11,7 +11,7 @@ import { api } from '../api/client'
 import type { CollabTask, CollabTaskStatus } from '../api/collabTasks'
 import { useTranslation } from '../i18n'
 
-import { describeApiFailure } from '../lib/apiErrorMessage'
+import { describeApiFailure, technicalDetailFrom } from '../lib/apiErrorMessage'
 import type { ApiErrorWithKind, ApiFailureKind } from '../api/client'
 
 
@@ -163,7 +163,7 @@ export function CollabTasks() {
           ))}
         </div>
 
-        {error && <ErrorState title="加载失败，正在展示本地缓存" detail={describeApiFailure(errorKind, error, t)} onRetry={refresh} retryLabel="重试" />}
+        {error && <ErrorState title="加载失败，正在展示本地缓存" detail={describeApiFailure(errorKind, error, t)} technicalDetail={technicalDetailFrom(errorKind, error)} onRetry={refresh} retryLabel="重试" />}
 
         <div className="min-h-0 flex-1 overflow-auto rounded-[var(--radius-xl)] border border-[var(--color-border)]">
           {!activeSessionId ? (
@@ -185,7 +185,7 @@ export function CollabTasks() {
         <p className="mt-3 text-xs text-[var(--color-text-secondary)]">共 {visibleTasks.length} 个{filter === 'open' ? '进行中' : filter === 'closed' ? '已结束' : ''}任务</p>
       </div>
 
-      {selectedTaskId && selectedTask && <TaskDetails task={selectedTaskDetail ?? selectedTask} loading={!selectedTaskDetail && !detailError} error={detailError ? describeApiFailure(detailErrorKind, detailError, t) : null} offline={offline} onClose={() => setSelectedTaskId(null)} onRetry={retryTaskDetail} onCopy={copy} />}
+      {selectedTaskId && selectedTask && <TaskDetails task={selectedTaskDetail ?? selectedTask} loading={!selectedTaskDetail && !detailError} error={detailError ? describeApiFailure(detailErrorKind, detailError, t) : null} technicalDetail={detailError ? technicalDetailFrom(detailErrorKind, detailError) : undefined} offline={offline} onClose={() => setSelectedTaskId(null)} onRetry={retryTaskDetail} onCopy={copy} />}
       {offline && <div className="absolute inset-0 z-20 flex items-center justify-center bg-[var(--color-surface)]/70 backdrop-blur-sm"><div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container)] px-5 py-4 text-sm text-[var(--color-text-secondary)]">协作服务未就绪，正在重新连接……</div></div>}
     </div>
   )
@@ -209,7 +209,7 @@ function TaskRow({ task, onOpen, onCopy }: { task: CollabTask; onOpen: () => voi
   )
 }
 
-function TaskDetails({ task, loading, error, offline, onClose, onRetry, onCopy }: { task: TaskDetail; loading: boolean; error: string | null; offline: boolean; onClose: () => void; onRetry: () => void; onCopy: (text: string) => Promise<void> }) {
+function TaskDetails({ task, loading, error, technicalDetail, offline, onClose, onRetry, onCopy }: { task: TaskDetail; loading: boolean; error: string | null; technicalDetail?: { message: string; kind: string }; offline: boolean; onClose: () => void; onRetry: () => void; onCopy: (text: string) => Promise<void> }) {
   const reworkNotes = task.history?.filter((entry) => entry.to === 'rework' && entry.note).map((entry) => entry.note!) ?? []
   return (
     <>
@@ -217,7 +217,7 @@ function TaskDetails({ task, loading, error, offline, onClose, onRetry, onCopy }
       <aside aria-label="协作任务详情" className="absolute right-0 top-0 z-30 flex h-full w-[420px] max-w-full flex-col border-l border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl">
         <header className="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-4"><div><h2 className="font-semibold">{task.title}</h2><code className="text-xs text-[var(--color-text-tertiary)]">{task.id}</code></div><IconButton icon="close" label="关闭详情" onClick={onClose} size="sm" /></header>
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
-          {loading ? <Spinner size={20} label="正在加载详情" /> : error ? <ErrorState title="详情加载失败" detail={error} onRetry={onRetry} retryLabel="重试" /> : (
+          {loading ? <Spinner size={20} label="正在加载详情" /> : error ? <ErrorState title="详情加载失败" detail={error} technicalDetail={technicalDetail} onRetry={onRetry} retryLabel="重试" /> : (
             <>
               <section><h3 className="mb-2 text-xs font-semibold text-[var(--color-text-secondary)]">任务需求</h3><div className="max-w-none text-sm"><MarkdownRenderer content={task.content} /></div></section>
               {task.deliverables.length > 0 && <section><h3 className="mb-2 text-xs font-semibold text-[var(--color-text-secondary)]">交付物</h3><ul className="space-y-1">{task.deliverables.map((path) => <li key={path}><button type="button" disabled={offline} onClick={() => void onCopy(path)} className="break-all text-left font-mono text-xs text-[var(--color-brand)] disabled:opacity-50">{path}</button></li>)}</ul></section>}

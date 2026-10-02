@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { ApiErrorWithKind } from '../api/client'
+import { describeApiFailure } from '../lib/apiErrorMessage'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { Switch } from '@/components/ui/Switch'
@@ -594,7 +596,7 @@ export function McpSettings() {
     } catch (error) {
       addToast({
         type: 'error',
-        message: error instanceof Error ? error.message : t('settings.mcp.toast.toggleFailed'),
+        message: error instanceof Error ? describeApiFailure((error as ApiErrorWithKind).kind, error.message, t) : t('settings.mcp.toast.toggleFailed'),
       })
     } finally {
       setBusyServerKey(null)
@@ -633,7 +635,7 @@ export function McpSettings() {
       })
       addToast({
         type: 'error',
-        message: error instanceof Error ? error.message : t('settings.mcp.toast.reconnectFailed'),
+        message: error instanceof Error ? describeApiFailure((error as ApiErrorWithKind).kind, error.message, t) : t('settings.mcp.toast.reconnectFailed'),
       })
     } finally {
       setBusyServerKey(null)
@@ -660,7 +662,7 @@ export function McpSettings() {
     } catch (error) {
       addToast({
         type: 'error',
-        message: error instanceof Error ? error.message : t('settings.mcp.toast.deleteFailed'),
+        message: error instanceof Error ? describeApiFailure((error as ApiErrorWithKind).kind, error.message, t) : t('settings.mcp.toast.deleteFailed'),
       })
     } finally {
       setIsDeleting(false)
@@ -705,7 +707,7 @@ export function McpSettings() {
     } catch (error) {
       addToast({
         type: 'error',
-        message: error instanceof Error ? error.message : t('settings.mcp.toast.saveFailed'),
+        message: error instanceof Error ? describeApiFailure((error as ApiErrorWithKind).kind, error.message, t) : t('settings.mcp.toast.saveFailed'),
       })
     } finally {
       setIsSaving(false)

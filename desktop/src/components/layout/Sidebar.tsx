@@ -1,9 +1,10 @@
 import { forwardRef, useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react'
+import type { ApiErrorWithKind } from '../../api/client'
 import { Check, ChevronDown, Clock, Folder, FolderOpen, FolderPlus, GitBranch, Inbox, MoreHorizontal, Pin, PinOff, RefreshCw, RotateCcw, SquarePen, X } from 'lucide-react'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useTranslation, type TranslationKey } from '../../i18n'
-import { describeApiFailure } from '../../lib/apiErrorMessage'
+import { describeApiFailure, technicalDetailFrom } from '../../lib/apiErrorMessage'
 import { BrandSeal } from '@/components/composite/BrandSeal'
 import { Badge, StatusDot } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -414,7 +415,7 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
     } catch (error) {
       addToast({
         type: 'error',
-        message: error instanceof Error ? error.message : t('sidebar.sessionListFailed'),
+        message: error instanceof Error ? describeApiFailure((error as ApiErrorWithKind).kind, error.message, t) : t('sidebar.sessionListFailed'),
       })
     }
   }, [addToast, closeMobileDrawer, restoreHiddenProjectForWorkDir, t])
@@ -496,7 +497,7 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
     } catch (error) {
       addToast({
         type: 'error',
-        message: error instanceof Error ? error.message : t('sidebar.sessionListFailed'),
+        message: error instanceof Error ? describeApiFailure((error as ApiErrorWithKind).kind, error.message, t) : t('sidebar.sessionListFailed'),
       })
     }
   }, [addToast, createSessionForWorkDir, t])
@@ -571,7 +572,7 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
     } catch (error) {
       addToast({
         type: 'error',
-        message: error instanceof Error ? error.message : t('sidebar.openInFinderFailed'),
+        message: error instanceof Error ? describeApiFailure((error as ApiErrorWithKind).kind, error.message, t) : t('sidebar.openInFinderFailed'),
       })
     }
   }, [addToast, t])
@@ -644,7 +645,7 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
     } catch (error) {
       addToast({
         type: 'error',
-        message: error instanceof Error ? error.message : t('sidebar.batchDeleteFailed', { count: ids.length }),
+        message: error instanceof Error ? describeApiFailure((error as ApiErrorWithKind).kind, error.message, t) : t('sidebar.batchDeleteFailed', { count: ids.length }),
       })
     } finally {
       setIsBatchDeleting(false)
@@ -988,6 +989,7 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
                   tone="strong"
                   title={t('sidebar.sessionListFailed')}
                   detail={describeApiFailure(errorKind, error, t)}
+                  technicalDetail={technicalDetailFrom(errorKind, error)}
                   onRetry={() => fetchSessions()}
                   retryLabel={t('common.retry')}
                 />

@@ -1,4 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
+import type { ApiErrorWithKind } from '../../api/client'
+import { describeApiFailure } from '../../lib/apiErrorMessage'
 import { Trash2 } from 'lucide-react'
 import { useSkillStore } from '../../stores/skillStore'
 import { useTranslation } from '../../i18n'
@@ -108,7 +110,7 @@ export function SkillDetail() {
     } catch (err) {
       useUIStore.getState().addToast({
         type: 'error',
-        message: err instanceof Error ? err.message : String(err),
+        message: err instanceof Error ? describeApiFailure((err as ApiErrorWithKind).kind, err.message, t) : String(err),
       })
     } finally {
       setUninstalling(false)

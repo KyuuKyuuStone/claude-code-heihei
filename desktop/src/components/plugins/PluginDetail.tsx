@@ -1,4 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react'
+import type { ApiErrorWithKind } from '../../api/client'
+import { describeApiFailure } from '../../lib/apiErrorMessage'
 import { usePluginStore } from '../../stores/pluginStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTranslation } from '../../i18n'
@@ -85,7 +87,7 @@ export function PluginDetail() {
     } catch (err) {
       addToast({
         type: 'error',
-        message: err instanceof Error ? err.message : String(err),
+        message: err instanceof Error ? describeApiFailure((err as ApiErrorWithKind).kind, err.message, t) : String(err),
       })
     } finally {
       setActionKey(null)
@@ -107,7 +109,7 @@ export function PluginDetail() {
     } catch (err) {
       addToast({
         type: 'error',
-        message: err instanceof Error ? err.message : String(err),
+        message: err instanceof Error ? describeApiFailure((err as ApiErrorWithKind).kind, err.message, t) : String(err),
       })
     } finally {
       setActionKey(null)

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ApiErrorWithKind } from '../api/client'
+import { describeApiFailure } from '../lib/apiErrorMessage'
 import {
   diagnosticsApi,
   type DiagnosticEvent,
@@ -76,7 +78,7 @@ export function DiagnosticsSettings() {
           const error = diagnosticsResult.reason
           addToast({
             type: 'error',
-            message: error instanceof Error ? error.message : t('settings.diagnostics.loadFailed'),
+            message: error instanceof Error ? describeApiFailure((error as ApiErrorWithKind).kind, error.message, t) : t('settings.diagnostics.loadFailed'),
           })
         }
       }
@@ -121,7 +123,7 @@ export function DiagnosticsSettings() {
     } catch (error) {
       addToast({
         type: 'error',
-        message: error instanceof Error ? error.message : t('settings.diagnostics.openFailed'),
+        message: error instanceof Error ? describeApiFailure((error as ApiErrorWithKind).kind, error.message, t) : t('settings.diagnostics.openFailed'),
       })
     }
   }
@@ -139,7 +141,7 @@ export function DiagnosticsSettings() {
     } catch (error) {
       addToast({
         type: 'error',
-        message: error instanceof Error ? error.message : t('settings.diagnostics.exportFailed'),
+        message: error instanceof Error ? describeApiFailure((error as ApiErrorWithKind).kind, error.message, t) : t('settings.diagnostics.exportFailed'),
       })
     } finally {
       setIsExporting(false)
@@ -170,7 +172,7 @@ export function DiagnosticsSettings() {
     } catch (error) {
       addToast({
         type: 'error',
-        message: error instanceof Error ? error.message : t('settings.diagnostics.issueReportCopyFailed'),
+        message: error instanceof Error ? describeApiFailure((error as ApiErrorWithKind).kind, error.message, t) : t('settings.diagnostics.issueReportCopyFailed'),
       })
     } finally {
       setIsCopyingIssueReport(false)
@@ -189,7 +191,7 @@ export function DiagnosticsSettings() {
     } catch (error) {
       addToast({
         type: 'error',
-        message: error instanceof Error ? error.message : t('settings.diagnostics.clearFailed'),
+        message: error instanceof Error ? describeApiFailure((error as ApiErrorWithKind).kind, error.message, t) : t('settings.diagnostics.clearFailed'),
       })
     } finally {
       setIsClearing(false)
@@ -215,7 +217,7 @@ export function DiagnosticsSettings() {
       if (!mountedRef.current || mutationId !== localIndexMutationIdRef.current) return
       addToast({
         type: 'error',
-        message: error instanceof Error ? error.message : t('settings.diagnostics.localIndex.rebuildFailed'),
+        message: error instanceof Error ? describeApiFailure((error as ApiErrorWithKind).kind, error.message, t) : t('settings.diagnostics.localIndex.rebuildFailed'),
       })
     } finally {
       rebuildInFlightRef.current = false
