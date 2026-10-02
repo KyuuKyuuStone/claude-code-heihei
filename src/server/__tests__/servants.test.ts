@@ -1807,12 +1807,15 @@ describe('Session Messages API', () => {
 // ─── SessionMessenger validation tests ─────────────────────────────────────
 
 describe('SessionMessenger validation', () => {
+  // v1.7.2 P0-a：deliver 入口新增 serverHost 校验（host:port + 端口 1..65535）。
+  // 本组用例传**合法** host，才能走到它们真正要守护的校验（空 target/content、未知会话）；
+  // 断言与期望错误一字未改——只让校验顺序变化不再遮蔽原语义。
   it('should reject empty target and content', async () => {
     const messenger = new SessionMessenger()
-    await expect(messenger.deliver(' ', 'hi', 'h')).rejects.toThrow(
+    await expect(messenger.deliver(' ', 'hi', '127.0.0.1:53100')).rejects.toThrow(
       'targetSessionId',
     )
-    await expect(messenger.deliver('s', ' ', 'h')).rejects.toThrow('content')
+    await expect(messenger.deliver('s', ' ', '127.0.0.1:53100')).rejects.toThrow('content')
   })
 
   it('should throw not-found for an unknown session', async () => {
@@ -1821,7 +1824,7 @@ describe('SessionMessenger validation', () => {
     try {
       const messenger = new SessionMessenger()
       await expect(
-        messenger.deliver('no-such-session', 'hi', '127.0.0.1'),
+        messenger.deliver('no-such-session', 'hi', '127.0.0.1:53100'),
       ).rejects.toThrow('Session not found')
     } finally {
       restoreConfigDir()

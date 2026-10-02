@@ -21,6 +21,21 @@ import {
 import { sessionService } from './sessionService.js'
 import { ApiError } from '../middleware/errorHandler.js'
 
+/**
+ * 投递地址校验（v1.7.2 P0-a 裁决二十③）：必须是 `host:port` 且端口在 1–65535。
+ *
+ * 背景：`127.0.0.1:0` 这类假值曾被 supervisorProtocolNotice 用于「不需要真地址」的场景，
+ * 而 deliver 对未运行会话会 startSession(..., buildSdkUrl(host)) —— 端口 0 的 SDK URL 让 CLI
+ * 永远连不上，产生**静默僵尸会话**（CLI 活着、零日志、消息滞留）。此处**入口 fail-fast**，
+ * 让同类问题显形为错误而不是静默。
+ */
+function isValidServerHostPort(serverHost: string): boolean {
+  const matched = /^(.+):(\d+)$/.exec((serverHost ?? '').trim())
+  if (!matched) return false
+  const port = Number(matched[2])
+  return Number.isInteger(port) && port >= 1 && port <= 65535
+}
+
 function buildSdkUrl(serverHost: string, sessionId: string): string {
   const url = new URL(`ws://${serverHost}/sdk/${sessionId}`)
   url.searchParams.set('token', crypto.randomUUID())
@@ -119,6 +134,20 @@ export class SessionMessenger {
     if (deliverOverride) {
       return deliverOverride(targetSessionId, content, serverHost)
     }
+    if (!isValidServerHostPort(serverHost)) {
+      // 裁决二十③：无效 host（含 port===0）一律**拒绝并显形**，绝不带着坏地址去拉起会话。
+      void diagnosticsService
+        .recordEvent({
+          type: 'deliver_invalid_server_host',
+          severity: 'error',
+          summary: `投递被拒：serverHost 无效（${serverHost}）`, 
+          details: { serverHost, targetSessionId },
+        })
+        .catch(() => {})
+      throw ApiError.badRequest(
+        `Invalid serverHost: ${JSON.stringify(serverHost)} (expected host:port with port 1-65535)`,
+      )
+    }
     if (!targetSessionId || !targetSessionId.trim()) {
       throw ApiError.badRequest('Field "targetSessionId" is required')
     }
@@ -147,6 +176,8 @@ export class SessionMessenger {
         workDir,
         buildSdkUrl(serverHost, targetSessionId),
         {
+          // 裁决二十一④：投递链路自动拉起——诊断据此区分「谁拉起的」。
+          startSource: 'delivery',
           ...(launchInfo?.permissionMode
             ? { permissionMode: launchInfo.permissionMode }
             : {}),
