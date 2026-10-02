@@ -1518,6 +1518,8 @@ export const en = {
   'permission.planReadyTitle': 'Ready to code?',
   'permission.planPreviewTitle': "Claude's plan",
   'permission.planRequestedPermissions': 'Requested permissions',
+  'permission.timeoutAutoResolved': 'Permission request timed out; the tool was denied automatically, and the turn continues with the tool refused',
+  'permission.awaitingHint': 'Waiting for approval; if no response, the tool request will be auto-denied and the turn continues with the tool refused',
   'permission.planApprove': 'Approve plan',
   'permission.planKeepPlanning': 'Keep planning',
   'permission.planFeedbackPlaceholder': 'Tell Claude what to change',

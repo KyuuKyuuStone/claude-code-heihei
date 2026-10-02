@@ -380,6 +380,7 @@ function ExitPlanModePermissionDialog({
       </div>
 
       {isPending ? (
+        <>
         <div className="flex items-center gap-2 border-t border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
           <Button
             variant="primary"
@@ -399,6 +400,10 @@ function ExitPlanModePermissionDialog({
             {t('permission.planKeepPlanning')}
           </Button>
         </div>
+        <p className="border-t border-[var(--color-border)] px-4 py-2 text-[11px] leading-4 text-[var(--color-text-tertiary)]">
+          {t('permission.awaitingHint')}
+        </p>
+        </>
       ) : null}
     </div>
   )

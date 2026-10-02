@@ -1520,6 +1520,8 @@ export const kr: Record<TranslationKey, string> = {
   'permission.planReadyTitle': '코딩을 시작할까요?',
   'permission.planPreviewTitle': 'Claude의 계획',
   'permission.planRequestedPermissions': '요청된 권한',
+  'permission.timeoutAutoResolved': '권한 승인이 시간초과되어 도구가 자동 거부되었으며, 턴은 도구 거부 상태로 계속됩니다',
+  'permission.awaitingHint': '승인을 기다리고 있습니다. 응답이 없으면 도구 요청이 자동 거부되고, 턴은 도구 거부 상태로 계속됩니다',
   'permission.planApprove': '계획 승인',
   'permission.planKeepPlanning': '계속 계획하기',
   'permission.planFeedbackPlaceholder': 'Claude에게 변경할 내용을 알려주세요',

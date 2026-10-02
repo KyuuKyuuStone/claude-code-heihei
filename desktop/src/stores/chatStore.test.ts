@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MessageEntry } from '../types/session'
+import { t as translateKey } from '../i18n'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
 
 const {
@@ -2909,6 +2910,74 @@ describe('chatStore history mapping', () => {
     expect(session?.pendingPermissions).toEqual({})
     expect(session?.pendingPermission).toBeNull()
     expect(session?.chatState).toBe('thinking')
+  })
+
+  it('appends a timeout footnote and clears the pending request on permission_resolved reason=timeout', () => {
+    // 守护语义（v1.7.2 P0-b，架构师验收硬条件「不得静默」）：超时自动拒绝的
+    // permission_resolved 到达时，消息流末尾追加 permission_timeout 系统注脚
+    // （被移除的 permission_request 卡片位置下方），pending 同步清空。
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession(),
+      },
+    })
+    const store = useChatStore.getState()
+    store.handleServerMessage(TEST_SESSION_ID, {
+      type: 'permission_request',
+      requestId: 'perm-timeout',
+      toolName: 'Bash',
+      toolUseId: 'tool-perm-timeout',
+      input: { command: 'sleep 900' },
+    })
+    const before = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(before?.pendingPermissions).toHaveProperty('perm-timeout')
+
+    store.handleServerMessage(TEST_SESSION_ID, {
+      type: 'permission_resolved',
+      requestId: 'perm-timeout',
+      permissionType: 'tool',
+      reason: 'timeout',
+    })
+
+    const after = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(after?.pendingPermissions).not.toHaveProperty('perm-timeout')
+    expect(after?.messages.length).toBe((before?.messages.length ?? 0) + 1)
+    const footnote = after?.messages[(after?.messages.length ?? 1) - 1]
+    if (!footnote || footnote.type !== 'permission_timeout') throw new Error('timeout footnote missing')
+    expect(footnote.content).toBe(translateKey('permission.timeoutAutoResolved'))
+    expect(after?.chatState).not.toBe('permission_pending')
+  })
+
+  it('does not add a footnote for non-timeout permission resolutions', () => {
+    // 反向用例：普通应答（allowed）与无 reason 的 resolved 不得产生注脚——
+    // 注脚只属于超时自动拒绝这一条路径。
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession(),
+      },
+    })
+    const store = useChatStore.getState()
+    store.handleServerMessage(TEST_SESSION_ID, {
+      type: 'permission_request',
+      requestId: 'perm-ok',
+      toolName: 'Read',
+      toolUseId: 'tool-perm-ok',
+      input: {},
+    })
+    const before = useChatStore.getState().sessions[TEST_SESSION_ID]
+    const beforeCount = before?.messages.length ?? 0
+
+    store.handleServerMessage(TEST_SESSION_ID, {
+      type: 'permission_resolved',
+      requestId: 'perm-ok',
+      permissionType: 'tool',
+      allowed: true,
+    })
+
+    const after = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(after?.pendingPermissions).not.toHaveProperty('perm-ok')
+    expect(after?.messages.length).toBe(beforeCount)
+    expect(after?.messages.some((message) => message.type === 'permission_timeout')).toBe(false)
   })
 
   it('reconciles stale tool and Computer Use requests from the reconnect snapshot', () => {

@@ -184,5 +184,14 @@ export const MessageBlock = memo(function MessageBlock({
           {message.content}
         </div>
       )
+    case 'permission_timeout':
+      // v1.7.2 P0-b（设计稿 §1.1）：12px text-tertiary 中性灰、圆点前缀、左对齐，
+      // 不 role=alert、不折叠、无动画；720px 列宽内自然换行。
+      return (
+        <div className="mb-3 flex items-start gap-2 px-4 text-left text-xs leading-5 text-[var(--color-text-tertiary)]">
+          <span aria-hidden="true" className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-text-tertiary)]" />
+          <span className="min-w-0 whitespace-pre-wrap break-all">{message.content}</span>
+        </div>
+      )
   }
 })

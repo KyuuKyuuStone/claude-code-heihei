@@ -104,6 +104,8 @@ export type ServerMessage =
       requestId: string
       permissionType: 'tool' | 'computer_use'
       allowed?: boolean
+      /** v1.7.2 P0-b：超时自动拒绝时标记来源（服务端补发，非 CLI 应答）。 */
+      reason?: 'timeout'
     }
   | {
       type: 'permission_requests_snapshot'
@@ -304,6 +306,7 @@ export type UIMessage =
   | { id: string; type: 'tool_result'; toolUseId: string; content: unknown; isError: boolean; timestamp: number; parentToolUseId?: string }
   | { id: string; type: 'background_task'; task: BackgroundAgentTask; timestamp: number }
   | { id: string; type: 'system'; content: string; timestamp: number }
+  | { id: string; type: 'permission_timeout'; content: string; timestamp: number }
   | {
       id: string
       type: 'compact_summary'

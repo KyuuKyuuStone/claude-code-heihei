@@ -7,6 +7,7 @@ import { useCLITaskStore } from './cliTaskStore'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { useTabStore } from './tabStore'
 import { randomSpinnerVerb } from '../config/spinnerVerbs'
+import { t as translateKey } from '../i18n'
 import { notifyDesktop } from '../lib/desktopNotifications'
 import { deriveSessionTitle, isPlaceholderSessionTitle } from '../lib/sessionTitle'
 import { hasRunningBackgroundTasks } from '../lib/backgroundTasks'
@@ -1953,6 +1954,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             delete pendingComputerUsePermissions[msg.requestId]
             const remainingPermissions = Object.values(pendingComputerUsePermissions)
 
+            const timeoutFootnote = msg.reason === 'timeout'
+              ? [{
+                  id: nextId(),
+                  type: 'permission_timeout' as const,
+                  content: translateKey('permission.timeoutAutoResolved'),
+                  timestamp: Date.now(),
+                }]
+              : []
             return {
               pendingComputerUsePermissions,
               pendingComputerUsePermission: getCurrentComputerUsePermission(
@@ -1965,6 +1974,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                   remainingPermissions.length > 0,
                 msg.allowed,
               ),
+              ...(timeoutFootnote.length > 0 ? { messages: [...session.messages, ...timeoutFootnote] } : {}),
             }
           }
 
@@ -1972,6 +1982,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           if (!pendingPermissions[msg.requestId]) return {}
           delete pendingPermissions[msg.requestId]
           const remainingPermissions = Object.values(pendingPermissions)
+          // v1.7.2 P0-b：超时自动拒绝要可见（架构师验收硬条件）——在被移除的
+          // permission_request 卡片位置追加一条系统注脚（type: permission_timeout）。
+          const timeoutFootnote = msg.reason === 'timeout'
+            ? [{
+                id: nextId(),
+                type: 'permission_timeout' as const,
+                content: translateKey('permission.timeoutAutoResolved'),
+                timestamp: Date.now(),
+              }]
+            : []
           return {
             pendingPermissions,
             pendingPermission: remainingPermissions[remainingPermissions.length - 1] ?? null,
@@ -1981,6 +2001,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                 Object.keys(getPendingComputerUsePermissionRecord(session)).length > 0,
               msg.allowed,
             ),
+            ...(timeoutFootnote.length > 0 ? { messages: [...session.messages, ...timeoutFootnote] } : {}),
           }
         })
         break

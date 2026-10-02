@@ -1520,6 +1520,8 @@ export const jp: Record<TranslationKey, string> = {
   'permission.planReadyTitle': 'コーディングを開始しますか？',
   'permission.planPreviewTitle': 'Claude の計画',
   'permission.planRequestedPermissions': '要求された権限',
+  'permission.timeoutAutoResolved': '権限承認がタイムアウトしました。ツールは自動的に拒否され、ターンはツール拒否のまま続行します',
+  'permission.awaitingHint': '承認を待っています。応答がない場合、ツール要求は自動的に拒否され、ターンはツール拒否のまま続行します',
   'permission.planApprove': '計画を承認',
   'permission.planKeepPlanning': '計画を続ける',
   'permission.planFeedbackPlaceholder': 'Claude に変更内容を伝える',

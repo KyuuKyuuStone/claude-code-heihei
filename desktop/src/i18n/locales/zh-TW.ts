@@ -1520,6 +1520,8 @@ export const zh: Record<TranslationKey, string> = {
   'permission.planReadyTitle': '準備開始編碼？',
   'permission.planPreviewTitle': 'Claude 的計劃',
   'permission.planRequestedPermissions': '請求的權限',
+  'permission.timeoutAutoResolved': '權限審批逾時未回應，該工具已被自動拒絕，本回合依工具被拒繼續',
+  'permission.awaitingHint': '正在等待審批；如逾時未回應，該工具請求將被自動拒絕，回合依工具被拒繼續',
   'permission.planApprove': '批准計劃',
   'permission.planKeepPlanning': '繼續規劃',
   'permission.planFeedbackPlaceholder': '告訴 Claude 需要修改什麼',

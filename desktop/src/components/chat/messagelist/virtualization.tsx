@@ -176,6 +176,7 @@ function getMessageContentWeight(message: UIMessage): number {
     case 'assistant_text':
     case 'thinking':
     case 'system':
+    case 'permission_timeout':
       return message.content.length
     case 'tool_use':
       return getShallowStringWeight(message.input) + (message.partialInput?.length ?? 0)
@@ -263,7 +264,8 @@ function estimateMessageHeight(message: UIMessage): number {
       return message.summary ? clampNumber(92 + Math.ceil(message.summary.length / 90) * 20, 80, 1800) : 70
     case 'error':
     case 'system':
-      return 64
+    case 'permission_timeout':
+      return 44
   }
 }
 
@@ -280,6 +282,7 @@ function getMessageMetricSignature(message: UIMessage): string {
     case 'assistant_text':
     case 'thinking':
     case 'system':
+    case 'permission_timeout':
       return `${message.type}:${message.content.length}`
     case 'tool_use':
       return `${message.type}:${message.toolName}:${message.toolUseId}:${message.partialInput?.length ?? 0}:${message.isPending ? 1 : 0}:${message.status ?? ''}`
