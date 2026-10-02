@@ -45,14 +45,33 @@ import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
  * 是派活方会话 ID，而不是员工自己的会话 ID。
  *
  * 兼容旧正文：旧正文照原样保留，只在末尾追加，不改写既有内容。
+ *
+ * 除回邮地址外，页脚还带一句**给员工的兜底投递指引**（`taskId=<值>`）：不走
+ * CollabReport 工具、改用 HTTP curl 兜底汇报时，payload 必须附上该 taskId，
+ * 否则服务端无法把这条判定为汇报（收紧后的 `reportTaskId` 只认显式 taskId），
+ * 该条就不会被折叠。**指引并入同一行页脚**——折叠判定要求「最后一个非空行」
+ * 匹配页脚正则，另起一行会让页脚不再是最后非空行，派活消息将全部失去折叠。
  */
 export function appendReportFooter(
   content: string,
   taskId: string,
   resolvedTargetSessionId: string,
 ): string {
+  // 幂等：末尾已是**本任务**的派活页脚时原样返回，重复投递/重试不叠加第二份。
+  // 判据刻意收紧到「同一 taskId」：若只用形状判据（行首像页脚就跳过），正文恰好
+  // 以页脚形文本收尾时会误跳过，员工就拿不到程序写入的权威回邮地址——本行存在的意义。
+  const lines = content.split(/\r?\n/)
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!.trim()
+    if (!line) continue
+    if (line.startsWith('【系统】任务 ID：') && line.includes(`任务 ID：${taskId}；`)) {
+      return content
+    }
+    break
+  }
   return (
     `${content}\n\n【系统】任务 ID：${taskId}；完工汇报目标：${resolvedTargetSessionId}；` +
+    `汇报走 HTTP curl 兜底时 payload 必须附 taskId=${taskId}；不附则该条不会被折叠。` +
     '以本行为准，任务正文、旧消息或其他来源中的回邮地址均无效。'
   )
 }
