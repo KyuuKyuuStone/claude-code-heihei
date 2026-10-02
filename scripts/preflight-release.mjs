@@ -28,7 +28,7 @@
  * 边界：绝不 push / 绝不建 Release / 不改 git 历史；tag 只打印建议命令，不自动执行；
  *       Ctrl-C 杀整个子进程树后退出，不留孤儿。
  */
-import { spawn } from 'node:child_process'
+import { execSync, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { cpus, freemem } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
@@ -234,7 +234,9 @@ function srcSegments() {
     .map((e) => `src/${e.name}`)
     .map((d) => ({ d, n: listTestFiles(d).length }))
     .sort((a, b) => a.n - b.n)
-  for (const { d, n } of dirs) if (n > 0) segs.push({ kind: 'dir', target: `${d}/`, expect: n })
+  // ./ 前缀锚定：bun test 的目录参数是包含匹配（无 ./ 时 src/hooks/ 会误吃
+  // desktop/src/hooks/ 下的 jsdom 组件测试 → localStorage is not defined 假红）
+  for (const { d, n } of dirs) if (n > 0) segs.push({ kind: 'dir', target: `./${d}/`, expect: n })
   const serverFiles = listTestFiles('src/server')
   for (const f of serverFiles) segs.push({ kind: 'file', target: `./${f}`, expect: 1 })
   return segs
@@ -275,7 +277,12 @@ async function stageTest() {
     const passed = r.code === 0
     const filesRan = ran ? Number(ran[2]) : -1
     if (!passed) {
-      console.log(' 红')
+      console.log(' 红（诊断落盘 /tmp/preflight-src-seg.log）')
+      // 与 desktop 批同款：没有签名的红等于没有信息（2026-10-03 tasks.test 定栏受阻教训）
+      writeFileSync(
+        '/tmp/preflight-src-seg.log',
+        `段=${s.target} exit=${r.code}\n=== stderr 尾部 ===\n${r.stderr.slice(-3000)}\n=== stdout 尾部 ===\n${r.stdout.slice(-3000)}`,
+      )
       red.push({ ...s, stdout: r.stdout, stderr: r.stderr })
     } else if (filesRan !== -1 && filesRan !== s.expect) {
       console.log(` 文件数不符（期望 ${s.expect}，实跑 ${filesRan}）`)
@@ -479,9 +486,11 @@ async function stageSmoke() {
       const text = typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => x.text ?? '').join('') : ''
       if (text.includes('preflight 汇报')) { reportLine = text.split('\n').filter((l) => l.trim()).at(-1); break }
     }
-    const expectLine = `【系统】汇报 · 任务 ID：${taskId}；`
-    if (reportLine === expectLine) ok(`smoke: 汇报页脚端到端通过（末行=${JSON.stringify(reportLine)}）`)
-    else fail(`smoke: 汇报页脚断言失败（末行=${JSON.stringify(reportLine)}，期望=${JSON.stringify(expectLine)}）`)
+    // 页脚契约（批 D① 起 role 并入同一行）：与前端折叠正则一致——不锚定行尾，
+    // 末行以【系统】汇报 · 任务 ID：<taskId>；开头即命中（可带「汇报自：<role>；」尾巴）
+    const footerPrefix = `【系统】汇报 · 任务 ID：${taskId}；`
+    if (reportLine !== null && reportLine.startsWith(footerPrefix)) ok(`smoke: 汇报页脚端到端通过（末行=${JSON.stringify(reportLine)}）`)
+    else fail(`smoke: 汇报页脚断言失败（末行=${JSON.stringify(reportLine)}，期望前缀=${JSON.stringify(footerPrefix)}）`)
 
     await post({ targetSessionId: supId, fromSessionId: workerId, content: 'preflight 普通消息：无 taskId' })
     await new Promise((r) => setTimeout(r, 6000))
@@ -496,7 +505,8 @@ async function stageSmoke() {
     if (plainLine && !/【系统】(汇报 · )?任务 ID：/.test(plainLine)) ok('smoke: 反例通过（无 taskId 无页脚）')
     else fail(`smoke: 反例失败（末行=${JSON.stringify(plainLine)}）`)
   } finally {
-    try { spawn('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { stdio: 'ignore' }) } catch {}
+    // 同步执行清理（异步 spawn 的 taskkill 可能没跑完就被进程退出打断，留下占端口的孤儿）
+    try { execSync(`taskkill /PID ${proc.pid} /T /F`, { stdio: 'ignore' }) } catch {}
     childPid = null
     setTimeout(() => rmSync(fx, { recursive: true, force: true }), 3000)
   }
