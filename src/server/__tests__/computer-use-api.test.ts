@@ -49,14 +49,14 @@ beforeAll(async () => {
   configDir = await mkdtemp(join(tmpdir(), 'cc-heihei-computer-use-api-'))
   process.env.CLAUDE_CONFIG_DIR = configDir
   computerUseApi = await import('../api/computer-use.js')
-})
+}, 20_000) // 轻量加固：钩子做动态 import/mkdtemp，机器繁忙时会超默认 5s
 
 beforeEach(async () => {
   if (!configDir) throw new Error('configDir was not initialized')
   process.env.CLAUDE_CONFIG_DIR = configDir
   await rm(join(configDir, 'cc-heihei'), { recursive: true, force: true })
   await rm(join(configDir, '.runtime'), { recursive: true, force: true })
-})
+}, 20_000) // 轻量加固：钩子内 rm -rf 在繁忙磁盘上可能超默认 5s
 
 afterAll(async () => {
   if (originalClaudeConfigDir === undefined) {
