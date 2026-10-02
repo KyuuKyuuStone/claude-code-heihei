@@ -185,9 +185,13 @@ export const useCollabTaskStore = create<CollabTaskStore>((set, get) => ({
       if (activeProjectSessionId) void get().refreshForSession(activeProjectSessionId, { clear: true })
       else if (activeProjectDir) void get().refreshForProject(activeProjectDir, { clear: true })
       void get().refreshDispatched()
-      void get().checkServerIdentity()
+      // 探活由 setConnectionState 的 connected 边沿统一触发（下方 :150），此处
+      // 不再重复发起——同一次重连原本会同 tick 双路径触发两次（第二次被
+      // in-flight 去重吞掉，属冗余触发源）。
     }, (state) => get().setConnectionState(state))
-    void get().checkServerIdentity()
+    // 订阅时若通道已连接（面板是后挂载的订阅方）立即探活；否则等 WS
+    // connected 边沿统一触发——避免首订户挂载时「立即探 + 边沿探」双发。
+    if (get().connectionState === 'connected') void get().checkServerIdentity()
     return () => { unsubscribe(); if (refreshTimer) clearTimeout(refreshTimer) }
   },
 }))

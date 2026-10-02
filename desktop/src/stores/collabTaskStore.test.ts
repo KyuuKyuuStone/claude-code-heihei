@@ -183,12 +183,24 @@ describe('collabTaskStore', () => {
   })
 
   it('rechecks server identity after initial failure when the first connection arrives', async () => {
+    // 守护语义：初始探活失败后，连接到达仍会复查身份并最终恢复（serverReady 转 true）；
+    // 「连接到达会触发探活」与「失败后能恢复」各有明确断言。
+    // 旧写法断言「订阅后立刻探活一次」——D② 把挂载探活收敛为「已连接才探、否则交给
+    // connected 边沿」（未连接时 offline 本就为 true，先探无消费意义），故改为由连接
+    // 边沿驱动全部探活时机。
     apiWhoamiMock.mockRejectedValueOnce(new Error('server restarting')).mockResolvedValueOnce({ app: 'cc-heihei' })
     const unsubscribe = useCollabTaskStore.getState().subscribeTaskEvents()
+
+    // 订阅时未连接：不探（D② 新语义）
+    expect(apiWhoamiMock).not.toHaveBeenCalled()
+
+    // 首次连接到达 → 边沿探活（失败 mock）→ serverReady false
+    useCollabTaskStore.getState().setConnectionState('connected')
     await vi.waitFor(() => expect(apiWhoamiMock).toHaveBeenCalledTimes(1))
     await vi.waitFor(() => expect(useCollabTaskStore.getState().serverReady).toBe(false))
 
-    useCollabTaskStore.getState().setConnectionState('connected')
+    // 再来一次连接周期（非 connected → connected）→ 复查成功 → 恢复
+    useCollabTaskStore.getState().setConnectionState('reconnecting')
     useCollabTaskStore.getState().setConnectionState('connected')
     await vi.waitFor(() => expect(useCollabTaskStore.getState().serverReady).toBe(true))
     expect(apiWhoamiMock).toHaveBeenCalledTimes(2)
@@ -208,14 +220,27 @@ describe('collabTaskStore', () => {
     unsubscribe()
   })
 
-  it('coalesces a connection probe that overlaps the initial identity check', async () => {
+  it('coalesces overlapping connection probes while one is in flight', async () => {
+    // 守护语义：在途探活会被合并——任一触发路径发起的探活在途期间，其余触发路径
+    // 不产生并发重复请求（返回同一 promise 并登记 trailing）。
+    // 旧写法依赖「订阅即探活」制造在途——D② 改为「已连接才探」，故改由连接边沿发起
+    // 在途探活，再以第二个连接周期制造重叠。
     const firstProbe = deferred<{ app: string }>()
     apiWhoamiMock.mockReturnValueOnce(firstProbe.promise).mockResolvedValueOnce({ app: 'cc-heihei' })
     const unsubscribe = useCollabTaskStore.getState().subscribeTaskEvents()
+
+    // 连接边沿发起在途探活
+    useCollabTaskStore.getState().setConnectionState('connected')
     await vi.waitFor(() => expect(apiWhoamiMock).toHaveBeenCalledTimes(1))
 
+    // 在途期间再触发一次连接周期：边沿探活命中 in-flight 被合并（不并发），
+    // retryIfInFlight=true 登记 trailing
+    useCollabTaskStore.getState().setConnectionState('reconnecting')
     useCollabTaskStore.getState().setConnectionState('connected')
     expect(apiWhoamiMock).toHaveBeenCalledTimes(1)
+
+    // 首个探活 resolve 后按 trailing 语义最多补一次（终值 2 = 在途 1 + trailing 1，
+    // 与旧用例终值 2 对应：旧为「订阅探 1 + trailing 1」）
     firstProbe.resolve({ app: 'wrong-app' })
     await vi.waitFor(() => expect(useCollabTaskStore.getState().serverReady).toBe(true))
     expect(apiWhoamiMock).toHaveBeenCalledTimes(2)
