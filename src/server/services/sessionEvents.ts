@@ -14,6 +14,7 @@ export type SessionEvent =
   | { type: 'phase_changed'; sessionId: string; from: SessionPhase; to: SessionPhase; meta?: Record<string, unknown> }
   | { type: 'turn_changed'; sessionId: string; turn: TurnPhase; meta?: Record<string, unknown> }
   | { type: 'permission_changed'; sessionId: string; awaiting: boolean }
+  | { type: 'permission_timeout'; sessionId: string; requestId: string; toolName: string }
 
 export type SessionEventFilter = {
   sessionId?: string

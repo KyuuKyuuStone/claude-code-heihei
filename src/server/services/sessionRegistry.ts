@@ -53,6 +53,8 @@ export type SessionSnapshot = {
   /** 幂等守卫（现 activeTurn 引用比对的替代；symbol 由 registry 内部创建） */
   turnOwner: symbol | null
   awaitingPermission: boolean
+  /** 该会话是否至少有一个 WS 客户端在线（handler 在 add/removeActiveClient 单点写入）。 */
+  clientAttached: boolean
   lastTurnEndedAt: number | null
 }
 
@@ -82,6 +84,7 @@ type InternalState = {
   turn: TurnPhase
   turnOwner: symbol | null
   awaitingPermission: boolean
+  clientAttached: boolean
   lastTurnEndedAt: number | null
 }
 
@@ -175,6 +178,7 @@ export function registerSession(id: string): void {
     turn: 'none',
     turnOwner: null,
     awaitingPermission: false,
+    clientAttached: false,
     lastTurnEndedAt: null,
   })
   // 新建条目（无前态）不发 phase_changed；「新登记」事件留待有观察者需求时扩展
@@ -359,6 +363,35 @@ export function setAwaitingPermission(id: string, awaiting: boolean): void {
 }
 
 /**
+ * 客户端在线记账（P0-b 裁决十九·选 (a)）：**handler 是唯一写入方**——在既有
+ * `addActiveClient` / `removeActiveClient` 两处单点写入；conversationService 只读
+ * （用于选择权限超时档位与「中途接入只延长」）。不设事件（避免噪音：无订阅方）。
+ */
+export function setSessionClientAttached(id: string, attached: boolean): void {
+  assertNotReentrant()
+  const state = getState(id)
+  if (!state) return
+  if (state.clientAttached === attached) return
+  state.clientAttached = attached
+}
+
+/** 只读查询：该会话当前是否有客户端在线（无条目 = false）。 */
+export function isSessionClientAttached(id: string): boolean {
+  return getState(id)?.clientAttached === true
+}
+
+/**
+ * 权限请求超时（P0-b）：conversationService 在超时 deny 时调用，把「超时」这一
+ * 事实推给 WS 层（handler 订阅后向前端补发 permission_resolved + reason:'timeout'）。
+ * 存储本体仍在 conversationService 的 session 对象（本函数只做事件广播）。
+ */
+export function emitPermissionTimeout(id: string, requestId: string, toolName: string): void {
+  assertNotReentrant()
+  if (!getState(id)) return
+  emitSessionEvent({ type: 'permission_timeout', sessionId: id, requestId, toolName })
+}
+
+/**
  * 清除会话条目（closeSessionConnection / stopSession 收尾）。
  * - **幂等校正（09-26 质检修订，阶段 1 合同补充 1）**：若 phase 仍为 running/crashed，
  *   强制落 **stopped**（进程对象删除是 stopped 的充分事实）——阶段 2 回滚后快照自动
@@ -389,6 +422,7 @@ export function getSessionSnapshot(id: string): SessionSnapshot | null {
     turn: state.turn,
     turnOwner: state.turnOwner,
     awaitingPermission: state.awaitingPermission,
+    clientAttached: state.clientAttached,
     lastTurnEndedAt: state.lastTurnEndedAt,
   }
 }
