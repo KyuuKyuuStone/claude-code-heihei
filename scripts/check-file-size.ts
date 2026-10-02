@@ -244,6 +244,10 @@ for (const rel of candidates) {
   const kind = baseEntry === undefined || typeof baseEntry === 'number' ? 'upstream' : baseEntry.kind
 
   if (base !== undefined) {
+    // 补充裁决二十二第 2 条：豁免 cap 优先于基线——allowlist 内文件不适用
+    // 「基线只许减少/降线须下调」条款，行数约束只按 cap 判（RELEASE_CHECK 随
+    // version ≥1.7.0 常态执行）；非豁免文件的基线行为逐字不变
+    if (activeFileAllow.has(rel)) continue
     // 超基线一律失败——豁免不放行（豁免只用于发版检查，见下方 RELEASE_CHECK）
     if (lines > base) {
       failures.push(
