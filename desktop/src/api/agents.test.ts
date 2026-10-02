@@ -73,7 +73,7 @@ describe('agentsApi', () => {
     expect(apiPostMock).toHaveBeenCalledWith(
       '/api/agents/reload?sessionId=session%2Fone%3F',
       undefined,
-      { timeout: 120_000 },
+      { timeout: 320_000 },
     )
   })
 })

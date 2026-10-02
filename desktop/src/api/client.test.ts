@@ -135,7 +135,7 @@ describe('api diagnostics reporting', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  it('defaults local API requests to a 120 second timeout', async () => {
+  it('defaults local API requests to a 320 second timeout', async () => {
     vi.useFakeTimers()
     const fetchMock = vi.spyOn(globalThis, 'fetch')
     fetchMock.mockImplementation((url: string | URL | Request, init?: RequestInit) => {
@@ -152,16 +152,16 @@ describe('api diagnostics reporting', () => {
       } as Response)
     })
 
-    const request = expect(api.get('/api/slow')).rejects.toThrow('Request timed out after 120s')
+    const request = expect(api.get('/api/slow')).rejects.toThrow('Request timed out after 320s')
 
-    await vi.advanceTimersByTimeAsync(120_000)
+    await vi.advanceTimersByTimeAsync(320_000)
     await request
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
     const [, diagnosticInit] = fetchMock.mock.calls[1]!
     const body = JSON.parse(String((diagnosticInit as RequestInit).body))
     expect(body.type).toBe('client_api_request_failed')
-    expect(body.details.message).toBe('Request timed out after 120s')
+    expect(body.details.message).toBe('Request timed out after 320s')
   })
 
   it('keeps the timeout active until the response body is consumed', async () => {
