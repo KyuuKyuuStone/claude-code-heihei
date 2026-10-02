@@ -26,6 +26,7 @@
  */
 
 import { hasActiveTurn, observeTurnResult } from './sessionRegistry.js'
+import { diagnosticsService } from './diagnosticsService.js'
 import { onSessionEvent, type SessionEvent } from './sessionEvents.js'
 
 export type DispatchReceipt = {
@@ -215,7 +216,7 @@ export function observeSessionSdkMessage(
     const wasBroadcast = turnActiveBroadcast.delete(sessionId)
     observeTurnResult(sessionId, { isError: isError ?? false })
     if (wasBroadcast) emitTurnChange(sessionId, false)
-    consume(sessionId, at, () => true)
+    consume(sessionId, at, () => true, 'result')
     return
   }
 
@@ -228,7 +229,7 @@ export function observeSessionSdkMessage(
       }
     }
     // 只有"投递时空闲"的回执才会被活动信号消费；忙碌期间的活动属于上一条回合
-    consume(sessionId, at, (receipt) => !receipt.targetWasBusy)
+    consume(sessionId, at, (receipt) => !receipt.targetWasBusy, 'activity')
     return
   }
 
@@ -239,12 +240,29 @@ function consume(
   sessionId: string,
   at: number,
   shouldConsume: (receipt: DispatchReceipt) => boolean,
+  trigger: 'result' | 'activity',
 ): void {
+  let consumedCount = 0
   for (const receipt of receipts.values()) {
     if (receipt.consumed || receipt.targetSessionId !== sessionId) continue
     if (!shouldConsume(receipt)) continue
     receipt.consumed = true
     receipt.consumedAt = at
+    consumedCount++
+  }
+  // P2-b（裁决二十三第 5 条）：**只加记录，零行为变更**。本模块的回执表是纯内存
+  // Map（无 HTTP 面 / 不写 diagnostics / 无 console），外部不可读 ⇒ 「deny → 回执
+  // 消费」在冒烟里拿不到正向物证。这条诊断就是那个验证面（**不做持久化、不加 HTTP**）。
+  if (consumedCount > 0) {
+    void diagnosticsService
+      .recordEvent({
+        type: 'dispatch_receipts_consumed',
+        severity: 'info',
+        sessionId,
+        summary: `回执消费 ${consumedCount} 条（触发来源：${trigger}）`,
+        details: { sessionId, consumedCount, trigger, at },
+      })
+      .catch(() => {})
   }
 }
 
