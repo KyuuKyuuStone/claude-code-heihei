@@ -10,7 +10,7 @@ const DEFAULT_BASE_URL = ENV_BASE_URL || 'http://127.0.0.1:3456'
 let baseUrl = DEFAULT_BASE_URL
 let authToken: string | null = null
 const DIAGNOSTICS_PATH = '/api/diagnostics/events'
-const DEFAULT_REQUEST_TIMEOUT_MS = 120_000
+const DEFAULT_REQUEST_TIMEOUT_MS = 320_000
 const DIAGNOSTICS_REQUEST_TIMEOUT_MS = 5_000
 
 function getErrorMessage(status: number, body: unknown) {

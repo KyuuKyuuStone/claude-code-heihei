@@ -86,6 +86,6 @@ export const agentsApi = {
     api.post<AgentReloadResponse>(
       `/api/agents/reload?sessionId=${encodeURIComponent(sessionId)}`,
       undefined,
-      { timeout: 120_000 },
+      { timeout: 320_000 },
     ),
 }
