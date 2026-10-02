@@ -30,6 +30,7 @@ import {
   resetRegistryForTests,
   settleTurnIfOwner,
   setSessionClientAttached,
+  clearSessionStartedByDelivery,
   type TurnHandle,
 } from '../services/sessionRegistry.js'
 import { onCollabPush, type CollabPushSignal } from '../../collaboration/collabPushSignals.js'
@@ -341,6 +342,9 @@ async function sendRepositoryStartupStatus(
   reason: 'user_message' | 'prewarm_session',
 ): Promise<void> {
   if (reason !== 'user_message') return
+  // P1（裁决十九第 5 条）：用户来源输入 = 用户接管 → 清「投递拉起」标记，
+  // 回到主管会话豁免口径（用户在场即交互会话，重推/告警只会打扰现场）。
+  clearSessionStartedByDelivery(sessionId)
 
   const launchInfo = await sessionService.getSessionLaunchInfo(sessionId).catch(() => null)
   const repository = launchInfo?.repository

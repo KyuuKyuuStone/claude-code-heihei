@@ -81,6 +81,8 @@ export type CrashMeta = {
 
 type InternalState = {
   phase: SessionPhase
+  /** P1：是否由投递系统**程序化拉起**（内存态、不持久化；用户接管即清）。 */
+  startedByDelivery: boolean
   turn: TurnPhase
   turnOwner: symbol | null
   awaitingPermission: boolean
@@ -179,6 +181,7 @@ export function registerSession(id: string): void {
     turnOwner: null,
     awaitingPermission: false,
     clientAttached: false,
+    startedByDelivery: false,
     lastTurnEndedAt: null,
   })
   // 新建条目（无前态）不发 phase_changed；「新登记」事件留待有观察者需求时扩展
@@ -378,6 +381,34 @@ export function setSessionClientAttached(id: string, attached: boolean): void {
 /** 只读查询：该会话当前是否有客户端在线（无条目 = false）。 */
 export function isSessionClientAttached(id: string): boolean {
   return getState(id)?.clientAttached === true
+}
+
+/**
+ * P1：标记该会话是由**投递系统程序化拉起**的（`sessionMessenger.deliver` 在
+ * `!hasSession → startSession` 那一步调用）。内存态、**不持久化**（重启后无活跃
+ * 进程可看，标记失去对象）；用户接管时经 clear 复原。
+ */
+export function markSessionStartedByDelivery(id: string): void {
+  assertNotReentrant()
+  const state = getState(id)
+  if (!state) return
+  state.startedByDelivery = true
+}
+
+/** 只读查询：该会话是否由投递程序化拉起（无条目 = false）。 */
+export function isSessionStartedByDelivery(id: string): boolean {
+  return getState(id)?.startedByDelivery === true
+}
+
+/**
+ * P1（裁决十九第 5 条）：**用户接管即清标记**——会话出现用户来源输入时调用，
+ * 回到「主管会话由用户直接驱动」的豁免口径（用户在场 = 交互会话，不打扰）。
+ */
+export function clearSessionStartedByDelivery(id: string): void {
+  assertNotReentrant()
+  const state = getState(id)
+  if (!state) return
+  state.startedByDelivery = false
 }
 
 /**

@@ -17,6 +17,7 @@
 import { diagnosticsService } from './diagnosticsService.js'
 import { CORE_INLINE_TOOLS_TEXT } from '../../collaboration/dispatchProtocol.js'
 import { conversationService } from './conversationService.js'
+import { isSessionStartedByDelivery } from './sessionRegistry.js'
 import { countUnconsumedReceipts, isSessionTurnInProgress } from './dispatchReceiptService.js'
 import { servantService } from './servantService.js'
 import { sessionMessenger } from './sessionMessenger.js'
@@ -64,6 +65,11 @@ export type ServantStallWatcherDeps = {
   countUnconsumedDispatches: (sessionId: string) => number
   /** 该会话的 SDK 控制通道是否连接（盲区失联判定：进程活但 socket 断） */
   isSdkConnected: (sessionId: string) => boolean
+  /**
+   * P1：该会话是否由**投递系统程序化拉起**（仅用于「主管会话是否纳入覆盖」判定）。
+   * 可选——缺省查 registry。
+   */
+  isStartedByDelivery?: (sessionId: string) => boolean
 }
 
 const defaultDeps: ServantStallWatcherDeps = {
@@ -165,7 +171,16 @@ export class ServantStallWatcher {
       const key = servant.sessionId
 
       // 主管会话豁免：它由用户直接驱动，重推/告警只会打扰用户的现场对话
-      if (servant.supervisor) {
+      // 主管会话豁免：它由用户直接驱动，重推/告警只会打扰用户的现场对话。
+      //
+      // P1（裁决十八/十九）：该排除理由**不适用于「被投递程序化拉起」的主管会话**——
+      // 拉起决策已由投递系统做出，watch 不涉及「替用户做拉起决策」，故纳入覆盖：
+      // 只告警 + 有限重推（running=false 时**仅告警**），**绝不自动拉起**。
+      //
+      // ⚠ 边界（必须写明）：**权限死锁场景里，重推排在卡死回合之后、救不活它**
+      // （beginInjectedUserTurn 因已有活跃 turn 返回 null）——P1 的定位是**可见性兜底**，
+      // 真正的救活是 P0-b 的权限超时 deny（已提交）。
+      if (servant.supervisor && !(this.deps.isStartedByDelivery?.(key) ?? isSessionStartedByDelivery(key))) {
         this.stallStates.delete(key)
         this.noProcessAlertedAt.delete(key)
         this.noProcessSkippedAt.delete(key)
@@ -362,7 +377,9 @@ export class ServantStallWatcher {
     // 无悬置的正常闲置走上面的 info（skip-idle-no-dispatch）。
     this.report(
       'warn',
-      'no-process-alert',
+      // P1：主管会话（被投递拉起）用独立告警类型，与员工 no-process-alert 并列可辨
+
+      servant.supervisor ? 'supervisor-session-stalled' : 'no-process-alert',
       `会话未运行且有 ${pendingDispatches} 条派活未被消费（闲置 ${idleMinutes} 分钟）：${roleText}（会话 ID：${key}）`,
       key,
       { staleForMs, running: false, pendingDispatches, idleMinutes },

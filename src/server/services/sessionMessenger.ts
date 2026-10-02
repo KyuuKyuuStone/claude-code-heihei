@@ -20,6 +20,7 @@ import {
 } from './sessionRegistry.js'
 import { sessionService } from './sessionService.js'
 import { ApiError } from '../middleware/errorHandler.js'
+import { markSessionStartedByDelivery } from './sessionRegistry.js'
 
 /**
  * 投递地址校验（v1.7.2 P0-a 裁决二十③）：必须是 `host:port` 且端口在 1–65535。
@@ -191,6 +192,10 @@ export class SessionMessenger {
           ...(launchInfo?.effortLevel ? { effort: launchInfo.effortLevel } : {}),
         },
       )
+
+      // P1：本次拉起是**投递系统**做的（非用户经界面）——打标供 stallWatcher
+      // 区分「用户在场的主管会话」（豁免）与「被投递拉起的主管会话」（纳入覆盖）。
+      markSessionStartedByDelivery(targetSessionId)
 
       // CLI 是刚被程序化拉起的：已连接的桌面客户端此前绑定输出回调时
       // CLI 不存在（bindClientSessionOutput 提前返回），必须补绑。

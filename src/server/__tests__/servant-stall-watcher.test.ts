@@ -58,7 +58,7 @@ function roster(overrides: Partial<StallServantInfo>): StallServantInfo[] {
   ]
 }
 
-function makeWatcher(): ServantStallWatcher {
+function makeWatcher(overrides: Partial<ServantStallWatcherDeps> = {}): ServantStallWatcher {
   const deps: ServantStallWatcherDeps = {
     listServants: listServantsMock,
     deliver: deliverMock,
@@ -68,6 +68,8 @@ function makeWatcher(): ServantStallWatcher {
     isTurnInProgress: (sessionId: string) => turnInProgress.has(sessionId),
     countUnconsumedDispatches: (sessionId: string) => pendingDispatches.get(sessionId) ?? 0,
     isSdkConnected: (sessionId: string) => sdkConnected.has(sessionId),
+
+    ...overrides,
   }
   return new ServantStallWatcher(deps)
 }
@@ -496,3 +498,65 @@ describe('ServantStallWatcher', () => {
   })
 })
 
+// ── P1：主管会话被「投递程序化拉起」时纳入覆盖（用户在场的主管仍豁免）──────────
+describe('P1 主管会话覆盖（startedByDelivery）', () => {
+  const STALE = 60 * 60_000
+
+  beforeEach(() => {
+    recordEventMock.mockClear()
+    deliverMock.mockClear()
+    turnInProgress.clear()
+    sdkConnected.clear()
+    pendingDispatches.clear()
+  })
+
+  function supervisorOnly(running: boolean): StallServantInfo[] {
+    return [{ sessionId: SUP, title: '主管', role: '主管', enabled: true, supervisor: true, running, lastActivityAt: iso(nowMs - STALE) }]
+  }
+
+  test('主管 + 投递拉起 + running=false + 有悬置派活 → 告警 supervisor-session-stalled', async () => {
+    listServantsMock.mockResolvedValue(supervisorOnly(false))
+    pendingDispatches.set(SUP, 2)
+    const watcher = makeWatcher({ isStartedByDelivery: () => true })
+    await watcher.watch()
+    const alerts = recordEventMock.mock.calls.map((c) => c[0]).filter((e) => (e.details as { action?: string })?.action === 'supervisor-session-stalled')
+    expect(alerts).toHaveLength(1)
+    expect((alerts[0] as { sessionId?: string }).sessionId).toBe(SUP)
+    expect(deliveredTo(SUP)).toEqual([]) // 绝不自动拉起/投递
+  })
+
+  test('反向：主管**未**打标（用户直接驱动）→ 豁免，不告警', async () => {
+    listServantsMock.mockResolvedValue(supervisorOnly(false))
+    pendingDispatches.set(SUP, 2)
+    const watcher = makeWatcher({ isStartedByDelivery: () => false })
+    await watcher.watch()
+    const types = recordEventMock.mock.calls.map((c) => c[0]).map((e) => (e.details as { action?: string })?.action)
+    expect(types).not.toContain('supervisor-session-stalled')
+    expect(types).not.toContain('no-process-alert')
+  })
+
+  test('用户接管（清标）后回到豁免：同一会话从覆盖态复原为不告警', async () => {
+    listServantsMock.mockResolvedValue(supervisorOnly(false))
+    pendingDispatches.set(SUP, 2)
+    let startedByDelivery = true
+    const watcher = makeWatcher({ isStartedByDelivery: () => startedByDelivery })
+    await watcher.watch()
+    expect(recordEventMock.mock.calls.map((c) => c[0]).filter((e) => (e.details as { action?: string })?.action === 'supervisor-session-stalled')).toHaveLength(1)
+    startedByDelivery = false // 等价 handler 在 user_message 时调 clearSessionStartedByDelivery
+    recordEventMock.mockClear()
+    await watcher.watch()
+    expect(recordEventMock.mock.calls.map((c) => c[0]).filter((e) => (e.details as { action?: string })?.action === 'supervisor-session-stalled')).toHaveLength(0)
+  })
+
+  test('主管 + 投递拉起 + running=true + 回合进行中 → 走有限重推（非拉起）', async () => {
+    listServantsMock.mockResolvedValue(supervisorOnly(true))
+    turnInProgress.add(SUP)
+    sdkConnected.add(SUP)
+    pendingDispatches.set(SUP, 1)
+    const watcher = makeWatcher({ isStartedByDelivery: () => true })
+    await watcher.watch()
+    const nudges = recordEventMock.mock.calls.map((c) => c[0]).filter((e) => (e.details as { action?: string })?.action === 'nudge')
+    expect(nudges).toHaveLength(1)
+    expect(deliveredTo(SUP)).toHaveLength(1)
+  })
+})
