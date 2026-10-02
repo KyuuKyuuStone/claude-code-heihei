@@ -40,7 +40,7 @@
  * 路径依赖预检：本段无 import.meta / __dirname / __filename / process.execPath。
  */
 
-import * as fs from 'node:fs'
+import * as fs from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
 import { createInterface } from 'node:readline'
 import * as path from 'node:path'

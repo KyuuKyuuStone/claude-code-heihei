@@ -37,7 +37,7 @@
  * 路径依赖预检：本段无 import.meta / __dirname / __filename / process.execPath。
  */
 
-import * as fs from 'node:fs'
+import * as fs from 'node:fs/promises'
 import { normalizeDriveRootPathForPlatform } from '../windowsDrivePath.js'
 import type { PersistedWorktreeSession } from '../localIndex/types.js'
 import type { PreparedSessionWorkspace } from '../repositoryLaunchService.js'
