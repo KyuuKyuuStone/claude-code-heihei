@@ -1,5 +1,5 @@
 // Constants for timeout values
-const DEFAULT_TIMEOUT_MS = 120_000 // 2 minutes
+const DEFAULT_TIMEOUT_MS = 320_000 // 320s（用户要求：Bash 默认单命令超时由 2 分钟提到 320 秒）
 const MAX_TIMEOUT_MS = 600_000 // 10 minutes
 
 type EnvLike = Record<string, string | undefined>
