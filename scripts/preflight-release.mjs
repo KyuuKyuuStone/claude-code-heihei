@@ -208,6 +208,15 @@ async function stageGates() {
     if (!hit) { litMiss++; fail(`源码门禁字面量缺失: ${lit}`) }
   }
   if (!litMiss) ok(`源码门禁字面量 ${GATE_LITERALS.length}/${GATE_LITERALS.length}`)
+
+  console.log('  import 语义检查（Wave 1 批 E）…')
+  const imp = await run('bun', ['scripts/check-import-semantics.ts'], { label: 'import-semantics', guard: true })
+  if (imp.code !== 0) {
+    for (const line of imp.stdout.split('\n').filter((l) => l.startsWith('FAIL')).slice(0, 20)) fail(line)
+    fail('import 语义检查失败（形态不符/说明符漂移）')
+  } else {
+    ok('import 语义检查通过')
+  }
 }
 
 // ---------------------------------------------------------------------------
