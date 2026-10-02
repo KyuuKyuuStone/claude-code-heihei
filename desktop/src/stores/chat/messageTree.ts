@@ -488,3 +488,74 @@ export function buildAgentCompletionNotification(
     dedupeKey: `agent-completion:${sessionId}:${lastAssistant?.id ?? Date.now()}`,
   }
 }
+
+export type QueuedUserMessage = {
+  id: string
+  content: string
+  attachments?: AttachmentRef[]
+  displayContent: string
+  displayAttachments?: AttachmentRef[]
+  createdAt: number
+}
+
+export function appendOptimisticQueuedUserMessage(
+  messages: UIMessage[],
+  message: QueuedUserMessage,
+  timestamp: number,
+): UIMessage[] {
+  const displayContent = message.displayContent.trim()
+  const modelContent = message.content.trim()
+  const attachments = mapQueuedDisplayAttachments(message.displayAttachments)
+  if (!displayContent && !attachments) return messages
+
+  return [
+    ...messages,
+    {
+      id: nextId(),
+      type: 'user_text',
+      content: displayContent,
+      ...(modelContent && modelContent !== displayContent ? { modelContent } : {}),
+      ...(attachments ? { attachments } : {}),
+      timestamp,
+      optimisticQueued: true,
+    },
+  ]
+}
+
+function mapQueuedDisplayAttachments(attachments?: AttachmentRef[]): UIAttachment[] | undefined {
+  if (!attachments?.length) return undefined
+  return attachments.map((attachment) => ({
+    type: attachment.type,
+    name: attachment.name || attachment.path || attachment.mimeType || attachment.type,
+    path: attachment.path,
+    data: attachment.data,
+    mimeType: attachment.mimeType,
+    isDirectory: attachment.isDirectory,
+    lineStart: attachment.lineStart,
+    lineEnd: attachment.lineEnd,
+    diffSide: attachment.diffSide,
+    hunkId: attachment.hunkId,
+    note: attachment.note,
+    quote: attachment.quote,
+  }))
+}
+
+export function replaceQueuedMessageDisplayContent(
+  message: QueuedUserMessage,
+  nextDisplayContent: string,
+): string {
+  const currentModelContent = message.content.trim()
+  const currentDisplayContent = message.displayContent.trim()
+  if (!currentModelContent) return nextDisplayContent
+  if (!currentDisplayContent) return `${currentModelContent}\n\n${nextDisplayContent}`
+  if (currentModelContent === currentDisplayContent) return nextDisplayContent
+
+  const displaySuffix = `\n\n${currentDisplayContent}`
+  if (currentModelContent.endsWith(displaySuffix)) {
+    return `${currentModelContent.slice(0, -currentDisplayContent.length)}${nextDisplayContent}`
+  }
+  if (currentModelContent.endsWith(currentDisplayContent)) {
+    return `${currentModelContent.slice(0, -currentDisplayContent.length)}${nextDisplayContent}`
+  }
+  return `${currentModelContent}\n\n${nextDisplayContent}`
+}

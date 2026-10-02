@@ -86,7 +86,7 @@
       "kind": "upstream"
     },
     "desktop/src/stores/chatStore.ts": {
-      "lines": 2572,
+      "lines": 2504,
       "kind": "own"
     }
   }
