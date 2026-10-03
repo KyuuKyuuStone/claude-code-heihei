@@ -493,14 +493,17 @@ async function stageSmoke() {
     else fail(`smoke: 汇报页脚断言失败（末行=${JSON.stringify(reportLine)}，期望前缀=${JSON.stringify(footerPrefix)}）`)
 
     await post({ targetSessionId: supId, fromSessionId: workerId, content: 'preflight 普通消息：无 taskId' })
-    await new Promise((r) => setTimeout(r, 6000))
-    const supTranscript2 = readFileSync(join(projDir, `${supId}.jsonl`), 'utf8').split('\n').filter(Boolean)
+    // 轮询等待（正例回合可能仍占主管 CLI，消息排队落盘需数十秒——固定 6s 会误报 null）
     let plainLine = null
-    for (let i = supTranscript2.length - 1; i >= 0; i--) {
-      const e = JSON.parse(supTranscript2[i])
+    for (let round = 0; round < 30 && plainLine === null; round++) {
+      await new Promise((r) => setTimeout(r, 5000))
+      const supTranscript2 = readFileSync(join(projDir, `${supId}.jsonl`), 'utf8').split('\n').filter(Boolean)
+      for (let i = supTranscript2.length - 1; i >= 0; i--) {
+        const e = JSON.parse(supTranscript2[i])
       const c = e.message?.content
       const text = typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => x.text ?? '').join('') : ''
       if (text.includes('preflight 普通消息')) { plainLine = text.split('\n').filter((l) => l.trim()).at(-1); break }
+    }
     }
     if (plainLine && !/【系统】(汇报 · )?任务 ID：/.test(plainLine)) ok('smoke: 反例通过（无 taskId 无页脚）')
     else fail(`smoke: 反例失败（末行=${JSON.stringify(plainLine)}）`)
