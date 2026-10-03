@@ -277,10 +277,13 @@ async function stageTest() {
     const passed = r.code === 0
     const filesRan = ran ? Number(ran[2]) : -1
     if (!passed) {
-      console.log(' 红（诊断落盘 /tmp/preflight-src-seg.log）')
+      // 落盘按段命名（v1.7.2 收尾教训：固定单文件名被后段覆盖，[21] 盖掉了 [17][18]）
+      const segTag = `${String(i + 1).padStart(3, '0')}-${s.target.replace(/[^A-Za-z0-9._-]+/g, '_').slice(-40)}`
+      const segLog = `/tmp/preflight-src-${segTag}.log`
+      console.log(` 红（诊断落盘 ${segLog}）`)
       // 与 desktop 批同款：没有签名的红等于没有信息（2026-10-03 tasks.test 定栏受阻教训）
       writeFileSync(
-        '/tmp/preflight-src-seg.log',
+        segLog,
         `段=${s.target} exit=${r.code}\n=== stderr 尾部 ===\n${r.stderr.slice(-3000)}\n=== stdout 尾部 ===\n${r.stdout.slice(-3000)}`,
       )
       red.push({ ...s, stdout: r.stdout, stderr: r.stderr })
