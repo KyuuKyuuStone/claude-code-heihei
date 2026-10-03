@@ -393,7 +393,9 @@ function sanitizeProjectDir(cwd) {
 async function stageSmoke() {
   console.log('== smoke ==（隔离环境起包内 sidecar）')
   const pkg = JSON.parse(readFileSync(join(ROOT, 'desktop', 'package.json'), 'utf8'))
-  const outDir = `${DIST_ROOT}/v${pkg.version}`
+  // 目录名兼容：build 按惯例输出 v<版本>/，但产物目录可能被人工改名为 <版本>/
+  // （v1.7.2 收尾时按用户约定就改过名）——两种都认，先 v 前缀
+  const outDir = [`${DIST_ROOT}/v${pkg.version}`, `${DIST_ROOT}/${pkg.version}`].find((d) => existsSync(d)) ?? `${DIST_ROOT}/v${pkg.version}`
   const sidecar = join(outDir, 'win-unpacked', 'resources', 'app.asar.unpacked', 'src-tauri', 'binaries', 'claude-sidecar-x86_64-pc-windows-msvc.exe')
   if (!existsSync(sidecar)) return fail(`包内 sidecar 不存在: ${sidecar}（先跑 build）`)
   if (dryRun) {
