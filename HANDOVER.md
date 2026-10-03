@@ -89,13 +89,14 @@
 
 本轮（v1.7.2 收尾）查实、**按用户指示暂不修**的四条，逐条留档（含文件与行号；未实测的已标注）：
 
-1. **`src/history.ts:391` 的 `await truncate(...)` 可能静默挂死**（Bun 1.3.14 的异步 `fs/promises.truncate()` 不返回）
-   - 根因：该处是**提示历史写入器的回滚分支**；其 `catch` 以 `historyWriterPoisoned` 兜底（标志定义 `:305`，置位点 `:371`/`:394`/`:401`）。而 Bun 1.3.14 的 `truncate()` **永不返回**（探针实测：该步 3000ms 触发守卫、同序列其余每步 0–3ms；同族 `truncateSync` 亦挂死）。
-   - 后果：命中即 `await` 永不返回 ⇒ `catch` 不执行、毒化标记不置位 ⇒ 该写入路径**静默挂死**（不报错、不自愈）。
-   - 触发：需**走回滚分支** + 该 Bun 版本（窄）。
-   - 证据来源：后端探针逐步耗时表；提交 `79b2ffe`（测试侧 `sourceFingerprint.test.ts` 已改 `writeFile` 绕过，正文点名「产品侧同 API 命中 `src/history.ts:391`…已单独立项」）。
-   - 方向（未实施）：`open(..., 'r+')` + `ftruncate`、或重写语义、或调用点加超时守卫。**Bun 上游是否已修未确认**（1.4.2 未见对应条目）——**不承诺升级可根治**，须先搜上游 issue。
-   - 我另核：`src/utils/sessionStorage.ts:949` 用的是 `FileHandle.truncate`，**与 `fs/promises.truncate` 非同 API**，是否受同一缺陷影响**未确认**。
+1. **Bun 1.3.14 的 `fs` 系 `truncate` 永不返回 ⇒ 两处产品路径静默挂死**（全仓 `fs` 系 truncate 共 **3 处**：`src/history.ts:391`、`src/utils/sessionStorage.ts:949`、以及已修的测试 `79b2ffe`）
+   - 路径甲 `src/history.ts:391`（`await truncate(...)`）：**提示历史写入器的回滚分支**，其 `catch` 以 `historyWriterPoisoned` 兜底（标志定义 `:305`，置位点 `:371`/`:394`/`:401`）⇒ 命中即 `await` 永不返回、`catch` 不执行、毒化标记不置位 ⇒ **静默挂死**（不报错、不自愈）。
+   - 路径乙 `src/utils/sessionStorage.ts:949`（`await fh.truncate(absLineStart)`）：会话存储「**截断尾部再重写**」分支（`:946-948` 注释原话 “Truncate first, then re-append the trailing lines”）。**真正危险的是 `afterLen > 0` 那条（`:950-952`）**：truncate 即便成功，随后 `await fh.write(tail, lineEnd, afterLen, absLineStart)` **把尾部补回去时挂住 ⇒ 尾部永远补不回去**。⚠ 注释里「afterLen 为 0 时这是一次 ftruncate」**只是注释、不是分支守卫**——**读注释不等于执行**，勿据此以为只有 afterLen=0 才有风险。
+   - 探针结论（后端，**9/9**）：**3 种 API × 3 个方向（缩短 / 等长 / 变长）全部挂死**，三种 API 无差别 ⇒ **缺陷在 Bun 底层（同一 syscall 封装），不在 JS 糖层** ⇒ **「换 API 绕开」不可行**，只能**换操作方式**（如重写语义）**或升级 / 降级 Bun**。
+   - 触发：需走到上述任一分支 + 该 Bun 版本。
+   - 证据来源：后端探针（逐步耗时：该步 3000ms 触发守卫、同序列其余每步 0–3ms；**9/9 全挂**）+ 代码阅读（行号如上）；提交 `79b2ffe`（测试侧 `sourceFingerprint.test.ts` 已改 `writeFile` 绕过，正文点名产品侧同 API 命中 `src/history.ts:391`，已单独立项）。
+   - 方向（未实施）：**换操作方式**（重写语义、绕开 truncate）或**升级 / 降级 Bun**；**「换 API」已被 9/9 证伪**。
+   - 上游：**1.4.2 / 1.4.1 / 1.3.1 changelog 页均未见对应修复条目**；**issue 库未搜** ⇒ **升级能否根治未证实**（保持未确认口径）。
 
 2. **端口文件跨实例污染**（隔离实例覆盖真实应用的端口记录）
    - 根因：端口文件目录由 `desktopServerInfoDir(home = os.homedir())` 决定（`src/server/services/serverIdentity.ts:152-154`），**`CLAUDE_CONFIG_DIR` 与 `--user-data-dir` 都不参与**；写入点 `writeDesktopServerInfo`（`:164-193`）**唯一门控**是 `isDesktopSidecarProcess()`（`:168-174`），只拦「非正式 sidecar」。
