@@ -4,7 +4,6 @@ import {
   mkdtempSync,
   rmSync,
   symlinkSync,
-  truncateSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
