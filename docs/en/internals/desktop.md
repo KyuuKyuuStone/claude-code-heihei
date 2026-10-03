@@ -131,7 +131,7 @@ After the last client disconnects:
 - The idle grace period starts only after the work finishes.
 - A client reconnecting inside the grace period cancels the cleanup.
 - The server stops the CLI only once the grace period passes with no clients.
-- Sessions waiting on a permission request have their own bounded cleanup policy so they cannot hold a process forever.
+- Sessions waiting on a permission request have a **bounded timeout**: after **15 minutes with a client attached / 90 seconds with no client** the request is auto-denied, the turn continues with the tool reported as rejected, and the server re-sends `permission_resolved` (`reason: 'timeout'`) to the client; the internal event `permission_timeout` triggers that re-send. Implementation: `src/server/services/conversation/permissionTimeout.ts`.
 
 That is why locking a phone, refreshing the renderer, or a brief network switch does not interrupt a running task.
 

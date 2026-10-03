@@ -77,3 +77,7 @@ order: 3
 | `desktop/sidecars/claude-sidecar.ts` | Bun 编译 Sidecar | 打包后的 Server 与 CLI 入口 |
 
 新增代码时应放在拥有该职责的边界内：桌面原生能力进入 `desktop/electron/`，共享业务 API 进入 `src/server/`，不要在 Renderer 中绕过这些边界。
+
+## 巨型文件拆分（v1.7.0）
+
+v1.7.0 做了一轮**纯移动**结构拆分（不改行为）：六个原先 3000–4700 行的文件——`Settings`、`chatStore`、`MessageList`、`conversationService`、`sessionService`、`ws/handler`——拆成「门面 + 内聚子模块」，**六文件行数合计 22642 → 13819**。子模块按域落位（如 `pages/settings/`、`stores/chat/`、`components/chat/messagelist/`、`services/session/`、`services/conversation/`、`ws/`）。未拆尽的部分以行数豁免（`scripts/file-size-allowlist.json`）登记，见[参与贡献与质量门禁](./contributing.md)。

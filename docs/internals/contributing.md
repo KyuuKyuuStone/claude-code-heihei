@@ -242,6 +242,25 @@ release 模式会组合 PR checks、baseline catalog、live baseline、native ch
 
 release 模式下 live lane 不允许静默跳过。缺少 provider、真实模型额度或外部账号时，门禁会失败，并要求在发版记录里明确 blocker。
 
+### 出包前验证（preflight）
+
+除 `quality:gate` 外，仓库提供 `scripts/preflight-release.mjs` 作为**出包前**的可重复验证，分四阶段：
+
+```bash
+bun scripts/preflight-release.mjs --stage gates   # 亦可 --stage all / test / build / smoke（--dry-run 预览）
+```
+
+- **gates**：工作区干净、版本号 semver、desktop `tsc` 0 错误、全源纯语法解析、门禁字面量 8 项；**并已接入 import 语义检查** `scripts/check-import-semantics.ts`（校验「导入的是哪套 API」——v1.7 拆分期间曾因 fs 导入语义漂移导致全线故障）。
+- **test**：按目录分段跑全量测试，含**内存守卫**与**每段核对实际用例文件数**（防止「静默漏跑」造成的假绿）；红段逐文件复跑定栏。
+- **build**：clean → electron 构建 → 产物输出到 `D:/xxw_p/cc-heihei-dist/v<版本>` 并计算 sha256。
+- **smoke**：以隔离 fixture 拉起包内 sidecar，跑关键路径回归与派活/汇报断言。
+
+脚本**只做本地动作**：不 push、不建 Release、不动 git 历史（tag 只打印建议命令）。依据：`98826f5`（脚本落地）、`b767318`（import 语义检查固化进 `scripts/` 并接入 gates）。
+
+### 体积豁免（file-size-allowlist）续签
+
+`scripts/file-size-allowlist.json` 登记超过行数门禁的**时效性豁免**，每条含 `cap`（条目专属上限）与 `expiresInVersion`。**当到期版本 ≤ 当前 `desktop/package.json` 版本时即视为过期，过期条目本身会让门禁失败。** 续签必须**先由架构师修改该 json（更新 `cap` / `expiresInVersion`）再 bump 版本号**——顺序反了会在改完版本号后立刻被门禁拦下（v1.7.2 踩过）。当前 2 条：`sessionService.ts`（cap 3846）、`handler.ts`（cap 3372），均 `expiresInVersion: "1.7.3"`。依据：`6768845`（版本号与豁免续签）。
+
 ## 发版与自动更新
 
 桌面端版本号的唯一来源是 `desktop/package.json`。正式发布要求版本号、Git tag 和 `release-notes/vX.Y.Z.md` 三者严格一致。

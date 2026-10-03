@@ -1,0 +1,76 @@
+<svg viewBox="0 0 1600 640" width="1600" height="640" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">主管—员工协作工作流</title>
+  <desc id="desc">主管派活，员工无人值守执行，汇报回主管。</desc>
+  <defs>
+    <style>
+      .t-title { font: 800 52px "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif; fill: #251E11; }
+      .t-node-label { font: 700 30px "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif; fill: #251E11; }
+      .t-node-sub { font: 500 22px "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif; fill: #5D5850; }
+      .t-arrow-label { font: 600 22px "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif; fill: #96442B; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#96442B"/>
+    </marker>
+  </defs>
+
+  <!-- 背景：米白圆角 -->
+  <rect width="1600" height="640" rx="40" fill="#F6F0E1"/>
+
+  <!-- 顶部标题 -->
+  <text x="800" y="86" text-anchor="middle" class="t-title">主管—员工 · 无人值守协作</text>
+
+  <!-- 三个节点：主管 / 员工 / 汇报回路 -->
+  <!-- 节点 1：主管（左） -->
+  <g transform="translate(160, 220)">
+    <rect width="360" height="220" rx="28" fill="#FFFFFF" stroke="#251E11" stroke-width="3"/>
+    <!-- 主管图标（简化人形 + 帽子徽章） -->
+    <circle cx="180" cy="70" r="34" fill="none" stroke="#251E11" stroke-width="6"/>
+    <path d="M120 140 Q180 100 240 140" fill="none" stroke="#251E11" stroke-width="6" stroke-linecap="round"/>
+    <!-- 陶土徽章 -->
+    <circle cx="260" cy="40" r="18" fill="#96442B"/>
+    <text x="260" y="48" text-anchor="middle" font-family="sans-serif" font-size="22" font-weight="800" fill="#F6F0E1">主</text>
+    <text x="180" y="170" text-anchor="middle" class="t-node-label">主管</text>
+    <text x="180" y="200" text-anchor="middle" class="t-node-sub">拆解 · 派活 · 验收</text>
+  </g>
+
+  <!-- 节点 2：员工（中） -->
+  <g transform="translate(620, 220)">
+    <rect width="360" height="220" rx="28" fill="#FFFFFF" stroke="#96442B" stroke-width="3"/>
+    <!-- 员工图标（机器人轮廓） -->
+    <rect x="130" y="36" width="100" height="68" rx="14" fill="none" stroke="#96442B" stroke-width="6"/>
+    <line x1="180" y1="20" x2="180" y2="36" stroke="#96442B" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="180" cy="14" r="6" fill="#96442B"/>
+    <circle cx="158" cy="70" r="8" fill="#96442B"/>
+    <circle cx="202" cy="70" r="8" fill="#96442B"/>
+    <!-- 无人值守状态：脉冲点 -->
+    <circle cx="290" cy="40" r="14" fill="#96442B" opacity="0.9"/>
+    <circle cx="290" cy="40" r="22" fill="none" stroke="#96442B" stroke-width="3" opacity="0.4"/>
+    <text x="180" y="170" text-anchor="middle" class="t-node-label">员工会话</text>
+    <text x="180" y="200" text-anchor="middle" class="t-node-sub">无人值守执行</text>
+  </g>
+
+  <!-- 节点 3：汇报回主管（右） -->
+  <g transform="translate(1080, 220)">
+    <rect width="360" height="220" rx="28" fill="#FFFFFF" stroke="#3E6B58" stroke-width="3"/>
+    <!-- 汇报信封图标 -->
+    <rect x="110" y="44" width="140" height="90" rx="10" fill="none" stroke="#3E6B58" stroke-width="6"/>
+    <path d="M110 52 L180 108 L250 52" fill="none" stroke="#3E6B58" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- 勾 -->
+    <circle cx="282" cy="44" r="16" fill="#3E6B58"/>
+    <path d="M274 44 L280 50 L292 36" fill="none" stroke="#F6F0E1" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="180" y="170" text-anchor="middle" class="t-node-label">汇报回主管</text>
+    <text x="180" y="200" text-anchor="middle" class="t-node-sub">交付物 · 自动验收</text>
+  </g>
+
+  <!-- 箭头 1：主管 → 员工（派活） -->
+  <line x1="520" y1="330" x2="610" y2="330" stroke="#96442B" stroke-width="4" marker-end="url(#arrow)"/>
+  <text x="565" y="312" text-anchor="middle" class="t-arrow-label">① 派活</text>
+
+  <!-- 箭头 2：员工 → 汇报（执行完成） -->
+  <line x1="980" y1="330" x2="1070" y2="330" stroke="#96442B" stroke-width="4" marker-end="url(#arrow)"/>
+  <text x="1025" y="312" text-anchor="middle" class="t-arrow-label">② 汇报</text>
+
+  <!-- 底部回路：汇报 → 主管（弧线） -->
+  <path d="M1260 440 Q1260 540 800 540 Q340 540 340 440" fill="none" stroke="#3E6B58" stroke-width="4" stroke-dasharray="10 8" marker-end="url(#arrow)"/>
+  <text x="800" y="528" text-anchor="middle" class="t-node-sub" style="fill:#3E6B58;">③ 验收 · 继续安排下一任务（全程审计留痕）</text>
+</svg>

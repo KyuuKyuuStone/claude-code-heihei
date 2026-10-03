@@ -20,6 +20,13 @@
 
 Claude Code Heihei is a **Windows-only, self-hosted supervisor–worker AI collaboration workspace** built on Claude Code. Its core is **session-level delegation**: one supervisor per project dispatches tasks into worker sessions, which run unattended and report back. On top of that it is a full session workspace — multi-session, multi-project, diff review, permission approval, model setup, Computer Use, skills. **Local GGUF models are a frozen optional feature** — they still work, but receive no new development and do **not** take part in collaboration sessions.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/v1.7/workflow-en-dark.svg">
+    <img src="docs/images/v1.7/workflow-en-light.svg" alt="Supervisor–worker collaboration workflow: the supervisor dispatches tasks, workers run unattended and report back" width="880">
+  </picture>
+</p>
+
 ## Download
 
 [![Download Windows installer](https://img.shields.io/badge/⬇%20Download-Windows%20exe-FF7A00?style=for-the-badge)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases/latest)

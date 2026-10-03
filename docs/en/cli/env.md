@@ -14,6 +14,8 @@ Claude Code Heihei has two configuration paths:
 
 Do not store the same API key in several places. When troubleshooting, first check whether a Desktop provider is active.
 
+> Collaboration-related switches (such as `CC_HEIHEI_COLLAB_CONTINUATION`) are documented in [Session collaboration and the task ledger](../desktop/collaboration.md), not on this page.
+
 ## Common variables
 
 ### Anthropic-compatible endpoints

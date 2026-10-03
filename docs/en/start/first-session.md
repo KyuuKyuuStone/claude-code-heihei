@@ -35,6 +35,8 @@ Click the permission mode button and all five levels open up.
 
 **Leave it on "Ask permissions" for your first run.** Every file write and every risky command stops and asks, so you can see exactly what it intends to do. Loosen it later, once you know how it behaves.
 
+**The permission prompt won't hang forever either**: if a request stays unanswered, after **15 minutes with a client attached / 90 seconds with no client** it is **auto-denied** — **the tool does not run**, and the turn continues with the tool reported as rejected.
+
 What the other four are for:
 
 - **Auto accept edits** opens up file writes only; commands still prompt. Good once you're confident about the scope of the change.

@@ -32,7 +32,7 @@ The tab you'll open most often — everything about how the app feels.
 - **Effort Level** and **Thinking Mode** — defaults for new sessions. Turning thinking off sends an explicit non-thinking parameter to providers like DeepSeek that need one.
 - **Message Sending** — Enter to send (Shift+Enter for a newline), or `Ctrl/Cmd+Enter` to send.
 - **System Notifications** — route permission prompts and completed replies to the OS notification center. Enabling it requests system permission.
-- **Network** — three modes: Direct connection (explicitly bypass the system proxy), System proxy (follow system or PAC rules per destination), or Manual proxy (a URL like `http://user:password@127.0.0.1:7890`). Below that, **AI request timeout**, which can go up to 1800 seconds when a provider is slow to first byte. App updates use their own proxy setting, over in About.
+- **Network** — three modes: Direct connection (explicitly bypass the system proxy), System proxy (follow system or PAC rules per destination), or Manual proxy (a URL like `http://user:password@127.0.0.1:7890`). Below that, **AI request timeout** (**defaults to 320 seconds** since v1.7.0; it was 120 before), which can go up to 1800 seconds when a provider is slow to first byte. App updates use their own proxy setting, over in About.
 - **WebSearch** — how web search is routed. Auto prefers Claude's native WebSearch for Claude models and falls back to Tavily or Brave otherwise; those two need API keys you supply.
 - **Auto-dream** — periodically tidies and compresses memory files in the background. Off by default, because it spends tokens.
 - **UI Zoom** — scale the whole interface, also bound to `⌘+` / `⌘-`, with `⌘0` back to 100%.

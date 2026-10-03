@@ -78,6 +78,8 @@ Before calling the API, conversation history goes through four layers of compres
 
 This is the key to Claude Code handling **extremely long conversations** without degradation — it doesn't simply truncate history, but **intelligently compresses while preserving critical information**.
 
+For collaboration sessions, after compaction a **collaboration context card** is re-injected automatically (rules digest, roster, task overview, and the current task, trimmed by supervisor / worker role) so a session does not lose its collaboration identity and in-flight task after a compact; it is on by default and can be turned off with `CC_HEIHEI_COLLAB_CONTINUATION=0`. Implementation: `src/collaboration/collabContextAttachment.ts`, hook: `src/services/compact/compact.ts`.
+
 #### Phase 2: Streaming API Call (lines 652-954)
 
 ```typescript

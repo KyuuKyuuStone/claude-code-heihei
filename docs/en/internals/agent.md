@@ -449,7 +449,7 @@ Each agent can be configured with a different permission mode:
 | `acceptEdits` | File edits are auto-approved; other operations require confirmation |
 | `bypassPermissions` | Skip all permission checks |
 | `dontAsk` | Reject all operations not pre-approved |
-| `auto` | AI-driven permission classification (Anthropic internal only) |
+| `auto` | AI-driven permission classification (the product's "Auto mode") |
 | `bubble` | Permission prompts bubble up to the parent agent's terminal |
 
 ## Quick Reference

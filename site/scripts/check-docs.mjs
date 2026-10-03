@@ -5,6 +5,17 @@ import { generateDocsManifest, paths } from './generate-docs-manifest.mjs'
 
 const markdownTargetPattern = /!?\[[^\]]*]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g
 const htmlTargetPattern = /<(?:a|img)\b[^>]*?\b(?:href|src)=["']([^"']+)["'][^>]*>/gi
+// `srcset`（`<source srcset>` 与 `<img srcset>`）是逗号分隔的多候选，每个候选形如
+// `url 1x` 或 `url 2x`：只取第一条空白之前的 URL，别把 `1x`/`2x` 描述符当成路径。
+// 否则 README 的 `<picture>` 暗色变体（放在 `<source srcset>` 里）不会被校验。
+const srcsetPattern = /\bsrcset=["']([^"']*)["']/gi
+
+function splitSrcset(value) {
+  return value
+    .split(',')
+    .map((candidate) => candidate.trim().split(/\s+/, 1)[0])
+    .filter(Boolean)
+}
 
 function withoutSuffix(target) {
   return target.split(/[?#]/, 1)[0]
@@ -37,6 +48,10 @@ function collectTargets(markdown) {
 
   for (const match of prose.matchAll(htmlTargetPattern)) {
     targets.push(match[1])
+  }
+
+  for (const match of prose.matchAll(srcsetPattern)) {
+    targets.push(...splitSrcset(match[1]))
   }
 
   return [...new Set(targets)]

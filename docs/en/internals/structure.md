@@ -77,3 +77,7 @@ The repository contains the CLI/TUI, local Server, Electron desktop app, and doc
 | `desktop/sidecars/claude-sidecar.ts` | Bun-compiled Sidecar | Packaged Server and CLI entry |
 
 Place new code at the boundary that owns the responsibility: native desktop capabilities belong in `desktop/electron/`, shared business APIs in `src/server/`. The Renderer should not bypass these boundaries.
+
+## Large-file split (v1.7.0)
+
+v1.7.0 performed a **pure-move** structural split (no behavior change): six files that were 3,000–4,700 lines each — `Settings`, `chatStore`, `MessageList`, `conversationService`, `sessionService`, `ws/handler` — were split into a "facade + cohesive submodules", taking the **six files from 22,642 lines in total to 13,819**. Submodules land by domain (e.g. `pages/settings/`, `stores/chat/`, `components/chat/messagelist/`, `services/session/`, `services/conversation/`, `ws/`). What remains unsplit is registered as a line-count exemption (`scripts/file-size-allowlist.json`); see [Contributing and quality gates](./contributing.md).

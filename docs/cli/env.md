@@ -14,6 +14,8 @@ Claude Code Heihei 有两条配置路径：
 
 不要在多个位置重复保存同一把 API Key。排查问题时，先确认当前是否激活了桌面端 Provider。
 
+> 协作相关开关（如 `CC_HEIHEI_COLLAB_CONTINUATION`）不在本页展开，见 [会话协作与任务台账](../desktop/collaboration.md)。
+
 ## 常用变量
 
 ### Anthropic 兼容接口

@@ -449,7 +449,7 @@ maxTurns: 10
 | `acceptEdits` | 自动接受文件编辑，其他操作需确认 |
 | `bypassPermissions` | 跳过所有权限检查 |
 | `dontAsk` | 拒绝所有未预批准的操作 |
-| `auto` | AI 驱动的权限分类（仅 Ant 内部） |
+| `auto` | AI 驱动的权限分类（即产品中的「自动模式」） |
 | `bubble` | 权限提示冒泡到父 Agent 终端 |
 
 ## 快速参考

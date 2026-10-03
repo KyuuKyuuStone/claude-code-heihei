@@ -26,6 +26,7 @@ Claude doesn't just reply with a paragraph. Several kinds of card appear along t
 - **Thinking blocks** — the reasoning before it acts, labelled **Thinking** while it runs and **Thought** once done. Collapsed by default.
 - **File edits** — shown as an inline diff right in the conversation, so you don't have to look anywhere else.
 - **Claude needs your input** — when it's genuinely unsure it asks, with buttons for the likely answers plus a free-text box.
+- **Collaboration notices (folded cards)** — in collaboration sessions, **dispatch and report messages** exchanged between sessions are **folded into a one-line card** by default (showing a summary, source, task ID, and time); click to expand. Your own messages, Claude's replies, and streaming output are never folded.
 
 In a long conversation, `⌘F` opens find-in-page and jumps between matches in the current session. `⌘K` is global search across every session you've ever had.
 
@@ -39,6 +40,8 @@ In the default permission mode, Claude stops and asks before editing a file or r
 - **Deny** — don't run it. Claude gets the refusal and tries another approach.
 
 When in doubt, pick **Allow** — being asked a few extra times costs nothing. If you can't tell what it's about to do, click **Show full input** to see the raw arguments.
+
+**If nobody answers, it won't wait forever**: a permission request that stays unanswered for **15 minutes with a client attached, or 90 seconds with no client**, is **auto-denied** — **the tool does not run**, and the turn continues with the tool reported as rejected instead of hanging. Reconnecting a client only *extends* the timer; disconnecting does not shorten it. When this happens, a grey system note appears in the conversation.
 
 ### The five permission modes
 

@@ -20,6 +20,13 @@
 
 Claude Code Heihei 是一个 **Windows 专属、自用为主的「主管/员工」AI 协作工作台**，构建在 Claude Code 之上。核心是**会话级派活**：每个项目任命一名「主管」，把任务派进「员工」会话，员工无人值守执行、完工自动汇报；其余是完整的会话工作台能力（多会话、多项目、Diff 审阅、权限审批、模型配置、Computer Use、技能）。**本地 GGUF 模型为冻结的可选功能**——能用，但不再新增功能，也**不参与协作会话**。
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/v1.7/workflow-zh-dark.svg">
+    <img src="docs/images/v1.7/workflow-zh-light.svg" alt="主管—员工协作工作流：主管派活，员工无人值守执行并汇报" width="880">
+  </picture>
+</p>
+
 ## 下载
 
 [![下载 Windows 安装包](https://img.shields.io/badge/⬇%20下载-Windows%20exe-FF7A00?style=for-the-badge)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases/latest)

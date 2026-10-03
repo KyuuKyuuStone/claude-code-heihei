@@ -242,6 +242,25 @@ Release mode composes PR checks, baseline catalog validation, live baseline case
 
 In release mode, live lanes are not allowed to be silently skipped. Missing providers, model quota, or external account access will fail the gate and must be recorded as a release blocker.
 
+### Pre-release verification (preflight)
+
+Besides `quality:gate`, the repo ships `scripts/preflight-release.mjs` as a **repeatable pre-release** verification in four stages:
+
+```bash
+bun scripts/preflight-release.mjs --stage gates   # also --stage all / test / build / smoke (--dry-run to preview)
+```
+
+- **gates**: clean working tree, semver version, desktop `tsc` with 0 errors, pure syntax parse of all sources, 8 gate literals; **plus the import-semantics check** `scripts/check-import-semantics.ts` (verifies *which API* an import pulls in — during the v1.7 split an fs import-semantics drift broke every session).
+- **test**: runs the full suite in segmented batches with a **memory guard** and a **per-segment check of the actual test-file count** (to prevent a "silently skipped" false green); red segments are re-run file by file to classify.
+- **build**: clean → electron build → artifacts to `D:/xxw_p/cc-heihei-dist/v<version>` with a sha256.
+- **smoke**: boots the packaged sidecar on an isolated fixture and runs critical-path plus dispatch/report assertions.
+
+The script performs **local actions only**: no push, no Release creation, no git-history changes (tags are only printed as a suggested command). Evidence: `98826f5` (script), `b767318` (import-semantics check folded into `scripts/` and wired into gates).
+
+### Size-exemption (`file-size-allowlist`) renewal
+
+`scripts/file-size-allowlist.json` records **time-boxed exemptions** for files over the line-count gate; each entry has a `cap` (entry-specific limit) and an `expiresInVersion`. **When the expiry version is ≤ the current `desktop/package.json` version it counts as expired, and an expired entry itself fails the gate.** Renewal must **have the architect update the json first (bump `cap` / `expiresInVersion`) and only then bump the version number** — doing it in the reverse order gets blocked by the gate immediately after the version bump (a trap hit in v1.7.2). Current entries: 2 — `sessionService.ts` (cap 3846) and `handler.ts` (cap 3372), both `expiresInVersion: "1.7.3"`. Evidence: `6768845`.
+
 ## Releases and Auto-Update
 
 `desktop/package.json` is the single source of the desktop version number. A real release requires the version, the Git tag, and `release-notes/vX.Y.Z.md` to match exactly.

@@ -132,6 +132,16 @@ For local models (LM Studio / Ollama), **do not append `/v1` to the base URL** �
 5. If none of that helps, fully quit and reopen the app.
 6. Copy the error summary from Settings → Diagnostics.
 
+### Errors are now human-readable
+
+When something fails, the title and detail explain what happened in plain language, and the raw English error is tucked into **Technical details** (**collapsed by default** — expand to see the original error, its category, and the time, with one-click copy). The common three: timeout → "The service is not responding. Please try again later."; can't reach the backend → "Cannot reach the local backend service."; server error → "The service returned an error. Please try again later." Business errors that carry useful information are still shown as-is, untranslated.
+
+If the UI takes **more than 3 seconds** to load, it shows "Taking a while to load, hang tight…" — that is a waiting hint, not an error; don't rush to restart.
+
+### An unanswered permission request is auto-denied
+
+When a session is waiting for permission approval and nobody handles it, after **15 minutes with a client attached / 90 seconds with no client** the request is **auto-denied**: **the tool does not run**, and the turn continues with the tool reported as rejected. A grey system note appears in the conversation when this happens. This is different from a stuck session — it is deliberate, so nothing waits forever.
+
 ### I can't change permission mode mid-session
 
 **Why** — This is deliberate. Changing permissions mid-turn would leave the UI showing something different from what's enforced.

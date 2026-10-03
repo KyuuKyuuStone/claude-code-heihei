@@ -192,9 +192,15 @@ ws://127.0.0.1:3456/ws/<session-id>
 - `sync_state`、`prewarm_session`
 - `ping`
 
-服务端会发送连接与会话状态、文本增量、思考、工具调用与结果、权限请求、重试/降级状态、错误、任务/团队更新和 `pong`。完整字段以 `src/server/ws/events.ts` 为准。
+服务端会发送连接与会话状态、文本增量、思考、工具调用与结果、权限请求、重试/降级状态、错误、任务/团队更新和 `pong`。当一次权限请求因**长时间无人应答**而超时时（**有客户端在线 15 分钟 / 无客户端 90 秒**），服务端会**自动拒绝**它并向客户端补发 `permission_resolved`（其中 `reason: 'timeout'`），回合带着「工具被拒」继续，不会静默悬挂。该补发由内部事件 `permission_timeout` 触发——注意 `permission_timeout` 是**服务端内部事件总线的名称**，不是一条 WS 客户端消息。实现：`src/server/ws/handler.ts:3191-3207`、`src/server/services/conversation/permissionTimeout.ts`。完整字段以 `src/server/ws/events.ts` 为准。
 
 桌面客户端每 30 秒发送一次 ping；等待 pong 10 秒后会主动重连。重连退避上限为 30 秒，并不会在固定次数后永久停止。自定义客户端应能重复连接、重新同步状态，并忽略未知的新增消息字段。
+
+## 会话转录读取缓存
+
+`sessionService` 读取会话转录（JSONL）时走一层**内容寻址缓存**（`src/server/services/session/transcriptReadCache.ts`）：键为文件路径，命中前比对 `mtime` + `size`；缓存**存 Promise**，因此并发读取天然去重；LRU 上限 16；加载失败（reject）时删除条目，避免把失败结果固化。派活拉起的三个解析型读取点（`getSessionWorkDir`、`getSessionLaunchInfo`、`getSessionMessageCwd`）换线到该缓存后，**实测同一会话的整读次数由 3 次降为 1 次**。
+
+这是**成本解耦，不是减少代码行数**（换线净 +1 行）。已知边界：若出现「同尺寸重写 + 文件时间戳精度不足」的极端情况，理论上可能读到旧内容；该风险与既有摘要缓存同口径、概率极低而接受，但本缓存承载的是**模型上下文**，将来若引入「原地等长替换」类清理逻辑，需一并复核。依据：`98c0280`（新模块与用例）、`a97b534`（三处换线）。
 
 ## 反向代理清单
 

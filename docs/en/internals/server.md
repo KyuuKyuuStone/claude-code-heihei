@@ -187,9 +187,15 @@ Common client messages include:
 - `sync_state` and `prewarm_session`;
 - `ping`.
 
-The server sends connection and session state, text deltas, thinking, tool calls and results, permission requests, retry or fallback state, errors, task or team updates, and `pong`. Use `src/server/ws/events.ts` as the complete field contract.
+The server sends connection and session state, text deltas, thinking, tool calls and results, permission requests, retry or fallback state, errors, task or team updates, and `pong`. When a permission request times out because **nobody answers** (**15 minutes with a client attached / 90 seconds with no client**), the server **auto-denies** it and re-sends `permission_resolved` with `reason: 'timeout'`; the turn continues with the tool reported as rejected instead of hanging. That re-send is triggered by the internal event `permission_timeout` — note this is a **server-internal event-bus name, not a WS client message**. Implementation: `src/server/ws/handler.ts:3191-3207` and `src/server/services/conversation/permissionTimeout.ts`. Use `src/server/ws/events.ts` as the complete field contract.
 
 The Desktop client sends a ping every 30 seconds and reconnects if no pong arrives within 10 seconds. Reconnect delay is capped at 30 seconds; it does not stop permanently after a fixed number of attempts. A custom client should reconnect, resynchronize state, and ignore unknown fields added to future messages.
+
+## Session transcript read cache
+
+When `sessionService` reads a session transcript (JSONL), it goes through a **content-addressed cache** (`src/server/services/session/transcriptReadCache.ts`): the key is the file path, and a hit is validated against `mtime` + `size`; the cache **stores the Promise**, so concurrent reads are de-duplicated naturally; the LRU cap is 16; a failed load (reject) removes the entry so failures are not pinned. After the three parsing read points used when launching a dispatch (`getSessionWorkDir`, `getSessionLaunchInfo`, `getSessionMessageCwd`) were switched to this cache, **the same session's full reads dropped from 3 to 1 in measurement**.
+
+This is **cost decoupling, not a line-count reduction** (the switch-over is net +1 line). Known boundary: in the extreme case of "same-size rewrite + insufficient filesystem timestamp resolution", stale content could theoretically be served; this risk is the same in kind as the existing summary cache and is accepted as very unlikely, but this cache carries **model context**, so if an "in-place equal-length replace" cleanup path is introduced later, both caches must be reviewed together. Evidence: `98c0280` (new module and tests), `a97b534` (the three call-site switches).
 
 ## Reverse-proxy checklist
 

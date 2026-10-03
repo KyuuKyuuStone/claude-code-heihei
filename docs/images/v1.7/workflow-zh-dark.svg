@@ -1,0 +1,65 @@
+<svg viewBox="0 0 1600 640" width="1600" height="640" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">主管—员工协作工作流</title>
+  <desc id="desc">主管派活，员工无人值守执行，汇报回主管。</desc>
+  <defs>
+    <style>
+      .t-title { font: 800 52px "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif; fill: #F6F0E1; }
+      .t-node-label { font: 700 30px "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif; fill: #F6F0E1; }
+      .t-node-sub { font: 500 22px "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif; fill: #C9C2B6; }
+      .t-arrow-label { font: 600 22px "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif; fill: #D07B52; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#D07B52"/>
+    </marker>
+  </defs>
+
+  <!-- 深底背景：与 zh-light 同构图，仅底色与对比度微调 -->
+  <rect width="1600" height="640" rx="40" fill="#1F1C17"/>
+
+  <text x="800" y="86" text-anchor="middle" class="t-title">主管—员工 · 无人值守协作</text>
+
+  <!-- 节点 1：主管（左） -->
+  <g transform="translate(160, 220)">
+    <rect width="360" height="220" rx="28" fill="#2A2620" stroke="#F6F0E1" stroke-width="3"/>
+    <circle cx="180" cy="70" r="34" fill="none" stroke="#F6F0E1" stroke-width="6"/>
+    <path d="M120 140 Q180 100 240 140" fill="none" stroke="#F6F0E1" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="260" cy="40" r="18" fill="#D07B52"/>
+    <text x="260" y="48" text-anchor="middle" font-family="sans-serif" font-size="22" font-weight="800" fill="#1F1C17">主</text>
+    <text x="180" y="170" text-anchor="middle" class="t-node-label">主管</text>
+    <text x="180" y="200" text-anchor="middle" class="t-node-sub">拆解 · 派活 · 验收</text>
+  </g>
+
+  <!-- 节点 2：员工（中） -->
+  <g transform="translate(620, 220)">
+    <rect width="360" height="220" rx="28" fill="#2A2620" stroke="#D07B52" stroke-width="3"/>
+    <rect x="130" y="36" width="100" height="68" rx="14" fill="none" stroke="#D07B52" stroke-width="6"/>
+    <line x1="180" y1="20" x2="180" y2="36" stroke="#D07B52" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="180" cy="14" r="6" fill="#D07B52"/>
+    <circle cx="158" cy="70" r="8" fill="#D07B52"/>
+    <circle cx="202" cy="70" r="8" fill="#D07B52"/>
+    <circle cx="290" cy="40" r="14" fill="#D07B52" opacity="0.9"/>
+    <circle cx="290" cy="40" r="22" fill="none" stroke="#D07B52" stroke-width="3" opacity="0.4"/>
+    <text x="180" y="170" text-anchor="middle" class="t-node-label">员工会话</text>
+    <text x="180" y="200" text-anchor="middle" class="t-node-sub">无人值守执行</text>
+  </g>
+
+  <!-- 节点 3：汇报回主管（右） -->
+  <g transform="translate(1080, 220)">
+    <rect width="360" height="220" rx="28" fill="#2A2620" stroke="#7FB09A" stroke-width="3"/>
+    <rect x="110" y="44" width="140" height="90" rx="10" fill="none" stroke="#7FB09A" stroke-width="6"/>
+    <path d="M110 52 L180 108 L250 52" fill="none" stroke="#7FB09A" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="282" cy="44" r="16" fill="#7FB09A"/>
+    <path d="M274 44 L280 50 L292 36" fill="none" stroke="#1F1C17" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="180" y="170" text-anchor="middle" class="t-node-label">汇报回主管</text>
+    <text x="180" y="200" text-anchor="middle" class="t-node-sub">交付物 · 自动验收</text>
+  </g>
+
+  <line x1="520" y1="330" x2="610" y2="330" stroke="#D07B52" stroke-width="4" marker-end="url(#arrow)"/>
+  <text x="565" y="312" text-anchor="middle" class="t-arrow-label">① 派活</text>
+
+  <line x1="980" y1="330" x2="1070" y2="330" stroke="#D07B52" stroke-width="4" marker-end="url(#arrow)"/>
+  <text x="1025" y="312" text-anchor="middle" class="t-arrow-label">② 汇报</text>
+
+  <path d="M1260 440 Q1260 540 800 540 Q340 540 340 440" fill="none" stroke="#7FB09A" stroke-width="4" stroke-dasharray="10 8" marker-end="url(#arrow)"/>
+  <text x="800" y="528" text-anchor="middle" class="t-node-sub" style="fill:#7FB09A;">③ 验收 · 继续安排下一任务（全程审计留痕）</text>
+</svg>

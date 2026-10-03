@@ -78,6 +78,8 @@ type State = {
 
 这是 Claude Code 能处理**极长对话**而不退化的关键——它不会简单地截断历史，而是**智能地压缩和保留关键信息**。
 
+对协作会话，上下文被压缩（compact）之后还会自动补一张**协作上下文卡片**（规则摘要、花名册、任务概览与当前任务，按主管 / 员工角色裁剪后重新注入），避免压缩后丢失协作身份与在办任务；默认开启，`CC_HEIHEI_COLLAB_CONTINUATION=0` 可关闭。实现：`src/collaboration/collabContextAttachment.ts`，接入点 `src/services/compact/compact.ts`。
+
 #### 阶段 2：流式 API 调用（第 652-954 行）
 
 ```typescript

@@ -111,7 +111,9 @@ A tool result with `queued` means only that a payload was queued; it does not co
 
 Mixing new CLI tools with an old server that lacks ledger support is not a supported configuration. Dispatch/report may deliver a message without a ledger. On the old-server report fallback, delivery is allowed only when the same-project roster identifies exactly one supervisor; otherwise it is rejected. Review and task listing require a server with ledger support. Tests: `src/server/__tests__/collab-cli-tools.test.ts:401-409,560-634`.
 
-## Permission waiting and auto-deny
+## Collaboration context after compaction
+
+After a session's context is compacted (`/compact`), a collaboration session automatically re-injects a **collaboration context card**: the key collaboration facts that were dropped — the rules digest, the roster, a task overview, and the worker's current task — **trimmed by role (supervisor / worker)** so the session doesn't "forget who it is and what it should do" after compaction. **On by default**; set `CC_HEIHEI_COLLAB_CONTINUATION=0` to turn it off (when disabled, or for non-collaboration sessions, it does no probing, no request, and no injection). Implementation: `src/collaboration/collabContextAttachment.ts`; hook: `src/services/compact/compact.ts`.
 
 Since v1.7.2, permission waits are bounded. If nobody answers a permission request, the session no longer hangs forever: after **15 minutes with a client attached, or 90 seconds with no client**, the request is **auto-denied** and the turn continues with the tool reported as rejected (**the tool does not run**). When this happens, the message stream shows a neutral grey system note (five UI languages) stating the request was auto-denied and the tool was not executed; a separate static hint appears while waiting, with **no countdown**.
 

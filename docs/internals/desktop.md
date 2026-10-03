@@ -135,7 +135,7 @@ ws://<server>/ws/<sessionId>
 - 工作结束后才进入空闲宽限期。
 - 客户端在宽限期内重连会取消清理。
 - 超过宽限期且没有客户端，Server 才停止对应 CLI。
-- 等待权限的会话有独立的有界清理策略，避免永久占用进程。
+- 等待权限的会话有**有界超时**：**有客户端在线 15 分钟 / 无客户端 90 秒**后自动拒绝该权限请求，回合带着「工具被拒」继续，并向前端补发 `permission_resolved`（`reason: 'timeout'`）；内部事件 `permission_timeout` 触发该补发。实现：`src/server/services/conversation/permissionTimeout.ts`。
 
 这让手机锁屏、Renderer 刷新或短暂网络切换不会直接中断正在运行的任务。
 
