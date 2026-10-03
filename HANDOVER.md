@@ -91,7 +91,7 @@
 
 1. **Bun 1.3.14 的 `fs` 系 `truncate` 永不返回 ⇒ 两处产品路径静默挂死**（全仓 `fs` 系 truncate 共 **3 处**：`src/history.ts:391`、`src/utils/sessionStorage.ts:949`、以及已修的测试 `79b2ffe`）
    - 路径甲 `src/history.ts:391`（`await truncate(...)`）：**提示历史写入器的回滚分支**，其 `catch` 以 `historyWriterPoisoned` 兜底（标志定义 `:305`，置位点 `:371`/`:394`/`:401`）⇒ 命中即 `await` 永不返回、`catch` 不执行、毒化标记不置位 ⇒ **静默挂死**（不报错、不自愈）。
-   - 路径乙 `src/utils/sessionStorage.ts:949`（`await fh.truncate(absLineStart)`）：会话存储「**截断尾部再重写**」分支（`:946-948` 注释原话 “Truncate first, then re-append the trailing lines”）。**真正危险的是 `afterLen > 0` 那条（`:950-952`）**：truncate 即便成功，随后 `await fh.write(tail, lineEnd, afterLen, absLineStart)` **把尾部补回去时挂住 ⇒ 尾部永远补不回去**。⚠ 注释里「afterLen 为 0 时这是一次 ftruncate」**只是注释、不是分支守卫**——**读注释不等于执行**，勿据此以为只有 afterLen=0 才有风险。
+   - 路径乙 `src/utils/sessionStorage.ts:949`（`await fh.truncate(absLineStart)`）：会话存储**「按 uuid 移除单条会话条目」**路径（定位块 `:928` 起：尾部窗口找 `"uuid":"<targetUuid>"` → 前后换行定行 `:931-942` → 记 `absLineStart` 与 `afterLen = bytesRead - lineEnd` `:944-945`）。**两个分支都会挂**：`afterLen === 0`（删的是**最后一条**，常见）**直接命中**——纯 ftruncate 即挂死；`afterLen > 0` 时 truncate 即便成功，随后 `await fh.write(tail, lineEnd, afterLen, absLineStart)`（`:950-952`）**补尾部时挂住 ⇒ 尾部永久丢失**。**发生情形＝删除/移除一条会话条目时，不是每次写文件**。⚠ 注释里「afterLen 为 0 时这是一次 ftruncate」（`:946-948`）**只是注释、不是免死金牌**——**读注释不等于执行**：0 与 >0 **两条路径都命中该缺陷**（后果不同：前者直接挂死、后者尾部丢失）。
    - 探针结论（后端，**9/9**）：**3 种 API × 3 个方向（缩短 / 等长 / 变长）全部挂死**，三种 API 无差别 ⇒ **缺陷在 Bun 底层（同一 syscall 封装），不在 JS 糖层** ⇒ **「换 API 绕开」不可行**，只能**换操作方式**（如重写语义）**或升级 / 降级 Bun**。
    - 触发：需走到上述任一分支 + 该 Bun 版本。
    - 证据来源：后端探针（逐步耗时：该步 3000ms 触发守卫、同序列其余每步 0–3ms；**9/9 全挂**）+ 代码阅读（行号如上）；提交 `79b2ffe`（测试侧 `sourceFingerprint.test.ts` 已改 `writeFile` 绕过，正文点名产品侧同 API 命中 `src/history.ts:391`，已单独立项）。
