@@ -182,8 +182,10 @@ describe('handlePreviewFs', () => {
   it('rejects HTML above the transformed-document limit before buffering it', async () => {
     const root = mkdtempSync(path.join(tmpdir(), 'pfs-large-html-'))
     const largeHtml = path.join(root, 'large.html')
-    writeFileSync(largeHtml, '')
-    truncateSync(largeHtml, TRANSFORMED_HTML_LIMIT_BYTES + 1)
+    // 原实现用 truncateSync 造**稀疏**大文件；本机 Bun(1.3.14) 下该调用**不返回**（挂死整段 collect；
+    // 运维实测定案：同机 node 同名 API 0ms ⇒ 非 IO 竞争、非真机干扰、非产品缺陷）。改为写入足量真实
+    // 字节：**语义等价**（文件大小仍为 LIMIT+1），且不经过该缺陷路径。
+    writeFileSync(largeHtml, Buffer.alloc(TRANSFORMED_HTML_LIMIT_BYTES + 1, 0x78))
 
     try {
       const res = await handlePreviewFs(
