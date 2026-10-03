@@ -59,9 +59,17 @@ Claude Code Heihei is a **Windows-only, self-hosted supervisor–worker AI colla
 - **Project isolation**: roster and dispatch are scoped by working directory — cross-project dispatch is rejected by the server.
 - **Task ledger & folded notices**: dispatch → run → deliver → review status follows the server-side **task ledger** (not a guess from whether a session looks busy); notices exchanged between collaborating sessions (**dispatch and report messages**) are **folded into a one-line card** by default — click to expand.
 
+![Collaboration task ledger panel (demo environment)](docs/images/v1.7/collab-tasks.png)
+
+*Collaboration task ledger: tasks for the current project with assignee, status badges, and rework counts. This is a demo environment (project `cc-demo-proj`, sample tasks), not real business data.*
+
 ### Session workspace
 
 - **Multi-session**: tabs, project switching, terminal entry, and session history in one place.
+
+![Multi-session sidebar and tab bar (demo environment)](docs/images/v1.7/sidebar.png)
+
+*Multi-session sidebar and tab bar: a project, sample sessions, and worker entries. Demo environment, not real business data.*
 - **Branch / Worktree**: start a session on any branch, using the current working tree or an isolated Worktree.
 - **File-by-file diff review**: see this turn's changes, open any file as a syntax-highlighted diff, and undo the whole turn.
 
@@ -86,6 +94,11 @@ Run **GGUF models directly on your own machine** — no internet, no API key, no
 - **Bring your own model**: add providers via API key with presets for DeepSeek, Kimi, Zhipu GLM and others, or point at LM Studio and Ollama running locally.
 - **Three colour themes**: Pure White, Paper, and Ink Blue — optionally following the system light/dark setting.
 - **Usage stats**: track local token usage trends.
+- **Human-readable errors**: timeout, can't-reach-backend, and server errors are explained in plain language, with the raw English error tucked into an expandable **Technical details** section.
+
+![Session list failed to load (demo environment)](docs/images/v1.7/error-state.png)
+
+*Human-readable failures: an error title, a **Retry** button, and an expandable **Technical details** section. Demo environment — **the address inside Technical details is a demo value, `127.0.0.1:64500 (demo)`**, not a real service address.*
 
 ## Run the CLI from Source
 
