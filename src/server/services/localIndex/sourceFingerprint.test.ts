@@ -101,7 +101,10 @@ describe('source fingerprint transitions', () => {
       parserVersion: 1,
     })
 
-    await truncate(path, 4)
+    // 原为 await truncate(path, 4)；本机 Bun(1.3.14) 的 fs/promises.truncate **不返回**（探针实测：
+  // 该步 3000ms 触发守卫、其余每步 0–3ms；同族 truncateSync 亦挂死）。改为写入前 4 字节：
+  // 文件同样被截到 4 字节 ⇒ **语义等价**（截断场景不变，仍做后续多轮指纹比对）。
+  await writeFile(path, original.slice(0, 4))
     expect(await detectSourceChange({ path, previous, parserVersion: 1 })).toEqual({
       kind: 'rebuild',
       reason: 'truncate',
