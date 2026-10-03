@@ -80,6 +80,12 @@ CollabListTasks({ status: "open", limit: 20 })
 
 Without filters, the tool returns a summary ordered by most recently updated. `status: "open"` includes `dispatched`, `accepted`, `in_progress`, `rework`, and `delivered`. Workers can only see tasks assigned to themselves. Provide `taskId` to read that task's full content and report. Schema and implementation: `src/tools/CollabTools/CollabListTasksTool.ts:35-48` and `src/collaboration/collabToolContract.ts:75-113`.
 
+In the GUI, the matching view is the **Collaboration tasks** panel:
+
+![Collaboration task ledger panel (demo environment)](../../images/v1.7/collab-tasks.png)
+
+*Collaboration task ledger: tasks for the current project with assignee, status badges, and rework counts. This is a demo environment (project `cc-demo-proj`, sample tasks), not real business data.*
+
 ## Task statuses
 
 | Status | Meaning |

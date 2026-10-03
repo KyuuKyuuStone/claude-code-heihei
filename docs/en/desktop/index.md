@@ -19,6 +19,10 @@ This page is a map, not a manual. One line per feature — click through for the
 - **Tab bar** — sessions side by side, switched like browser tabs. The five buttons on the right are Activity, Collaboration tasks, Open project, Open terminal, and Show/hide workspace (**some appear only in the desktop runtime or for an active session tab — not all five are always shown**).
 - **Composer toolbar** — left to right: attachments, permission mode, launch location, context usage ring, model and effort, and the run button.
 
+![Multi-session sidebar and tab bar (demo environment)](../../images/v1.7/sidebar.png)
+
+*Sidebar and tab bar: a project, sample sessions, and worker entries side by side. Demo environment, not real business data.*
+
 ## What you'll use daily
 
 - [Sessions, permissions, and review](./sessions.md) — starting a session, reading tool cards, answering permission prompts, undoing a turn that went wrong.

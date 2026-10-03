@@ -80,6 +80,12 @@ CollabListTasks({ status: "open", limit: 20 })
 
 不传过滤条件默认按最近更新顺序查看摘要。`status: "open"` 包含 `dispatched`、`accepted`、`in_progress`、`rework`、`delivered`。员工只能看到派给自己的任务。指定 `taskId` 可读取该任务正文和汇报全文。工具输入与实现：`src/tools/CollabTools/CollabListTasksTool.ts:35-48`、`src/collaboration/collabToolContract.ts:75-113`。
 
+图形界面里对应的就是「协作任务台账」面板：
+
+![协作任务台账面板（演示环境）](../images/v1.7/collab-tasks.png)
+
+*协作任务台账面板：按当前项目列出任务、指派对象、状态徽章与返工次数。图为演示环境（项目名 `cc-demo-proj`、示例任务），非真实业务数据。*
+
 ## 任务状态
 
 | 状态 | 含义 |

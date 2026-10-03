@@ -138,6 +138,10 @@ When something fails, the title and detail explain what happened in plain langua
 
 If the UI takes **more than 3 seconds** to load, it shows "Taking a while to load, hang tight…" — that is a waiting hint, not an error; don't rush to restart.
 
+![Session list failed to load (demo environment)](../../images/v1.7/error-state.png)
+
+*Human-readable failures: an error title, a **Retry** button, and an expandable **Technical details** section. Demo environment — **the address inside Technical details is a demo port, `127.0.0.1:64500` (labelled demo)**, not a real service address.*
+
 ### An unanswered permission request is auto-denied
 
 When a session is waiting for permission approval and nobody handles it, after **15 minutes with a client attached / 90 seconds with no client** the request is **auto-denied**: **the tool does not run**, and the turn continues with the tool reported as rejected. A grey system note appears in the conversation when this happens. This is different from a stuck session — it is deliberate, so nothing waits forever.
