@@ -7,79 +7,82 @@
 <div align="center">
 
 [![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
-[![Gitee mirror](https://img.shields.io/badge/Gitee-mirror-C71D23?logo=gitee&logoColor=white)](https://gitee.com/KyuuKyuuStone/claude-code-heihei)
+[![Gitee 镜像](https://img.shields.io/badge/Gitee-镜像仓库-C71D23?logo=gitee&logoColor=white)](https://gitee.com/KyuuKyuuStone/claude-code-heihei)
 [![CI](https://github.com/KyuuKyuuStone/claude-code-heihei/actions/workflows/ci.yml/badge.svg)](https://github.com/KyuuKyuuStone/claude-code-heihei/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/KyuuKyuuStone/claude-code-heihei?sort=semver)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases)
 
 [![Downloads](https://img.shields.io/github/downloads/KyuuKyuuStone/claude-code-heihei/total)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases)
 [![Platform](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows&logoColor=white)]()
 
-**English** · [简体中文](README.zh-CN.md)
+**简体中文** · [English](README.en.md)
 
 </div>
 
-Claude Code Heihei is a **Windows-only, self-hosted supervisor–worker AI collaboration workspace** built on Claude Code. Its core is **session-level delegation**: one supervisor per project dispatches tasks into worker sessions, which run unattended and report back. On top of that it is a full session workspace — multi-session, multi-project, diff review, permission approval, model setup, Computer Use, skills. **Local GGUF models are a frozen optional feature** — they still work, but receive no new development and do **not** take part in collaboration sessions.
+Claude Code Heihei 是一个 **Windows 专属、自用为主的「主管/员工」AI 协作工作台**，构建在 Claude Code 之上。核心是**会话级派活**：每个项目任命一名「主管」，把任务派进「员工」会话，员工无人值守执行、完工自动汇报；其余是完整的会话工作台能力（多会话、多项目、Diff 审阅、权限审批、模型配置、Computer Use、技能）。**本地 GGUF 模型为冻结的可选功能**——能用，但不再新增功能，也**不参与协作会话**。
 
-## Download
+## 下载
 
-[![Download Windows installer](https://img.shields.io/badge/⬇%20Download-Windows%20exe-FF7A00?style=for-the-badge)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases/latest)
+[![下载 Windows 安装包](https://img.shields.io/badge/⬇%20下载-Windows%20exe-FF7A00?style=for-the-badge)](https://github.com/KyuuKyuuStone/claude-code-heihei/releases/latest)
 
-> For other platforms and versions, see [Releases](https://github.com/KyuuKyuuStone/claude-code-heihei/releases).
+> 历史版本见 [Releases](https://github.com/KyuuKyuuStone/claude-code-heihei/releases)。
 
-## Screenshots
+> 已安装用户可在应用内「设置 → 关于 → 应用更新」**检查更新**；更新包经 `latest.yml` + `blockmap` 增量下载。
 
-|  |  |
-|:--:|:--:|
-| ![Screenshot 1](docs/images/app/ZY01.jpg) | ![Screenshot 2](docs/images/app/ZY02.jpg) |
-| ![Screenshot 3](docs/images/app/ZY03.jpg) | ![Screenshot 4](docs/images/app/ZY04.jpg) |
-
-### Local models (frozen optional feature)
+## 界面预览
 
 |  |  |
 |:--:|:--:|
-| ![Local model home](docs/images/app/LM-home.png) | ![Benchmark](docs/images/app/LM-benchmark.png) |
-| ![Edit config](docs/images/app/LM-edit-config.png) | ![Running](docs/images/app/LM-running.png) |
+| ![界面预览 1](docs/images/app/ZY01.jpg) | ![界面预览 2](docs/images/app/ZY02.jpg) |
+| ![界面预览 3](docs/images/app/ZY03.jpg) | ![界面预览 4](docs/images/app/ZY04.jpg) |
 
-## Features
+### 本地大模型（冻结的可选功能）
 
-### Supervisor–worker collaboration (new in this project)
+|  |  |
+|:--:|:--:|
+| ![本地模型首页](docs/images/app/LM-home.png) | ![跑分](docs/images/app/LM-benchmark.png) |
+| ![修改配置方案](docs/images/app/LM-edit-config.png) | ![启动模型](docs/images/app/LM-running.png) |
 
-- **Supervisor / workers**: appoint one supervisor per project and register any session as a worker, with free-form roles and traits (backend / frontend / writing / painter …).
-- **Automatic dispatch**: the supervisor dispatches tasks to worker sessions, which run unattended (permissions auto-approved) and report back when done.
-- **Review & deliver**: the supervisor reviews each report, then keeps going or delivers to the user.
-- **Project isolation**: roster and dispatch are scoped by working directory — cross-project dispatch is rejected by the server.
+## 功能特性
 
-### Session workspace
+### 会话级上下级协作（本项目新增）
 
-- **Multi-session**: tabs, project switching, terminal entry, and session history in one place.
-- **Branch / Worktree**: start a session on any branch, using the current working tree or an isolated Worktree.
-- **File-by-file diff review**: see this turn's changes, open any file as a syntax-highlighted diff, and undo the whole turn.
+- **主管 / 员工**：每个项目任命一名「主管」，把任意会话登记为「员工」，角色与特性自由定义（后端 / 前端 / 写作 / 绘画师…）。
+- **自动派活**：主管向员工会话派活，员工会话无人值守自动执行（自动放行权限），完工后自动汇报。
+- **验收交付**：主管收到汇报后验收，继续派活或向用户交付。
+- **项目隔离**：花名册与派活都按工作目录隔离，跨项目派活会被服务端直接拒绝。
+- **任务台账与消息折叠**：派活、执行、交付、验收的状态以服务端**任务台账**为准（不靠会话忙闲推断）；协作会话之间互发的**派活与汇报消息默认折叠成一行卡片**，点击展开。
 
-### AI capabilities
+### 会话工作台
 
-- **Multi-agent**: SubAgents / Agent Teams — subagents share context and collaborate.
-- **Skill marketplace**: discover, preview, and install third-party skills from ClawHub / SkillHub, with source and safety status up front.
-- **Skills system**: turn workflows into skills that load automatically with sessions.
-- **Memory system**: automatic memory plus AutoDream for long-term memory distillation.
-- **Computer Use**: let the agent screenshot, click, type, and control desktop apps after authorization.
-- **MCP support**: connect MCP tools and external capabilities.
+- **多会话**：标签页、项目切换、终端入口、会话历史集中管理。
+- **分支 / Worktree**：新建会话可选仓库分支，决定用当前工作树还是隔离 Worktree。
+- **逐文件 Diff 审阅**：列出本轮改动，任意文件一键打开带语法高亮的 Diff，支持整轮撤销。
 
-### Local models (frozen optional feature)
+### AI 能力
 
-> **Frozen**: local models still run, but are no longer developed and **do not participate in collaboration sessions**.
+- **多 Agent**：SubAgent / Agent Teams，子代理继承上下文协同工作。
+- **技能市场**：发现、预览、安装来自 ClawHub / SkillHub 的第三方技能，来源与安全状态摆在明处。
+- **Skills 系统**：把流程固化成技能，随会话自动加载。
+- **记忆系统**：自动记忆 + AutoDream 提炼长期记忆。
+- **Computer Use**：授权后让 Agent 截图、点击、输入并控制桌面应用。
+- **MCP 支持**：接入 MCP 工具与外部能力。
 
-Run **GGUF models directly on your own machine** — no internet, no API key, nothing leaves your computer. The app bundles the [llama.cpp](https://github.com/ggml-org/llama.cpp) runtime and supports pure CPU and GPU inference (Vulkan, cross NVIDIA / AMD / Intel). A one-click **benchmark** really probes your hardware: the GPU must survive a live inference probe (weak cards fall back to CPU automatically), 67%/100% usage tiers are measured twice each and the fastest wins. The report tells you the run mode (pure CPU / full GPU / hybrid), a first-token latency estimate, and the KV-cache bill. Config presets auto-fill from your hardware, context size is planned against your memory (falling back to q8_0 KV cache when f16 doesn't fit), vision models work with an mmproj projector, and NVIDIA users can plug in the official CUDA build. Perfect for modest student machines.
+### 本地大模型（冻结的可选功能）
 
-### More
+> **冻结**：本地模型仍可运行，但不再新增功能，且**不参与协作会话**。
 
-- **Permission modes**: five levels, from "ask every time" to "skip permissions" — risky commands and tool calls are approved in the GUI.
-- **Bring your own model**: add providers via API key with presets for DeepSeek, Kimi, Zhipu GLM and others, or point at LM Studio and Ollama running locally.
-- **Three colour themes**: Pure White, Paper, and Ink Blue — optionally following the system light/dark setting.
-- **Usage stats**: track local token usage trends.
+直接在你**自己的电脑上跑 GGUF 模型**——不联网、不要 API Key、数据不出本机。应用内置 [llama.cpp](https://github.com/ggml-org/llama.cpp) 内核，支持纯 CPU 与 GPU（Vulkan，跨 NVIDIA / AMD / Intel）。一键**跑分**真探测你的硬件：GPU 能不能扛住实测说了算（跑不动自动退纯 CPU）、67%/100% 两档实测取最快，报告给出运行方式结论（纯 CPU / GPU 全量 / 混合）、首字延迟预估和 KV 缓存账单。配置方案参数按硬件自动填好，上下文按内存规划（装不下自动换 q8_0 KV 缓存），多模态模型支持配 mmproj 看图，N 卡可外接官方 CUDA 引擎提速。特别适合普通学生电脑。
 
-## Run the CLI from Source
+### 其他
 
-For users who want to debug the underlying CLI, server, or local development flow:
+- **权限模式**：五档权限，从「每次都问」到「跳过权限」，危险命令、工具调用和 AI 反问都在桌面端审批。无人应答的权限请求不会一直挂着：**有客户端在线 15 分钟、无客户端 90 秒**内无人应答即**自动拒绝**，回合带着「工具被拒」继续。
+- **自带模型**：通过 API Key 添加服务商，DeepSeek、Kimi、智谱 GLM 等第三方有现成预设，也支持 LM Studio、Ollama 本地模型。
+- **三套配色主题**：纯白、纸墨、墨夜蓝，可跟随系统深浅色自动切换。
+- **用量统计**：查看本机 Token 使用趋势。
+
+## 从源码启动 CLI
+
+适合想调试底层 CLI、服务端或自行开发的用户：
 
 ```bash
 bun install
@@ -87,56 +90,56 @@ cp .env.example .env
 ./bin/claude-heihei
 ```
 
-See [environment variables](docs/en/cli/env.md) and [CLI setup](docs/en/cli/index.md) for more configuration options.
+更多配置见 [环境变量](docs/cli/env.md) 和 [命令行安装与启动](docs/cli/index.md)。
 
-## More Documentation
+## 更多文档
 
-| Section | Documents |
+| 分区 | 文档 |
 |------|------|
-| **Getting started** | [What this is](docs/en/start/index.md) · [Download and install](docs/en/start/install.md) · [Connect a model provider](docs/en/start/models.md) · [Your first session](docs/en/start/first-session.md) · [Troubleshooting](docs/en/start/troubleshooting.md) |
-| **Desktop features** | [Feature overview](docs/en/desktop/index.md) · [Local models](docs/en/desktop/local-model.md) · [Computer Use](docs/en/desktop/computer-use.md) |
-| **CLI** | [Install and run](docs/en/cli/index.md) · [Command reference](docs/en/cli/reference.md) · [Environment variables](docs/en/cli/env.md) |
-| **Internals** | [Desktop architecture](docs/en/internals/desktop.md) · [Local model internals](docs/en/internals/local-model.md) · [Multi-agent system](docs/en/internals/agent.md) · [Skills system](docs/en/internals/skills.md) · [Memory system](docs/en/internals/memory.md) · [Computer Use architecture](docs/en/internals/computer-use.md) · [Local server and API](docs/en/internals/server.md) · [Project structure](docs/en/internals/structure.md) |
+| **开始使用** | [这是什么](docs/start/index.md) · [下载与安装](docs/start/install.md) · [连接模型服务](docs/start/models.md) · [跑通第一条会话](docs/start/first-session.md) · [故障排查](docs/start/troubleshooting.md) |
+| **桌面端功能** | [功能总览](docs/desktop/index.md) · [本地模型](docs/desktop/local-model.md) · [Computer Use](docs/desktop/computer-use.md) |
+| **命令行** | [安装与启动](docs/cli/index.md) · [命令参考](docs/cli/reference.md) · [环境变量](docs/cli/env.md) |
+| **深入原理** | [桌面端架构](docs/internals/desktop.md) · [本地模型原理](docs/internals/local-model.md) · [多 Agent 系统](docs/internals/agent.md) · [Skills 系统](docs/internals/skills.md) · [记忆系统](docs/internals/memory.md) · [Computer Use 架构](docs/internals/computer-use.md) · [本地 Server 与 API](docs/internals/server.md) · [项目结构](docs/internals/structure.md) |
 
-## Support
+## 赞助
 
-If this project helps you, consider supporting its ongoing development ❤️
+如果这个项目对你有帮助，欢迎扫码赞助，支持我们持续开发 ❤️
 
 <p align="center">
-  <img src="docs/images/donate/wechat-pay.png" width="240" alt="WeChat Pay">
-  <img src="docs/images/donate/alipay.jpg" width="240" alt="Alipay">
+  <img src="docs/images/donate/wechat-pay.png" width="240" alt="微信收款">
+  <img src="docs/images/donate/alipay.jpg" width="240" alt="支付宝收款">
 </p>
 
-## Feedback & Contact
+## 反馈与联系
 
-For questions, bugs, or feature suggestions, reach out via:
+使用中遇到问题或有改进建议，欢迎通过以下方式联系：
 
-- Email: [511829667@qq.com](mailto:511829667@qq.com)
-- GitHub Issues: [open an issue](https://github.com/KyuuKyuuStone/claude-code-heihei/issues)
+- 邮箱：[511829667@qq.com](mailto:511829667@qq.com)
+- GitHub Issues：[提交问题](https://github.com/KyuuKyuuStone/claude-code-heihei/issues)
 
-## Tech Stack
+## 技术栈
 
-| Category | Technology |
+| 类别 | 技术 |
 |------|------|
-| Language | TypeScript |
-| Desktop app | Electron |
-| Desktop UI | React + Vite |
-| Local runtime | [Bun](https://bun.sh) |
-| Terminal UI | React + [Ink](https://github.com/vadimdemedes/ink) |
-| CLI parsing | Commander.js |
+| 语言 | TypeScript |
+| 桌面 APP | Electron |
+| 桌面 UI | React + Vite |
+| 本地运行时 | [Bun](https://bun.sh) |
+| 终端 UI | React + [Ink](https://github.com/vadimdemedes/ink) |
+| CLI 解析 | Commander.js |
 | API | Anthropic SDK |
-| Protocols | MCP, LSP |
+| 协议 | MCP, LSP |
 
-## Acknowledgements
+## 致谢
 
-This project is built on the shoulders of the following projects:
+本项目站在以下项目的肩膀上：
 
-- [cc-haha](https://github.com/NanmiCoder/cc-haha) — the upstream desktop workspace (MIT) this project is forked from. Thanks to NanmiCoder and the cc-haha community.
-- [Claude Code](https://claude.com/claude-code) / [Anthropic](https://www.anthropic.com) — the underlying agent runtime and [Anthropic SDK](https://github.com/anthropics/anthropic-sdk-typescript).
+- [cc-haha](https://github.com/NanmiCoder/cc-haha) —— 本项目 fork 自它的上游桌面工作台（MIT）。感谢 NanmiCoder 与 cc-haha 社区。
+- [Claude Code](https://claude.com/claude-code) / [Anthropic](https://www.anthropic.com) —— 底层的 agent 运行时与 [Anthropic SDK](https://github.com/anthropics/anthropic-sdk-typescript)。
 
-Thanks also to [DeepSeek](https://www.deepseek.com) for assisting with the development and refactoring of this codebase, and to the following open-source projects and community practices for reference and inspiration:
+同时感谢 [DeepSeek](https://www.deepseek.com) 协助完成本项目代码的开发与改造，以及以下开源项目和社区实践为本项目提供参考与启发：
 
-- [React](https://github.com/facebook/react): frontend engineering and component-based UI ecosystem.
-- [Electron](https://github.com/electron/electron): cross-platform desktop app capabilities and engineering practices.
-- [cc-switch](https://github.com/farion1231/cc-switch): reference for model provider configuration.
-- [LINUX DO](https://linux.do/): a new ideal developer community.
+- [React](https://github.com/facebook/react)：前端工程与组件化 UI 生态。
+- [Electron](https://github.com/electron/electron)：跨端桌面应用能力与工程实践。
+- [cc-switch](https://github.com/farion1231/cc-switch)：模型供应商配置能力参考。
+- [LINUX DO](https://linux.do/)：新的理想型开发者社区。

@@ -111,6 +111,12 @@ A tool result with `queued` means only that a payload was queued; it does not co
 
 Mixing new CLI tools with an old server that lacks ledger support is not a supported configuration. Dispatch/report may deliver a message without a ledger. On the old-server report fallback, delivery is allowed only when the same-project roster identifies exactly one supervisor; otherwise it is rejected. Review and task listing require a server with ledger support. Tests: `src/server/__tests__/collab-cli-tools.test.ts:401-409,560-634`.
 
+## Permission waiting and auto-deny
+
+Since v1.7.2, permission waits are bounded. If nobody answers a permission request, the session no longer hangs forever: after **15 minutes with a client attached, or 90 seconds with no client**, the request is **auto-denied** and the turn continues with the tool reported as rejected (**the tool does not run**). When this happens, the message stream shows a neutral grey system note (five UI languages) stating the request was auto-denied and the tool was not executed; a separate static hint appears while waiting, with **no countdown**.
+
+The attached-client tier is longer (15 minutes) because attaching a client only **extends** the timer, and disconnecting does not shorten it. Worker sessions are unaffected (they run unattended with permissions auto-approved, so no pending request is created). Evidence: `release-notes/v1.7.2.md`, commits `6264f59` (bounded timeout) and `a82b0e1` (visibility).
+
 ## Limitations
 
 - The collaboration service defaults to local-only use on `127.0.0.1` and does not provide per-process authentication by default. Programs running locally with the same user permissions can read and write collaboration data. A `taskId` identifies a task; it is not an access credential and does not grant access control. Evidence: `src/server/index.ts:92-103,226-231,277-285` and `src/server/localRequestPolicy.ts:281-307`.
