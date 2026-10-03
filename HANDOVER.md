@@ -85,6 +85,40 @@
 - **「320 秒超时」专项排查进行中**：已定位为 `turn-checkpoints` 结构性 `O(m·n)` 循环的候选成因，**O(n²) 尚未证实、修法未落地**（据主管口径，未在代码/提交中核到物证）。
 - v1.7.2 未验证项：渲染层视觉未真机走查、720px 短版降级未做、转录缓存「同尺寸重写 + mtime 精度」风险、`startedByDelivery` 不持久化、无客户端 15 分钟档未做 e2e。
 
+### 已查实待修缺陷（v1.7.3+ 候选）
+
+本轮（v1.7.2 收尾）查实、**按用户指示暂不修**的四条，逐条留档（含文件与行号；未实测的已标注）：
+
+1. **`src/history.ts:391` 的 `await truncate(...)` 可能静默挂死**（Bun 1.3.14 的异步 `fs/promises.truncate()` 不返回）
+   - 根因：该处是**提示历史写入器的回滚分支**；其 `catch` 以 `historyWriterPoisoned` 兜底（标志定义 `:305`，置位点 `:371`/`:394`/`:401`）。而 Bun 1.3.14 的 `truncate()` **永不返回**（探针实测：该步 3000ms 触发守卫、同序列其余每步 0–3ms；同族 `truncateSync` 亦挂死）。
+   - 后果：命中即 `await` 永不返回 ⇒ `catch` 不执行、毒化标记不置位 ⇒ 该写入路径**静默挂死**（不报错、不自愈）。
+   - 触发：需**走回滚分支** + 该 Bun 版本（窄）。
+   - 证据来源：后端探针逐步耗时表；提交 `79b2ffe`（测试侧 `sourceFingerprint.test.ts` 已改 `writeFile` 绕过，正文点名「产品侧同 API 命中 `src/history.ts:391`…已单独立项」）。
+   - 方向（未实施）：`open(..., 'r+')` + `ftruncate`、或重写语义、或调用点加超时守卫。**Bun 上游是否已修未确认**（1.4.2 未见对应条目）——**不承诺升级可根治**，须先搜上游 issue。
+   - 我另核：`src/utils/sessionStorage.ts:949` 用的是 `FileHandle.truncate`，**与 `fs/promises.truncate` 非同 API**，是否受同一缺陷影响**未确认**。
+
+2. **端口文件跨实例污染**（隔离实例覆盖真实应用的端口记录）
+   - 根因：端口文件目录由 `desktopServerInfoDir(home = os.homedir())` 决定（`src/server/services/serverIdentity.ts:152-154`），**`CLAUDE_CONFIG_DIR` 与 `--user-data-dir` 都不参与**；写入点 `writeDesktopServerInfo`（`:164-193`）**唯一门控**是 `isDesktopSidecarProcess()`（`:168-174`），只拦「非正式 sidecar」。
+   - 后果：跑一个隔离实例**必然覆盖**真实应用的端口记录 ⇒ 任何读该文件的工具（员工汇报路径、CLI 投递）打到错实例。
+   - 触发：真实应用与一个被判为「正式 sidecar」的隔离实例并存。
+   - 现状/缓解：v1.6.0 的 60s 巡检自愈（`:196`、`:211-215`）能夺回，但**污染期间**别人已读错。
+   - 证据来源：代码阅读；旁证 `serverIdentity.ts:201-204` 记载 **2026-09-30** 同类覆盖事故（当时只加 `NODE_ENV !== 'test'` 门控 ⇒ 同一坑漏了两次）。主管另给 `src/server/index.ts:512-524` 注释（**此项我未逐行核**）。
+   - 方向：端口文件路径纳入 config 目录参与；或增加实例身份校验。
+
+3. **台账 replay 零容错**（缺字段即整份台账加载失败）
+   - 根因：`src/server/services/collabTaskService.ts` 的 `cloneTask`（`:181-187`）对 `deliverables`/`history` 直接 `[...task.deliverables]` / `task.history.map(...)`，**无任何兜底**。
+   - 后果：任何缺这两个字段的台账行（手写行、旧版本写的行）会让**整份台账加载失败**（而非跳过坏行）。同模块对 `fromRole` 有旧数据兼容先例（`:74`/`:149` 可选、`:423` `?? 'other'`）⇒ 兼容口径未覆盖全。
+   - 触发：台账 JSONL 出现缺 `deliverables` 或 `history` 的行。
+   - 证据来源：代码阅读（行号如上）。
+   - 方向：缺失字段 `?? []` 归一 + 单行解析失败隔离跳过并记诊断。
+
+4. **`turn-checkpoints` 结构性 O(m·n)**（「320 秒超时」根因候选）
+   - 根因：`src/server/services/sessionRewindService.ts:919` 起的 `listSessionTurnCheckpoints` 逐轮 `findIndex`（`:933`）+ `hasCompletedTurn`（定义 `:400`，调用 `:937`）⇒ 每轮线性扫全量消息，合计 O(m·n)；服务端无 in-flight 合并 ⇒ 并发双发放大。
+   - 后果：长会话下 checkpoint 拉取排队变慢；客户端那条 `Request timed out after 320s` 是**误报**（只断连接、业务仍在跑）⇒ 另有「**误导性报错**」应独立修（区分超时与业务失败）。
+   - 触发：轮数与消息数都大时。
+   - 证据来源：代码阅读 + 后端整目录副本重测（进行中）。
+   - **口径（如实）**：结构推断 O(m·n) 成立；**`O(n²)` 仍在实测确认中（未实测）**；修法未落地。
+
 ### 能工作的
 - **v1.5.0 用户实测**：用户从 v1.2.7 升级后确认无 bug。`release-notes/v1.5.0.md` 与 README 定位一致：花名册高危修复、Windows 专属、移除外部 IM 适配器、bun 打包链；本地模型仍可用但已冻结，不参与协作会话。
 - **本地模型（冻结的可选功能）**：现有设置页、跑分、启动、下载中心、多模态、自定义引擎仍可用；不再新增功能、不参与协作会话。核心产品方向是会话级协作。
