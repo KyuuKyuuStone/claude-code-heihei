@@ -98,7 +98,12 @@ async function api(method: string, urlPath: string, body?: unknown) {
 }
 
 describe('Business Flow: Scheduled Tasks', () => {
-  beforeAll(startTestServer)
+  // v1.7.2 收尾实测（探针分解，**不是**用被砍断的文件总时长）：本组 hook 的成本几乎全在动态
+  // `import('../../index.js')` = **5718ms**（整棵服务端模块图首载），`startServer` 仅 51ms、首请求就绪
+  // @5803ms ⇒ **常态即 >5s**（非偶发放大），必然间歇撞 bun 默认 5000ms。同一进程内 import 只付一次，
+  // 5 个 beforeAll 里只有**第一个**付费 ⇒ 撞线的总是本组。取 20s（≈3.5× 实测余量）：真挂死是分钟级
+  // ⇒ 20s 不掩盖真挂死（已由「挂起 hook 仍判红」的判别力自证证实）。
+  beforeAll(startTestServer, 20_000)
   afterAll(stopTestServer)
 
   // ==========================================================================
