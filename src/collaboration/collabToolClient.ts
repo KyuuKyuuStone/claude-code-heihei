@@ -68,7 +68,8 @@ export type CollabToolDeps = {
   isPidAlive: (pid: number) => boolean
 }
 
-function defaultDeps(): CollabToolDeps {
+/** 导出仅为**接线用例**断言「默认 portFileDir 确实接上 config 目录解析」（v1.7.3 #3 读侧）。 */
+export function defaultDeps(): CollabToolDeps {
   return {
     env: process.env,
     fetch: (input, init) => fetch(input, init),
