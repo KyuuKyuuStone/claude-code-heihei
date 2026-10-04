@@ -55,7 +55,7 @@ export const en = {
 'error.techDetail.original': 'Original error',
 'error.techDetail.kind': 'Category',
 'error.techDetail.copy': 'Copy',
-  'api.error.timeout': 'The service is not responding. Please try again later.',
+  'api.error.timeout': 'The connection timed out; the task may still be running in the background. Refresh later to check the result.',
   'api.error.network': 'Cannot reach the local backend service.',
   'api.error.server': 'The service returned an error. Please try again later.',
   'api.error.crossProjectDispatch': 'Cross-project dispatch is not allowed: the working directory of the current session could not be resolved.',

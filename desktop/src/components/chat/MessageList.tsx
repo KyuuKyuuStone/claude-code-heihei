@@ -1,5 +1,7 @@
 import { useRef, useEffect, useMemo, useState, useCallback, useDeferredValue, useLayoutEffect } from 'react'
 import { ArrowDown } from 'lucide-react'
+import { describeApiFailure } from '../../lib/apiErrorMessage'
+import type { ApiErrorWithKind } from '../../api/client'
 import {
   buildRenderModel,
   buildTurnCardInsertionMap,
@@ -190,7 +192,8 @@ export function MessageList({ sessionId, compact = false, mobileLayout = false }
   const lastTailMessageIdBySessionRef = useRef(new Map<string, string | null>())
   const t = useTranslation()
   const [turnChangeCards, setTurnChangeCards] = useState<TurnChangeCardModel[]>([])
-  const [turnChangeLoadError, setTurnChangeLoadError] = useState<string | null>(null)
+  // v1.7.3：超时不是业务失败——错误条区分呈现（超时=中性提示，其余=失败红）
+  const [turnChangeLoadError, setTurnChangeLoadError] = useState<{ message: string; isTimeout: boolean } | null>(null)
   const [turnActionErrors, setTurnActionErrors] = useState<Record<string, string>>({})
   const [isLoadingTurnChangeCards, setIsLoadingTurnChangeCards] = useState(false)
   const [branchingMessageId, setBranchingMessageId] = useState<string | null>(null)
@@ -809,7 +812,10 @@ export function MessageList({ sessionId, compact = false, mobileLayout = false }
       .catch((error) => {
         if (cancelled) return
         setTurnChangeCards([])
-        setTurnChangeLoadError(getApiErrorMessage(error))
+        setTurnChangeLoadError({
+          message: describeApiFailure((error as ApiErrorWithKind).kind, getApiErrorMessage(error), t),
+          isTimeout: (error as ApiErrorWithKind).kind === 'timeout',
+        })
       })
       .finally(() => {
         if (!cancelled) {
@@ -867,7 +873,7 @@ export function MessageList({ sessionId, compact = false, mobileLayout = false }
     } catch (error) {
       setTurnActionErrors((current) => ({
         ...current,
-        [target.messageId]: getApiErrorMessage(error),
+        [target.messageId]: describeApiFailure((error as ApiErrorWithKind).kind, getApiErrorMessage(error), t),
       }))
       setTurnUndoConfirmTargetId(null)
     } finally {
@@ -902,7 +908,7 @@ export function MessageList({ sessionId, compact = false, mobileLayout = false }
     } catch (error) {
       addToast({
         type: 'error',
-        message: t('chat.branchError', { detail: getApiErrorMessage(error) }),
+        message: t('chat.branchError', { detail: describeApiFailure((error as ApiErrorWithKind).kind, getApiErrorMessage(error), t) }),
       })
     } finally {
       setBranchingMessageId(null)
@@ -1332,9 +1338,17 @@ export function MessageList({ sessionId, compact = false, mobileLayout = false }
           )}
 
           {!isLoadingTurnChangeCards && visibleTurnChangeCards.length === 0 && turnChangeLoadError && (
-            <div className="mx-auto mb-5 w-full max-w-[900px] rounded-[var(--radius-lg)] border border-[var(--color-error)] bg-[var(--color-error-container)] px-4 py-3 text-xs text-[var(--color-on-error-container)]">
-              {turnChangeLoadError}
-            </div>
+            turnChangeLoadError.isTimeout ? (
+              // v1.7.3：请求超时≠业务失败（checkpoint 拉取排队属误报，业务仍在跑）——
+              // 中性提示条而非红色失败条。
+              <div className="mx-auto mb-5 w-full max-w-[900px] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3 text-xs text-[var(--color-text-secondary)]">
+                {turnChangeLoadError.message}
+              </div>
+            ) : (
+              <div className="mx-auto mb-5 w-full max-w-[900px] rounded-[var(--radius-lg)] border border-[var(--color-error)] bg-[var(--color-error-container)] px-4 py-3 text-xs text-[var(--color-on-error-container)]">
+                {turnChangeLoadError.message}
+              </div>
+            )
           )}
 
           <div />

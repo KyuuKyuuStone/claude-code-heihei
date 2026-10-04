@@ -57,7 +57,7 @@ export const jp: Record<TranslationKey, string> = {
 'error.techDetail.original': '元のエラー',
 'error.techDetail.kind': '種別',
 'error.techDetail.copy': 'コピー',
-  'api.error.timeout': 'サービスが応答しません。しばらくしてから再試行してください。',
+  'api.error.timeout': '接続がタイムアウトしました。タスクはバックグラウンドで実行中の可能性があります。後ほど更新して結果を確認してください。',
   'api.error.network': 'ローカルバックエンドサービスに接続できません。',
   'api.error.server': 'サービスがエラーを返しました。しばらくしてから再試行してください。',
 'api.error.crossProjectDispatch': 'クロスプロジェクトへの割り当てはできません：現在のセッションの作業ディレクトリを解決できません。',

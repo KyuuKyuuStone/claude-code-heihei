@@ -57,7 +57,7 @@ export const kr: Record<TranslationKey, string> = {
 'error.techDetail.original': '원본 오류',
 'error.techDetail.kind': '분류',
 'error.techDetail.copy': '복사',
-  'api.error.timeout': '서비스가 응답하지 않습니다. 잠시 후 다시 시도해 주세요.',
+  'api.error.timeout': '연결이 시간 초과되었습니다. 작업은 백그라운드에서 계속 실행 중일 수 있습니다. 나중에 새로고침하여 결과를 확인하세요.',
   'api.error.network': '로컬 백엔드 서비스에 연결할 수 없습니다.',
   'api.error.server': '서비스에서 오류가 반환되었습니다. 잠시 후 다시 시도해 주세요.',
 'api.error.crossProjectDispatch': '크로스 프로젝트 할당이 허용되지 않습니다: 현재 세션의 작업 디렉터리를 확인할 수 없습니다.',

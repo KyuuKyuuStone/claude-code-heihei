@@ -57,7 +57,7 @@ export const zh: Record<TranslationKey, string> = {
 'error.techDetail.original': '原始錯誤',
 'error.techDetail.kind': '分類',
 'error.techDetail.copy': '複製',
-  'api.error.timeout': '服務暫時無回應，請稍後重試',
+  'api.error.timeout': '連線已逾時；任務可能仍在背景執行，稍後重新整理即可查看結果。',
   'api.error.network': '無法連線本機後台服務',
   'api.error.server': '服務回傳錯誤，請稍後重試',
 'api.error.crossProjectDispatch': '無法跨專案派活：目前會話的工作目錄無法解析',
