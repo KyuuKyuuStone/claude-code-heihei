@@ -173,6 +173,34 @@ describe('协作任务台账 CollabTaskService', () => {
     revived.resetForTests()
   })
 
+  it('重放：**缺 deliverables/history 的 created 行**归一为 []，不毁整份台账（v1.7.3 #4）', async () => {
+    await service.createTask({ ...baseInput, id: 'ok-1' })
+    const dir = path.join(tmpDir, 'cc-heihei', 'tasks')
+    const files = await fs.readdir(dir)
+    const ledger = path.join(dir, files[0]!)
+    // 手写一条缺字段的 created 行（模拟旧版本/手写台账）
+    await fs.appendFile(
+      ledger,
+      JSON.stringify({
+        type: 'created',
+        task: {
+          id: 'legacy-1', projectDir: PROJECT, fromSessionId: 'sup', toSessionId: 'emp',
+          title: '旧行', content: '缺字段', status: 'dispatched',
+          createdAt: 1, updatedAt: 1,
+        },
+      }) + '\n',
+      'utf-8',
+    )
+
+    const revived = new CollabTaskService()
+    const legacy = await revived.getTask('legacy-1')
+    expect(legacy).not.toBeNull()          // 缺字段**不再**让整份台账加载失败
+    expect(legacy?.deliverables).toEqual([])
+    expect(legacy?.history).toEqual([])
+    expect((await revived.getTask('ok-1'))?.status).toBe('dispatched') // 好行不受影响
+    revived.resetForTests()
+  })
+
   it('重放：项目隔离，两个项目各自成账本', async () => {
     await service.createTask({ ...baseInput, id: 'p-a', projectDir: PROJECT })
     await service.createTask({ ...baseInput, id: 'p-b', projectDir: PROJECT_B })

@@ -179,10 +179,12 @@ export const LEDGER_LOCK_FILENAME = 'ledger.lock'
 configureLedgerLock(() => path.join(tasksDir(), LEDGER_LOCK_FILENAME))
 
 function cloneTask(task: Task): Task {
+  // v1.7.3 #4：缺失字段一律归一为 []（与 fromRole 的旧数据兼容口径一致）——
+  // 否则读路径展开时抛错，会让**整份台账**不可用（一行坏数据毁掉全部）。
   return {
     ...task,
-    deliverables: [...task.deliverables],
-    history: task.history.map((entry) => ({ ...entry })),
+    deliverables: [...(task.deliverables ?? [])],
+    history: (task.history ?? []).map((entry) => ({ ...entry })),
   }
 }
 
@@ -378,7 +380,20 @@ export class CollabTaskService {
         continue
       }
       if (event.type === 'created' && event.task?.id) {
-        const task = event.task
+        // v1.7.3 #4：旧版本 / 手写台账可能缺 deliverables、history（fromRole 早有同类
+        // 兼容先例）——此处**入口归一**，缺失补 []；补过就记一条诊断（可观测、不静默）。
+        const raw = event.task
+        const task: Task = {
+          ...raw,
+          deliverables: raw.deliverables ?? [],
+          history: raw.history ?? [],
+        }
+        if (!raw.deliverables || !raw.history) {
+          logForDiagnosticsNoPII('warn', 'collab_task_ledger_row_normalized', {
+            taskId: task.id,
+            missing: [!raw.deliverables ? 'deliverables' : null, !raw.history ? 'history' : null].filter(Boolean),
+          })
+        }
         this.tasks.set(task.id, task)
         this.projectOf.set(task.id, task.projectDir)
         projectDir = task.projectDir
