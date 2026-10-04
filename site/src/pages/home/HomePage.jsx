@@ -42,9 +42,9 @@ function Hero({ c, locale }) {
           <img
             alt={c.hero.imageAlt}
             fetchPriority="high"
-            height="900"
+            height="1368"
             src={c.hero.image}
-            width="1440"
+            width="2560"
           />
           <figcaption>{c.hero.caption}</figcaption>
         </figure>
