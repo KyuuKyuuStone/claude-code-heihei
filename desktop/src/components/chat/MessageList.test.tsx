@@ -2857,7 +2857,9 @@ describe('MessageList nested tool calls', () => {
     })
     await waitForSelectionMenuUpdate()
 
-    expect(screen.getByRole('button', { name: 'Add to chat' })).toBeTruthy()
+    // CI runner heads slower than local: settle the selectionchange handler with an
+    // explicit bounded wait instead of a single synchronous query.
+    expect(await screen.findByRole('button', { name: 'Add to chat' }, { timeout: 5000 })).toBeTruthy()
   })
 
   it('adds selected assistant reply text to the composer context', async () => {
