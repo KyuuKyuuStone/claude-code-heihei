@@ -39,15 +39,7 @@ Claude Code Heihei is a **Windows-only, self-hosted supervisor–worker AI colla
 
 |  |  |
 |:--:|:--:|
-| ![Screenshot 1](docs/images/app/ZY01.jpg) | ![Screenshot 2](docs/images/app/ZY02.jpg) |
-| ![Screenshot 3](docs/images/app/ZY03.jpg) | ![Screenshot 4](docs/images/app/ZY04.jpg) |
-
-### Local models (frozen optional feature)
-
-|  |  |
-|:--:|:--:|
-| ![Local model home](docs/images/app/LM-home.png) | ![Benchmark](docs/images/app/LM-benchmark.png) |
-| ![Edit config](docs/images/app/LM-edit-config.png) | ![Running](docs/images/app/LM-running.png) |
+| ![New-session welcome screen (demo environment)](docs/images/app/welcome.png) | ![Local model page (demo environment)](docs/images/app/local-model-home.png) |
 
 ## Features
 

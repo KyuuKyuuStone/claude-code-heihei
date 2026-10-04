@@ -40,11 +40,11 @@ function Hero({ c, locale }) {
 
         <figure className="hero__figure">
           <img
-            alt={c.tour.tabs[0].title}
+            alt={c.hero.imageAlt}
             fetchPriority="high"
-            height="1080"
-            src={c.tour.tabs[0].image}
-            width="1920"
+            height="900"
+            src={c.hero.image}
+            width="1440"
           />
           <figcaption>{c.hero.caption}</figcaption>
         </figure>

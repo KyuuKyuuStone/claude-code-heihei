@@ -39,15 +39,7 @@ Claude Code Heihei 是一个 **Windows 专属、自用为主的「主管/员工�
 
 |  |  |
 |:--:|:--:|
-| ![界面预览 1](docs/images/app/ZY01.jpg) | ![界面预览 2](docs/images/app/ZY02.jpg) |
-| ![界面预览 3](docs/images/app/ZY03.jpg) | ![界面预览 4](docs/images/app/ZY04.jpg) |
-
-### 本地大模型（冻结的可选功能）
-
-|  |  |
-|:--:|:--:|
-| ![本地模型首页](docs/images/app/LM-home.png) | ![跑分](docs/images/app/LM-benchmark.png) |
-| ![修改配置方案](docs/images/app/LM-edit-config.png) | ![启动模型](docs/images/app/LM-running.png) |
+| ![新建会话欢迎页（演示环境）](docs/images/app/welcome.png) | ![本地模型页（演示环境）](docs/images/app/local-model-home.png) |
 
 ## 功能特性
 

@@ -528,9 +528,11 @@
 
 .lm-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* 卡片数随可用截图增减：auto-fit 让单张卡片独占整行并居中，不留空槽 */
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  max-width: 860px;
   gap: var(--sp-6);
-  margin: 0;
+  margin: 0 auto;
   padding: 0;
   list-style: none;
 }

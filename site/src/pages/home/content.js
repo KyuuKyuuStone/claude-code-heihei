@@ -1,16 +1,11 @@
-import shot1 from '../../../../docs/images/app/ZY01.jpg'
-import shot2 from '../../../../docs/images/app/ZY02.jpg'
-import shot3 from '../../../../docs/images/app/ZY03.jpg'
-import shot4 from '../../../../docs/images/app/ZY04.jpg'
-import lmHome from '../../../../docs/images/app/LM-home.png'
-import lmBenchmark from '../../../../docs/images/app/LM-benchmark.png'
-import lmEdit from '../../../../docs/images/app/LM-edit-config.png'
-import lmRunning from '../../../../docs/images/app/LM-running.png'
-import lmSelect from '../../../../docs/images/app/LM-select.png'
+import welcome from '../../../../docs/images/app/welcome.png'
+import localModelHome from '../../../../docs/images/app/local-model-home.png'
+import collabTasks from '../../../../docs/images/v1.7/collab-tasks.png'
+import sidebar from '../../../../docs/images/v1.7/sidebar.png'
 
 const localizedImages = {
-  zh: { shot1, shot2, shot3, shot4, lmHome, lmBenchmark, lmEdit, lmRunning, lmSelect },
-  en: { shot1, shot2, shot3, shot4, lmHome, lmBenchmark, lmEdit, lmRunning, lmSelect }
+  zh: { welcome, localModelHome, collabTasks, sidebar },
+  en: { welcome, localModelHome, collabTasks, sidebar }
 }
 
 export const images = localizedImages.zh
@@ -23,6 +18,8 @@ export const content = {
       primary: '下载桌面端',
       secondary: '三步跑通第一条会话',
       badges: ['Windows', '开源免费', '数据留在本机'],
+      image: welcome,
+      imageAlt: '新建会话欢迎页：左侧是项目与会话列表，右侧是输入框、权限与模型选择（演示环境）',
       caption: '真实 App 的界面截图：项目、权限与模型一眼可见。'
     },
     capabilities: {
@@ -44,11 +41,7 @@ export const content = {
       title: '不联网、不要 API Key，跑在你自己的显卡上',
       lede: '内置 llama.cpp 内核，直接运行 GGUF 模型。识别你的硬件、推荐配置档位，一键跑分测出真实速度。',
       steps: [
-        { image: lmHome, title: '一目了然的本地模型首页', body: '硬件信息、配置方案、运行状态，一屏全摆出来。' },
-        { image: lmBenchmark, title: '一键跑分', body: '设目标速度、上下文、硬件使用率，实测出最优配置。' },
-        { image: lmEdit, title: '细节参数随你调', body: '上下文窗口、GPU 层数、KV cache、采样，全都能细调。' },
-        { image: lmRunning, title: '引擎跑起来', body: '内置 llama.cpp，加载模型后在本机端口提供对话服务。' },
-        { image: lmSelect, title: '会话里切换', body: '输入框左下角换成本地模型，就能离线用了。' }
+        { image: localModelHome, title: '一目了然的本地模型首页', body: '硬件信息、配置方案、运行状态，一屏全摆出来。' }
       ],
       cta: { href: '/desktop/local-model', label: '看本地模型怎么用' }
     },
@@ -61,28 +54,14 @@ export const content = {
           label: '会话',
           title: '多会话工作台',
           body: '标签页、项目切换与会话历史集中管理，每个会话的状态一眼看清。',
-          image: localizedImages.zh.shot1
+          image: localizedImages.zh.sidebar
         },
         {
           id: 'collab',
           label: '协作',
-          title: '右键协作设置',
-          body: '在会话上点右键，把任意会话登记为员工、任命主管，按项目组建团队。',
-          image: localizedImages.zh.shot2
-        },
-        {
-          id: 'collab-dialog',
-          label: '配置',
-          title: '协作设置弹窗',
-          body: '设定角色与特性，主管向员工派活，员工无人值守执行、完工自动汇报。',
-          image: localizedImages.zh.shot3
-        },
-        {
-          id: 'workers',
-          label: '员工',
-          title: '协作会话与员工标识',
-          body: '会话列表里一眼分清主管与员工身份，派活与汇报按项目隔离。',
-          image: localizedImages.zh.shot4
+          title: '协作任务台账',
+          body: '主管派活、员工无人值守执行与完工汇报，全部汇总进任务台账，按项目隔离。',
+          image: localizedImages.zh.collabTasks
         }
       ]
     },
@@ -139,6 +118,8 @@ export const content = {
       primary: 'Download the app',
       secondary: 'Run your first session',
       badges: ['Windows', 'Open source', 'Your data stays local'],
+      image: welcome,
+      imageAlt: 'New-session welcome screen: project and session list on the left, composer with permission and model pickers on the right (demo environment)',
       caption: 'Real screenshots from the app: project, permissions and model visible up front.'
     },
     capabilities: {
@@ -160,11 +141,7 @@ export const content = {
       title: 'Offline, no API key — run on your own GPU',
       lede: 'The bundled llama.cpp runtime runs GGUF models directly. It detects your hardware, recommends a config tier, and benchmarks your real speed in one click.',
       steps: [
-        { image: lmHome, title: 'The local model page at a glance', body: 'Hardware, configurations, and run state all on one screen.' },
-        { image: lmBenchmark, title: 'One-click benchmark', body: 'Set a target speed, context, and hardware usage — it measures the best config.' },
-        { image: lmEdit, title: 'Tune the details', body: 'Context window, GPU layers, KV cache, sampling — all adjustable.' },
-        { image: lmRunning, title: 'Engine up and running', body: 'The bundled llama.cpp loads your model and serves it on a local port.' },
-        { image: lmSelect, title: 'Switch in a session', body: 'Pick the local model in the composer picker and chat offline.' }
+        { image: localModelHome, title: 'The local model page at a glance', body: 'Hardware, configurations, and run state all on one screen.' }
       ],
       cta: { href: '/en/desktop/local-model', label: 'See how local models work' }
     },
@@ -177,28 +154,14 @@ export const content = {
           label: 'Session',
           title: 'A multi-session workspace',
           body: 'Tabs, project switching and session history in one place, with every session’s state visible at a glance.',
-          image: localizedImages.en.shot1
+          image: localizedImages.en.sidebar
         },
         {
           id: 'collab',
           label: 'Collab',
-          title: 'Right-click collaboration setup',
-          body: 'Right-click a session to register it as a worker or appoint a supervisor, building a team per project.',
-          image: localizedImages.en.shot2
-        },
-        {
-          id: 'collab-dialog',
-          label: 'Config',
-          title: 'Collaboration setup dialog',
-          body: 'Set roles and traits — the supervisor dispatches tasks, workers run unattended and report back.',
-          image: localizedImages.en.shot3
-        },
-        {
-          id: 'workers',
-          label: 'Workers',
-          title: 'Collaboration sessions and worker badges',
-          body: 'See supervisor and worker roles at a glance in the session list, with dispatch scoped per project.',
-          image: localizedImages.en.shot4
+          title: 'Collaboration task ledger',
+          body: 'Supervisor dispatch, unattended worker runs and hand-off reports all roll into one task ledger, scoped per project.',
+          image: localizedImages.en.collabTasks
         }
       ]
     },
