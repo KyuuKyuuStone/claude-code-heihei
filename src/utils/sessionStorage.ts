@@ -912,7 +912,7 @@ class Project {
         try {
           const { size } = await fh.stat()
           fileSize = size
-          if (size === 0) return
+          if (size === 0 || size > MAX_TOMBSTONE_REWRITE_BYTES) return  // 上限与慢路径同款
 
           const chunkLen = Math.min(size, LITE_READ_BUF_SIZE)
           const tailStart = size - chunkLen
@@ -946,7 +946,7 @@ class Project {
               // v1.7.3 #1：原「positional write + truncate」；Bun 的 truncate 全家永不返回（探针 9/9）
               // ⇒ 删末条挂死、删中间条丢尾部。改为拼保留部分整体写回（writeFile 天然截断，字节等价）。
               const head = Buffer.allocUnsafe(absLineStart)
-              if (absLineStart > 0) await fh.read(head, 0, absLineStart, 0)
+              if (absLineStart > 0) { const { bytesRead: n } = await fh.read(head, 0, absLineStart, 0); if (n < absLineStart) return }
               const keep = afterLen > 0 ? tail.subarray(lineEnd, lineEnd + afterLen) : tail.subarray(0, 0)
               await writeFile(this.sessionFile, Buffer.concat([head, keep]))
               return
