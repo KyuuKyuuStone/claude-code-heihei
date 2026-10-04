@@ -367,3 +367,34 @@ describe('ServantSessionModal i18n', () => {
     expect(screen.getByLabelText('Role name')).toHaveValue('代码审查')
   })
 })
+
+describe('ServantSessionModal 编辑路径 · 目标不在花名册（缺陷 #2 永久加载态）', () => {
+  it('显示失败态与重试入口，提交按钮锁死', async () => {
+    seedStores()
+    render(<ServantSessionModal open mode="edit" sessionId="ghost-session" onClose={vi.fn()} />)
+
+    // 失败态出现（不再永久「正在加载原设置」）
+    expect(await screen.findByText('未在协作花名册中找到该会话，无法编辑其协作设置。')).toBeInTheDocument()
+    expect(screen.queryByText(/正在加载原设置/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '重试' })).toBeInTheDocument()
+    // 提交按钮与失败态一致：锁死
+    expect(screen.getByRole('button', { name: '保存设置' })).toBeDisabled()
+
+    // 重试后仍不在册 → 失败态保持（不吞结果）
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    expect(await screen.findByText(/未在协作花名册/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '保存设置' })).toBeDisabled()
+  })
+
+  it('edit 模式目标在花名册：正常渲染表单，不误伤', async () => {
+    seedStores()
+    useServantStore.setState({
+      bySessionId: { 'sess-1': servant({ sessionId: 'sess-1', role: '前端工程师' }) },
+    })
+    render(<ServantSessionModal open mode="edit" sessionId="sess-1" onClose={vi.fn()} />)
+
+    expect(await screen.findByText('身份')).toBeInTheDocument()
+    expect(screen.queryByText(/未在协作花名册/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '保存设置' })).toBeEnabled()
+  })
+})

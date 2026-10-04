@@ -2465,6 +2465,7 @@ export const zh: Record<TranslationKey, string> = {
   'servant.modal.writeDirsRequired': '至少填寫一個絕對路徑',
   'servant.modal.supervisorConflict': '目前工作目錄已有主管，請先到該工作階段取消任命',
   'servant.modal.serveToggle': '接收主管派活',
+  'servant.modal.notInRoster': '未在協作花名冊中找到該會話，無法編輯其協作設定。',
   'servant.modal.loadingExisting': '正在載入原設定…',
   'servant.modal.partialFailure': '工作階段已建立，但協作身份登記失敗。可到該工作階段重試登記，勿重複建立。',
   'servant.modal.supervisorDutyHint': '主管負責拆解目標、派活與驗收，具體工作交由員工。',

@@ -71,8 +71,34 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
     activeProviderName,
   } = useSettingsStore()
 
-  // edit 模式花名册尚未读到：不渲染空表单，避免用户误保存覆盖原身份（设计稿 2.2）
-  const editingLoading = mode === 'edit' && !existing
+  // edit 模式花名册尚未读到：不渲染空表单，避免用户误保存覆盖原身份（设计稿 2.2）。
+  // 「未读到」要区分两态：花名册拉取尚未完成（继续 loading），与拉取完成后确实
+  // 不在花名册（缺陷 #2 曾永久转圈——对此给出明确失败态 + 重试）。
+  const [rosterState, setRosterState] = useState<'pending' | 'ready' | 'missing'>('pending')
+  const rosterAttemptedRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (!open || mode !== 'edit') return
+    if (existing) {
+      setRosterState('ready')
+      return
+    }
+    if (rosterAttemptedRef.current === sessionId) return
+    rosterAttemptedRef.current = sessionId
+    setRosterState('pending')
+    void useServantStore.getState().fetchServants().then(() => {
+      setRosterState(useServantStore.getState().bySessionId[sessionId ?? ''] ? 'ready' : 'missing')
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, mode, existing, sessionId])
+  const retryRoster = () => {
+    if (!sessionId) return
+    setRosterState('pending')
+    void useServantStore.getState().fetchServants().then(() => {
+      setRosterState(useServantStore.getState().bySessionId[sessionId] ? 'ready' : 'missing')
+    })
+  }
+  const rosterMissing = mode === 'edit' && !existing && rosterState === 'missing'
+  const editingLoading = mode === 'edit' && !existing && !rosterMissing
 
   const [identity, setIdentity] = useState<Identity>(
     existing?.supervisor ? 'supervisor' : 'employee',
@@ -316,7 +342,8 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
 
   const roleRequired = mode === 'create' && identity === 'employee' && !role.trim()
   const writeDirsInvalid = constraint === 'whitelist' && parsedWriteDirs.length === 0
-  const canSubmit = !editingLoading && !isSubmitting && !roleRequired && !writeDirsInvalid
+  // rosterMissing（不在花名册）下表单未渲染，提交同样锁死——否则空表单可被误提交
+  const canSubmit = !editingLoading && !rosterMissing && !isSubmitting && !roleRequired && !writeDirsInvalid
 
   const handleSubmit = async () => {
     if (!canSubmit) return
@@ -425,7 +452,16 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
         </div>
       }
     >
-      {editingLoading ? (
+      {rosterMissing ? (
+        <div className="flex flex-col items-center gap-3 py-8">
+          <p className="text-center text-[13px] leading-5 text-[var(--color-text-secondary)]">
+            {t('servant.modal.notInRoster')}
+          </p>
+          <Button variant="secondary" size="sm" onClick={retryRoster}>
+            {t('common.retry')}
+          </Button>
+        </div>
+      ) : editingLoading ? (
         <p className="py-8 text-center text-[13px] text-[var(--color-text-tertiary)]">
           {t('servant.modal.loadingExisting')}
         </p>

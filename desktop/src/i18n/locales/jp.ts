@@ -2465,6 +2465,7 @@ export const jp: Record<TranslationKey, string> = {
   'servant.modal.writeDirsRequired': '絶対パスを1つ以上入力してください',
   'servant.modal.supervisorConflict': '現在の作業ディレクトリには既に主管がいます。まずそのセッションで任命を解除してください。',
   'servant.modal.serveToggle': '割り当てを受け取る',
+  'servant.modal.notInRoster': 'このセッションはコラボレーション名簿に見つからず、共同設定を編集できません。',
   'servant.modal.loadingExisting': '現在の設定を読み込み中…',
   'servant.modal.partialFailure': 'セッションは作成されましたが、協業身分の登録に失敗しました。そのセッションで登録を再試行し、重複作成しないでください。',
   'servant.modal.supervisorDutyHint': '主管は目標の分解・割り当て・成果確認を担当し、実作業は行いません。',
