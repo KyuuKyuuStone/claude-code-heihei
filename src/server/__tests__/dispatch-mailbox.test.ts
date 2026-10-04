@@ -17,7 +17,7 @@ describe('DispatchMailboxService', () => {
   let tmpDir: string
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-heihei-mailbox-'))
+    tmpDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cc-heihei-mailbox-')))
   })
 
   afterEach(async () => {
