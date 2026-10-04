@@ -23,7 +23,7 @@ const MAPPING_KEYS: Partial<Record<ApiFailureKind, TranslationKey>> = {
 const KNOWN_SERVER_MESSAGES: ReadonlyArray<{ match: RegExp; key: TranslationKey }> = [
   {
     // 服务端 servants.ts：跨项目派活拒绝（sender workDir 无法解析）
-    match: /^Cross-project dispatch is not allowed/,
+    match: /^Cross-project dispatch is not allowed\b/,
     key: 'api.error.crossProjectDispatch',
   },
 ]
