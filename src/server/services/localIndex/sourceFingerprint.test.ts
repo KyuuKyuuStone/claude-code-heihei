@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test'
-import { appendFile, mkdtemp, open, rename, rm, stat, truncate, utimes, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, open, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {

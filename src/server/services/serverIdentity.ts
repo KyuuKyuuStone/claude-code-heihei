@@ -24,6 +24,7 @@ import { readFileSync, unlinkSync } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { getCcHeiheiDir } from '../../utils/envUtils.js'
 import { BACKGROUND_WRITE_RETRY, renameWithRetry } from '../../utils/atomicFs.js'
 import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 
@@ -148,12 +149,21 @@ export function getServerIdentity(): ServerIdentity {
   }
 }
 
-/** 端口文件所在目录（~/.claude/cc-heihei）；home 参数仅供测试注入 */
-export function desktopServerInfoDir(home: string = os.homedir()): string {
-  return path.join(home, '.claude', 'cc-heihei')
+/**
+ * 端口文件所在目录。**v1.7.3 #3**：默认跟随 **config 目录**（`getClaudeConfigHomeDir()` =
+ * `CLAUDE_CONFIG_DIR` || `~/.claude`）——隔离实例（CLAUDE_CONFIG_DIR=C:\cc-demo-home）
+ * 从此把端口文件写进**自己的** config 目录，**不再覆盖真实应用的记录**（旧实现固定用
+ * `os.homedir()`，隔离实例必然污染真实文件 ⇒ 员工汇报/CLI 投递打到错实例）。
+ * **兼容性**：未设 `CLAUDE_CONFIG_DIR` 时结果与旧实现**逐字相同**（`~/.claude/cc-heihei`）
+ * ⇒ 真实用户零影响；显式传 home 时仍走 `home/.claude/cc-heihei`，保持既有调用/测试契约。
+ */
+export function desktopServerInfoDir(home?: string): string {
+  return home
+    ? path.join(home, '.claude', 'cc-heihei')
+    : getCcHeiheiDir()
 }
 
-export function desktopServerInfoPath(home: string = os.homedir()): string {
+export function desktopServerInfoPath(home?: string): string {
   return path.join(desktopServerInfoDir(home), DESKTOP_SERVER_INFO_FILENAME)
 }
 
