@@ -2,7 +2,6 @@ import {
   appendFile,
   readFile,
   stat,
-  truncate,
   writeFile,
 } from 'fs/promises'
 import { join } from 'path'
@@ -388,7 +387,11 @@ async function immediateFlushHistory(): Promise<void> {
         payloadBytes.subarray(0, tail.length).equals(tail)
       ) {
         try {
-          await truncate(historyPath, originalSize)
+          // v1.7.3 #1：原为 fs truncate 回滚——Bun 1.3.14 下该 API（含 sync/fh/ftruncate 全家）
+          // **永不返回** ⇒ 静默挂死（探针 9/9 实证）。改为**重写语义**：读回当前内容、只写
+          // 前 originalSize 字节；writeFile 天然截断 ⇒ 结果字节与 truncate 等价、且无挂死面。
+          const rolledBack = await readFile(historyPath)
+          await writeFile(historyPath, rolledBack.subarray(0, originalSize))
           discardRemovedMarkers(entriesToWrite)
         } catch (rollbackError) {
           historyWriterPoisoned = true

@@ -78,7 +78,7 @@
       "kind": "upstream"
     },
     "src/utils/sessionStorage.ts": {
-      "lines": 5153,
+      "lines": 5152,
       "kind": "upstream"
     },
     "src/vendor/computer-use-mcp/toolCalls.ts": {

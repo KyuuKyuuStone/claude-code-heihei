@@ -37,7 +37,7 @@ describe('prompt history persistence', () => {
       | 'unexpected-tail' = 'partial-then-success'
     const realAppendFile = fsPromises.appendFile
     const realReadFile = fsPromises.readFile
-    const realTruncate = fsPromises.truncate
+    const realWriteFile = fsPromises.writeFile
     mock.module('fs/promises', () => ({
       ...fsPromises,
       appendFile: async (...args: Parameters<typeof fsPromises.appendFile>) => {
@@ -82,11 +82,14 @@ describe('prompt history persistence', () => {
         }
         return realReadFile(...args)
       },
-      truncate: async (...args: Parameters<typeof fsPromises.truncate>) => {
-        if (behavior === 'rollback-fails') {
+      // v1.7.3 #1：回滚已从 fs.truncate 改为「读回 + writeFile 前 N 字节」写入语义
+      // （truncate 在 Bun 1.3.14 永不返回）。注入点随之挪到 writeFile：只拦回滚那次
+      // （其数据是 Buffer；正常提交走 appendFile/字符串），其余一律放行。
+      writeFile: async (...args: Parameters<typeof fsPromises.writeFile>) => {
+        if (behavior === 'rollback-fails' && Buffer.isBuffer(args[1])) {
           throw new Error('injected rollback failure')
         }
-        return realTruncate(...args)
+        return realWriteFile(...args)
       },
     }))
 

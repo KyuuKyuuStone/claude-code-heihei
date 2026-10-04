@@ -943,13 +943,12 @@ class Project {
 
               const absLineStart = tailStart + lineStart
               const afterLen = bytesRead - lineEnd
-              // Truncate first, then re-append the trailing lines. In the
-              // common case (target is the last entry) afterLen is 0 and
-              // this is a single ftruncate.
-              await fh.truncate(absLineStart)
-              if (afterLen > 0) {
-                await fh.write(tail, lineEnd, afterLen, absLineStart)
-              }
+              // v1.7.3 #1：原「positional write + truncate」；Bun 的 truncate 全家永不返回（探针 9/9）
+              // ⇒ 删末条挂死、删中间条丢尾部。改为拼保留部分整体写回（writeFile 天然截断，字节等价）。
+              const head = Buffer.allocUnsafe(absLineStart)
+              if (absLineStart > 0) await fh.read(head, 0, absLineStart, 0)
+              const keep = afterLen > 0 ? tail.subarray(lineEnd, lineEnd + afterLen) : tail.subarray(0, 0)
+              await writeFile(this.sessionFile, Buffer.concat([head, keep]))
               return
             }
           }
