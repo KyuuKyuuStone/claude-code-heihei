@@ -4,11 +4,10 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { getCcHeiheiDir } from '../utils/envUtils.js'
 import { join } from 'node:path'
 import {
   COLLAB_API_PATHS,
-  COLLAB_PORT_FILE_DIR,
   COLLAB_PORT_FILE_NAME,
   COLLAB_SERVER_URL_ENV,
   COLLAB_SESSION_ID_ENV,
@@ -24,7 +23,8 @@ import type { AttachmentMessage } from '../types/message.js'
 
 export const COLLAB_CONTEXT_CARD_MAX = 2000
 const REQUEST_TIMEOUT_MS = 1500
-const PORT_FILE = join(homedir(), COLLAB_PORT_FILE_DIR, COLLAB_PORT_FILE_NAME)
+// v1.7.3 #3 读侧统一：改走 getCcHeiheiDir()（未设 CLAUDE_CONFIG_DIR 时与旧写法逐字相同）
+const PORT_FILE = join(getCcHeiheiDir(), COLLAB_PORT_FILE_NAME)
 const OPEN_STATUSES = ['dispatched', 'accepted', 'in_progress', 'rework', 'delivered'] as const
 const STATUS_PRIORITY: Record<string, number> = {
   delivered: 0,

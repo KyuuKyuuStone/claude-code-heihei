@@ -11,6 +11,7 @@
  */
 
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { getCcHeiheiDir } from '../utils/envUtils.js'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -74,7 +75,11 @@ function defaultDeps(): CollabToolDeps {
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     randomId: () => globalThis.crypto.randomUUID(),
-    portFileDir: join(homedir(), COLLAB_PORT_FILE_DIR),
+    // v1.7.3 #3 读侧统一：与写侧同一解析（getCcHeiheiDir = CLAUDE_CONFIG_DIR || ~/.claude
+  // 再拼 cc-heihei）。未设 env 时结果与旧写法（join(homedir(), '.claude/cc-heihei')）逐字相同
+  // ⇒ 真实用户零影响；隔离实例（设了 CLAUDE_CONFIG_DIR）从此读**自己的**端口文件，
+  // 不再回落 env 打到真实应用。显式注入 portFileDir 的契约不变。
+  portFileDir: getCcHeiheiDir(),
     isPidAlive: (pid) => {
       // 契约要求「端口文件先校验 pid」：pid 已死 → 该地址视为陈旧，继续走下一档
       try {
