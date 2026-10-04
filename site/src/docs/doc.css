@@ -357,7 +357,7 @@
 }
 
 /* 竖图满宽会铺满近两屏。哪些算竖图由构建期算好的宽高比决定（渲染器打
-   data-tall），不靠文件名匹配 —— wechat02 / dingding02 这类并不叫 h5-*。 */
+   data-tall），不靠文件名匹配。 */
 .prose img[data-tall='true'] {
   width: auto;
   max-width: 100%;

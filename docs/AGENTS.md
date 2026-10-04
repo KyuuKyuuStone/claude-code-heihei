@@ -36,7 +36,7 @@ Put a space between Chinese characters and adjacent Latin letters or digits: 「
 
 ## Screenshots
 
-Product screenshots live in `docs/images/app/` as WebP at 2000px wide, captured from a real build. Never ship a screenshot from an older UI generation; re-capture instead. Redact tokens, QR codes, API keys and paired account names before committing. Cap feature pages at roughly three screenshots.
+Product screenshots live in `docs/images/app/` as PNG/JPG, roughly 1920–2560px wide, captured from a real build. **Never ship a screenshot from an older UI generation; re-capture instead.** Redact tokens, QR codes, API keys and paired account names before committing. Cap feature pages at roughly three screenshots.
 
 Step-by-step setup walkthroughs are the exception: the local-model download guide embeds site links, and a couple of pages keep a small number of console screenshots. Judge those by whether a reader could follow along without them.
 
