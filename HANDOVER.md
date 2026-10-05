@@ -91,6 +91,13 @@
 
 本轮（v1.7.2 收尾）查实、**按用户指示暂不修**的六条，逐条留档（含文件与行号；未实测的已标注）：
 
+0. **`normalizeProjectPath` 不展开 8.3 短路径 ⇒ 同一目录两种字符串形态对不上**（**v1.7.4 候选**；CI 根因的产品侧对偶）
+   - 位置：`src/collaboration/projectPath.ts:16`——归一化只做 resolve + 反斜杠转正斜杠 + 小写，**不做 8.3 短名（`RUNNER~1` 式）展开**；`sameProject`/`collabTaskService.projectHash`（`collabTaskService.ts:163`）等全部沿用该口径。
+   - **CI 实证**（2026-10-04 起 multiple runs）：GitHub Windows runner 的 `os.tmpdir()` 返回 `C:\Users\RUNNER~1\…`（8.3 形态），`createSession` 内部 fs resolve 成长路径（`runneradmin`）入账，而测试以短路径串查询 → 归一化判不同项目 → 台账/会话过滤 0 条。首修 `0355134` 只治 dispatch-mailbox 一个文件，full suite 其余 **10 个测试文件 / 27 条**（searchService.sessions、collab-tasks-api、report-target-resolver、sessions、collabContext、settings、conversations、collab-cli-tools、agents-api）仍同因红（本地全绿，复跑 0绿/3红）。
+   - **CI 测试侧对偶修法（已验证可行）**：各测试文件 mkdtemp 后对 `tmpDir` 过 `fs.realpath`（`0355134` 模式，逐文件套用）。
+   - **影响面（真实用户场景）**：常规用户目录（`C:\Users\<名>\`）无 8.3 形态、不触发；触发面＝路径经 subst/网络映射/旧安装器残留短名/第三方工具以短路径传入 workDir 的场景 ⇒ 会出现「同一项目被拆成两个台账 hash」「花名册按项目过滤漏会话」。
+   - **方向（未实施）**：归一化前对存在性路径做 `fs.realpathSync` 展开，或比较时两侧都 resolve；产品改动需后端实施并补用例。
+
 1. **Bun 1.3.14 的 `fs` 系 `truncate` 永不返回 ⇒ 两处产品路径静默挂死**（全仓 `fs` 系 truncate 共 **3 处**：`src/history.ts:391`、`src/utils/sessionStorage.ts:949`、以及已修的测试 `79b2ffe`）
    - 路径甲 `src/history.ts:391`（`await truncate(...)`）：**提示历史写入器的回滚分支**，其 `catch` 以 `historyWriterPoisoned` 兜底（标志定义 `:305`，置位点 `:371`/`:394`/`:401`）⇒ 命中即 `await` 永不返回、`catch` 不执行、毒化标记不置位 ⇒ **静默挂死**（不报错、不自愈）。
    - 路径乙 `src/utils/sessionStorage.ts:949`（`await fh.truncate(absLineStart)`）：会话存储**「按 uuid 移除单条会话条目」**路径（定位块 `:928` 起：尾部窗口找 `"uuid":"<targetUuid>"` → 前后换行定行 `:931-942` → 记 `absLineStart` 与 `afterLen = bytesRead - lineEnd` `:944-945`）。**两个分支都会挂**：`afterLen === 0`（删的是**最后一条**，常见）**直接命中**——纯 ftruncate 即挂死；`afterLen > 0` 时 truncate 即便成功，随后 `await fh.write(tail, lineEnd, afterLen, absLineStart)`（`:950-952`）**补尾部时挂住 ⇒ 尾部永久丢失**。**发生情形＝删除/移除一条会话条目时，不是每次写文件**。⚠ 注释里「afterLen 为 0 时这是一次 ftruncate」（`:946-948`）**只是注释、不是免死金牌**——**读注释不等于执行**：0 与 >0 **两条路径都命中该缺陷**（后果不同：前者直接挂死、后者尾部丢失）。
