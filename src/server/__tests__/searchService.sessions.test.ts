@@ -101,18 +101,7 @@ describe('SearchService.searchSessions', () => {
       onRecord(`${filePath}:1:`)
     }
 
-    // TODO(trace)：一轮 CI 取证后即删——钉死 searchSessions 在 runner 上的实际路径
-    const svc = escapedService as unknown as Record<string, unknown>
-    console.log('[TRACE] fn=', String(svc.searchIndexedContent).slice(0, 120))
-    console.log('[TRACE] env.CLAUDE_CONFIG_DIR=', process.env.CLAUDE_CONFIG_DIR)
-    try {
-      const st = await fs.stat(path.join(process.env.CLAUDE_CONFIG_DIR || '', 'projects'))
-      console.log('[TRACE] projects stat isDirectory=', st.isDirectory())
-    } catch (e) {
-      console.log('[TRACE] projects stat error=', String(e).slice(0, 160))
-    }
     const { results } = await escapedService.searchSessions(query)
-    console.log('[TRACE] results=', JSON.stringify(results).slice(0, 500))
 
     expect(results.map(result => result.sessionId)).toEqual(['escaped-session'])
     expect(phaseAArgs).toHaveLength(1)
