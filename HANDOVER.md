@@ -106,6 +106,13 @@
    - **诊断基建（已上线，`2e6ba71`）**：acceptance 复跑仍红时打印 bun test stderr 断言关键行（此前 stderr 被 pipe 丢弃）——后续任何红都可先看 diff 再动手。
    - **恢复条件**：产品侧愿意加内部 trace/断点，或 Bun/runner 环境变化后复测；在此之前每次 push 的 server-full 红按本条挂账口径解读，**不视为新回归**（真回归仍会以「红文件清单变化」形式显现，对照本条清单即可分辨）。
 
+0c. **系统代理桥（systemProxyBridge）随 app 异常退出留下「死代理 env」⇒ 窗口期连累一切走代理的请求**（**v1.7.4+ 候选 / 偶发崩溃触发 / 用户明确指示后期再议**；2026-10-06 事故取证，未实施）
+   - 机制（实证）：electron 主进程起本机代理桥并监听 127.0.0.1:<port>（`desktop/electron/services/systemProxyBridge.ts`，自 v1.0.0 `b22af51` 就存在），`sidecarManager.ts:523` 把 `CC_HEIHEI_SYSTEM_PROXY_URL` 连同 `HTTP(S)_PROXY`/`ALL_PROXY` 注入 server 与子进程环境；**app 异常退出时 bridge socket 随进程消失（无死进程残留），但已派生的 shell/CLI 子进程仍持有指向死端口的代理 env** ⇒ 窗口期内一切走代理的请求 ECONNREFUSED（投递超时、台账报「桌面服务不可用」）；重启后新主进程重建 bridge，自愈。
+   - 逃逸现象（实证，2026-10-06 事故）：终端 curl 60–90s 超时 0 回执；`--noproxy '*'` 立即恢复；代理挂了会**连累所有走代理的请求**（不只 app 自身）。
+   - 错误兜底疑点（候选缺陷）：日志见「System proxy bridge failed … direct: connect ECONNREFUSED 127.0.0.1:80」——**直连兜底把目标解析到 :80**，实现位置未读码定行。
+   - **与 v1.7.3 无证据相关**：bridge 早于 v1.7.3 多版存在；v1.7.3 的端口文件读写统一（c09ae36/ab078e5）与 truncate 重写（d853213/2f615a0）均不触及代理路径；崩溃直接原因日志未捕获（未确定）。
+   - **方向（未实施，用户裁决后期再议）**：① 客户端对 `CC_HEIHEI_SYSTEM_PROXY_URL` 先探活、不可达则剥离代理 env 直连；② `before-quit` 补 bridge 显式 stop（现只 dispose tray）；③ 协作脚本投递统一 `--noproxy 127.0.0.1` 或把 127.0.0.1 并入 NO_PROXY。
+
 1. **Bun 1.3.14 的 `fs` 系 `truncate` 永不返回 ⇒ 两处产品路径静默挂死**（全仓 `fs` 系 truncate 共 **3 处**：`src/history.ts:391`、`src/utils/sessionStorage.ts:949`、以及已修的测试 `79b2ffe`）
    - 路径甲 `src/history.ts:391`（`await truncate(...)`）：**提示历史写入器的回滚分支**，其 `catch` 以 `historyWriterPoisoned` 兜底（标志定义 `:305`，置位点 `:371`/`:394`/`:401`）⇒ 命中即 `await` 永不返回、`catch` 不执行、毒化标记不置位 ⇒ **静默挂死**（不报错、不自愈）。
    - 路径乙 `src/utils/sessionStorage.ts:949`（`await fh.truncate(absLineStart)`）：会话存储**「按 uuid 移除单条会话条目」**路径（定位块 `:928` 起：尾部窗口找 `"uuid":"<targetUuid>"` → 前后换行定行 `:931-942` → 记 `absLineStart` 与 `afterLen = bytesRead - lineEnd` `:944-945`）。**两个分支都会挂**：`afterLen === 0`（删的是**最后一条**，常见）**直接命中**——纯 ftruncate 即挂死；`afterLen > 0` 时 truncate 即便成功，随后 `await fh.write(tail, lineEnd, afterLen, absLineStart)`（`:950-952`）**补尾部时挂住 ⇒ 尾部永久丢失**。**发生情形＝删除/移除一条会话条目时，不是每次写文件**。⚠ 注释里「afterLen 为 0 时这是一次 ftruncate」（`:946-948`）**只是注释、不是免死金牌**——**读注释不等于执行**：0 与 >0 **两条路径都命中该缺陷**（后果不同：前者直接挂死、后者尾部丢失）。
