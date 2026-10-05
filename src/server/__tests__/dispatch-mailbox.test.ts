@@ -1,3 +1,4 @@
+import { mkdtempReal } from "./fixtures/tmp-dir.js"
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
@@ -17,7 +18,7 @@ describe('DispatchMailboxService', () => {
   let tmpDir: string
 
   beforeEach(async () => {
-    tmpDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cc-heihei-mailbox-')))
+    tmpDir = await mkdtempReal('cc-heihei-mailbox-')
   })
 
   afterEach(async () => {

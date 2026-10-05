@@ -1,3 +1,4 @@
+import { mkdtempReal } from "./fixtures/tmp-dir.js"
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
@@ -22,7 +23,7 @@ describe('resolveReportTarget 改投前归属校验 (c)', () => {
   let events: RecordedEvent[]
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-heihei-report-resolver-'))
+    tmpDir = await mkdtempReal('cc-heihei-report-resolver-')
     const original = process.env.CLAUDE_CONFIG_DIR
     process.env.CLAUDE_CONFIG_DIR = tmpDir
     originalConfigDir = original

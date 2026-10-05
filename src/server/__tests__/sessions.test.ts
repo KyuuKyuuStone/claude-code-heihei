@@ -7,6 +7,7 @@ import * as fs from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import * as path from 'node:path'
 import * as os from 'node:os'
+import { mkdtempReal } from './fixtures/tmp-dir.js'
 import { SessionService, sessionService } from '../services/sessionService.js'
 // v1.3.0 阶段3：deletedSessions Set 迁移至 registry tombstone——内省断言改读快照
 import {
@@ -55,7 +56,7 @@ let service: SessionService
 
 /** Create a temporary config dir and configure the service to use it. */
 async function setupTmpConfigDir(): Promise<string> {
-  tmpDir = path.join(os.tmpdir(), `claude-test-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  tmpDir = await mkdtempReal(`claude-test-${Date.now()}-${Math.random().toString(36).slice(2)}`)
   await fs.mkdir(path.join(tmpDir, 'projects'), { recursive: true })
   process.env.CLAUDE_CONFIG_DIR = tmpDir
   return tmpDir

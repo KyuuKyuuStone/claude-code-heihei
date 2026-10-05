@@ -1,3 +1,4 @@
+import { mkdtempReal } from "./fixtures/tmp-dir.js"
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import * as fs from 'fs/promises'
 import * as os from 'os'
@@ -18,7 +19,7 @@ let tmpDir: string
 const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
 
 beforeEach(async () => {
-  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'collab-tasks-api-'))
+  tmpDir = await mkdtempReal('collab-tasks-api-')
   process.env.CLAUDE_CONFIG_DIR = tmpDir
 })
 
@@ -191,7 +192,7 @@ describe('POST /api/collab-tasks/:id/review — callerSessionId 校验', () => {
     const taskId = await makeDeliveredTask({ from: supervisor, to: worker })
 
     // 另一个 workDir 的项目，其主管只对那个项目有主管权
-    const otherProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'collab-tasks-api-other-'))
+    const otherProjectDir = await mkdtempReal('collab-tasks-api-other-')
     try {
       const otherSupervisor = await registerWorker({
         role: '主管',
@@ -314,7 +315,7 @@ describe('POST /api/collab-tasks — 客户端预生成 taskId 幂等', () => {
 describe('GET /api/collab-tasks — projectDir 回显（标题与过滤同源）', () => {
   /** 在另一个项目下建一条任务，用来证明过滤真的生效（不是全量返回） */
   async function makeOtherProjectTask(id: string): Promise<string> {
-    const otherDir = await fs.mkdtemp(path.join(os.tmpdir(), 'collab-tasks-other-'))
+    const otherDir = await mkdtempReal('collab-tasks-other-')
     const t = await collabTaskService.createTask({
       id,
       projectDir: otherDir,

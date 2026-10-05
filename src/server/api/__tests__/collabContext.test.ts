@@ -1,3 +1,4 @@
+import { mkdtempReal } from "../../__tests__/fixtures/tmp-dir.js"
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
@@ -34,7 +35,7 @@ describe('GET /api/collab-context', () => {
   let originalConfigDir: string | undefined
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-heihei-ctx-'))
+    tmpDir = await mkdtempReal('cc-heihei-ctx-')
     originalConfigDir = process.env.CLAUDE_CONFIG_DIR
     process.env.CLAUDE_CONFIG_DIR = tmpDir
   })

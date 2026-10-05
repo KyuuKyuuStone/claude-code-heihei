@@ -1,3 +1,4 @@
+import { mkdtempReal } from "./fixtures/tmp-dir.js"
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
@@ -26,7 +27,7 @@ let originalHasSession: typeof conversationService.hasSession
 let originalRequestControl: typeof conversationService.requestControl
 
 beforeEach(async () => {
-  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-heihei-agents-api-'))
+  tempRoot = await mkdtempReal('cc-heihei-agents-api-')
   configDir = path.join(tempRoot, 'config')
   projectRoot = path.join(tempRoot, 'project')
   projectCwd = path.join(projectRoot, 'src')

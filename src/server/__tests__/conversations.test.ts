@@ -1,3 +1,4 @@
+import { mkdtempReal } from "./fixtures/tmp-dir.js"
 /**
  * Tests for ConversationService and WebSocket chat integration
  *
@@ -1078,8 +1079,8 @@ describe('ConversationService', () => {
   it('should reconstruct usage and metadata from a persisted transcript', async () => {
     const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
     const previousAnthropicApiKey = process.env.ANTHROPIC_API_KEY
-    const tmpConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-transcript-'))
-    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-workdir-'))
+    const tmpConfigDir = await mkdtempReal('claude-transcript-')
+    const workDir = await mkdtempReal('claude-workdir-')
     process.env.CLAUDE_CONFIG_DIR = tmpConfigDir
     process.env.ANTHROPIC_API_KEY = 'test-key'
 
@@ -1145,8 +1146,8 @@ describe('ConversationService', () => {
   it('should reconstruct Sonnet 4.6 transcript usage before CLI config is initialized', async () => {
     const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
     const previousNodeEnv = process.env.NODE_ENV
-    const tmpConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-transcript-sonnet-'))
-    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-workdir-sonnet-'))
+    const tmpConfigDir = await mkdtempReal('claude-transcript-sonnet-')
+    const workDir = await mkdtempReal('claude-workdir-sonnet-')
     process.env.CLAUDE_CONFIG_DIR = tmpConfigDir
     process.env.NODE_ENV = 'development'
 
@@ -1201,8 +1202,8 @@ describe('ConversationService', () => {
   it('should fall back to transcript estimates when provider usage is empty or zero', async () => {
     const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
     const previousNodeEnv = process.env.NODE_ENV
-    const tmpConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-transcript-zero-usage-'))
-    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-workdir-zero-usage-'))
+    const tmpConfigDir = await mkdtempReal('claude-transcript-zero-usage-')
+    const workDir = await mkdtempReal('claude-workdir-zero-usage-')
     process.env.CLAUDE_CONFIG_DIR = tmpConfigDir
     process.env.NODE_ENV = 'development'
 
@@ -1272,8 +1273,8 @@ describe('ConversationService', () => {
     const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
     const previousNodeEnv = process.env.NODE_ENV
     const previousModelContextWindows = process.env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS
-    const tmpConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-transcript-provider-'))
-    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-workdir-provider-'))
+    const tmpConfigDir = await mkdtempReal('claude-transcript-provider-')
+    const workDir = await mkdtempReal('claude-workdir-provider-')
     process.env.CLAUDE_CONFIG_DIR = tmpConfigDir
     process.env.NODE_ENV = 'development'
     delete process.env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS
@@ -1351,8 +1352,8 @@ describe('ConversationService', () => {
     const previousNodeEnv = process.env.NODE_ENV
     const previousAnthropicApiKey = process.env.ANTHROPIC_API_KEY
     const previousModelContextWindows = process.env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS
-    const tmpConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-transcript-runtime-model-'))
-    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-workdir-runtime-model-'))
+    const tmpConfigDir = await mkdtempReal('claude-transcript-runtime-model-')
+    const workDir = await mkdtempReal('claude-workdir-runtime-model-')
     process.env.CLAUDE_CONFIG_DIR = tmpConfigDir
     process.env.NODE_ENV = 'development'
     process.env.ANTHROPIC_API_KEY = 'test-api-key'
@@ -1444,8 +1445,8 @@ describe('ConversationService', () => {
     const previousNodeEnv = process.env.NODE_ENV
     const previousAnthropicApiKey = process.env.ANTHROPIC_API_KEY
     const previousModelContextWindows = process.env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS
-    const tmpConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-transcript-runtime-switch-'))
-    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-workdir-runtime-switch-'))
+    const tmpConfigDir = await mkdtempReal('claude-transcript-runtime-switch-')
+    const workDir = await mkdtempReal('claude-workdir-runtime-switch-')
     process.env.CLAUDE_CONFIG_DIR = tmpConfigDir
     process.env.NODE_ENV = 'development'
     process.env.ANTHROPIC_API_KEY = 'test-api-key'
@@ -1555,8 +1556,8 @@ describe('ConversationService', () => {
     const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
     const previousNodeEnv = process.env.NODE_ENV
     const previousModelContextWindows = process.env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS
-    const tmpConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-transcript-provider-infer-'))
-    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-workdir-provider-infer-'))
+    const tmpConfigDir = await mkdtempReal('claude-transcript-provider-infer-')
+    const workDir = await mkdtempReal('claude-workdir-provider-infer-')
     process.env.CLAUDE_CONFIG_DIR = tmpConfigDir
     process.env.NODE_ENV = 'development'
     delete process.env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS
@@ -1650,8 +1651,8 @@ describe('ConversationService', () => {
     const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
     const previousNodeEnv = process.env.NODE_ENV
     const previousModelContextWindows = process.env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS
-    const tmpConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-transcript-provider-unrelated-'))
-    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-workdir-provider-unrelated-'))
+    const tmpConfigDir = await mkdtempReal('claude-transcript-provider-unrelated-')
+    const workDir = await mkdtempReal('claude-workdir-provider-unrelated-')
     process.env.CLAUDE_CONFIG_DIR = tmpConfigDir
     process.env.NODE_ENV = 'development'
     delete process.env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS
@@ -1727,8 +1728,8 @@ describe('ConversationService', () => {
     const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
     const previousNodeEnv = process.env.NODE_ENV
     const previousUseBedrock = process.env.CLAUDE_CODE_USE_BEDROCK
-    const tmpConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-transcript-media-'))
-    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-workdir-media-'))
+    const tmpConfigDir = await mkdtempReal('claude-transcript-media-')
+    const workDir = await mkdtempReal('claude-workdir-media-')
     process.env.CLAUDE_CONFIG_DIR = tmpConfigDir
     process.env.NODE_ENV = 'development'
     process.env.CLAUDE_CODE_USE_BEDROCK = '1'
@@ -2072,7 +2073,7 @@ describe('WebSocket Chat Integration', () => {
   const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
 
   beforeAll(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-conv-'))
+    tmpDir = await mkdtempReal('claude-conv-')
     process.env.CLAUDE_CONFIG_DIR = tmpDir
     process.env.CLAUDE_CLI_PATH = fileURLToPath(
       new URL('./fixtures/mock-sdk-cli.ts', import.meta.url)
@@ -2877,7 +2878,7 @@ describe('WebSocket Chat Integration', () => {
   })
 
   it('should keep a long desktop session alive in a /tmp project across engineering turns', async () => {
-    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-heihei-issue247-project-'))
+    const projectDir = await mkdtempReal('cc-heihei-issue247-project-')
     let sessionId: string | undefined
 
     try {
@@ -3003,7 +3004,7 @@ describe('WebSocket Chat Integration', () => {
   })
 
   it('should include desktop service diagnostics when CLI startup fails', async () => {
-    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-startup-missing-workdir-'))
+    const workDir = await mkdtempReal('claude-startup-missing-workdir-')
     const canonicalWorkDir = await fs.realpath(workDir)
     const createRes = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
@@ -6033,7 +6034,7 @@ describe('WebSocket Chat Integration', () => {
     })
     await providerService.activateProvider(provider.id)
 
-    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'issue-1033-resume-'))
+    const workDir = await mkdtempReal('issue-1033-resume-')
     const originalCliPathForTest = process.env.CLAUDE_CLI_PATH
     const originalResumeTranscriptPath = process.env.MOCK_SDK_RESUME_TRANSCRIPT_PATH
     const originalResumeUpstreamUrl = process.env.MOCK_SDK_RESUME_UPSTREAM_URL

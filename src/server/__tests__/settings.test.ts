@@ -1,3 +1,4 @@
+import { mkdtempReal } from "./fixtures/tmp-dir.js"
 /**
  * Unit tests for Settings, Models, and Status APIs
  */
@@ -63,7 +64,7 @@ let originalAnthropicDefaultFableModelName: string | undefined
 let originalDisable1mContext: string | undefined
 
 async function setup() {
-  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-test-'))
+  tmpDir = await mkdtempReal('claude-test-')
   resetSettingsCache()
   clearAllOutputStylesCache()
   clearOutputStyleCaches()

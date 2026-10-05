@@ -12,15 +12,13 @@ import * as os from 'node:os'
 import { SearchService } from '../services/searchService.js'
 import { SessionService } from '../services/sessionService.js'
 import type { LocalIndexGateway } from '../services/localIndex/sessionIndex.js'
+import { mkdtempReal } from './fixtures/tmp-dir.js'
 
 let tmpDir: string
 let service: SearchService
 
 async function setupTmpConfigDir(): Promise<void> {
-  tmpDir = path.join(
-    os.tmpdir(),
-    `cc-search-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-  )
+  tmpDir = await mkdtempReal(`cc-search-test-${Date.now()}-${Math.random().toString(36).slice(2)}`)
   await fs.mkdir(path.join(tmpDir, 'projects'), { recursive: true })
   process.env.CLAUDE_CONFIG_DIR = tmpDir
 }
