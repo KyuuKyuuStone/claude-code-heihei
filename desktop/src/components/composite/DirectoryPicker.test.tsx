@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom'
 
@@ -163,8 +163,8 @@ describe('DirectoryPicker', () => {
       parentPath: '/Users/nanmi',
       entries: [{ name: 'project', path: '/workspace/project', isDirectory: true }],
     })
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     render(<DirectoryPicker value="" onChange={vi.fn()} />)
 
     fireEvent.click(screen.getByRole('button', { name: /选择项目|Select a project/ }))
@@ -206,5 +206,43 @@ describe('DirectoryPicker', () => {
       title: expect.any(String),
     })
     expect(filesystemApi.browse).not.toHaveBeenCalled()
+  })
+})
+
+describe('DirectoryPicker 失败态（v1.7.3 A4/A5/A6）', () => {
+  it('shows a failure state with retry when recent projects fail to load', async () => {
+    vi.mocked(sessionsApi.getRecentProjects).mockRejectedValueOnce(new Error('recent boom'))
+    render(<DirectoryPicker value="" onChange={vi.fn()} />)
+    // 菜单（面板）需先打开才渲染列表/失败态
+    fireEvent.click(screen.getByRole('button', { name: /选择项目|Select a project/ }))
+
+    const errorBox = await screen.findByTestId('dir-picker-error')
+    expect(errorBox).toBeInTheDocument()
+
+    // 重试入口可用：这次成功 → 失败态消失
+    vi.mocked(sessionsApi.getRecentProjects).mockResolvedValueOnce({ projects: [] })
+    fireEvent.click(within(errorBox).getByRole('button'))
+    await waitFor(() => {
+      expect(screen.queryByTestId('dir-picker-error')).not.toBeInTheDocument()
+    })
+  })
+
+  it('shows a failure state when the native folder dialog fails to open', async () => {
+    vi.mocked(sessionsApi.getRecentProjects).mockResolvedValue({ projects: [] })
+    const open = vi.fn().mockRejectedValue(new Error('dialog boom'))
+    window.desktopHost = {
+      ...browserHost,
+      kind: 'electron',
+      isDesktop: true,
+      capabilities: { ...browserHost.capabilities, dialogs: true },
+      dialogs: { ...browserHost.dialogs, open },
+    }
+
+    render(<DirectoryPicker value="" onChange={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /选择项目|Select a project/ }))
+    fireEvent.click(await screen.findByText(/选择其他文件夹|Choose a different folder/))
+
+    // native 对话框失败不切 browse 模式——失败态落在菜单（recent 区）
+    expect(await screen.findByTestId('dir-picker-error')).toBeInTheDocument()
   })
 })

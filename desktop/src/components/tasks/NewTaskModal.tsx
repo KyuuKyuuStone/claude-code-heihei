@@ -12,6 +12,8 @@ import { PromptEditor } from './PromptEditor'
 import { DayOfWeekPicker } from './DayOfWeekPicker'
 import { useTranslation } from '../../i18n'
 import { describeCron, isValidCron, parseCron, type FrequencyKey } from '../../lib/cronDescribe'
+import { describeApiFailure } from '../../lib/apiErrorMessage'
+import type { ApiErrorWithKind } from '../../api/client'
 import type { CronTask } from '../../types/task'
 
 // v1.5.0：外部 IM 适配器（飞书/Telegram 等）已移除，通知渠道只剩桌面通知。
@@ -79,6 +81,8 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
     { value: 'customCron',    label: t('newTask.customCron') },
   ]
 
+  // v1.7.3 A3：提交失败此前仅 console——加用户可见错误行。
+  const [submitError, setSubmitError] = useState<string | null>(null)
   const [name, setName] = useState(editTask?.name || '')
   const [description, setDescription] = useState(editTask?.description || '')
   const [prompt, setPrompt] = useState(editTask?.prompt || '')
@@ -143,6 +147,7 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
       onClose()
     } catch (err) {
       console.error(`Failed to ${isEdit ? 'update' : 'create'} task:`, err)
+      setSubmitError(describeApiFailure((err as ApiErrorWithKind).kind, err instanceof Error ? err.message : String(err), t))
     } finally {
       setIsSubmitting(false)
     }
@@ -183,6 +188,12 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
           {t('newTask.localWarning')}
         </span>
       </Card>
+
+      {submitError && (
+        <p role="alert" className="mb-3 text-[12.5px] text-[var(--color-error)]">
+          {submitError}
+        </p>
+      )}
 
       <div className="flex flex-col gap-4">
         <Input

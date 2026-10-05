@@ -60,6 +60,9 @@ type PanelProps = {
    * collapse its own overlay first.
    */
   onBeforeNativeDialog?: () => void
+  loadFailure: PanelLoadFailure | null
+  setLoadFailure: (failure: PanelLoadFailure | null) => void
+  onNativeDialogFailed?: () => void
   onModeChange?: (mode: DirectoryPanelMode) => void
   /**
    * The host's trigger labels itself from the loaded projects, and this panel
@@ -78,6 +81,8 @@ type PanelProps = {
  * inside that menu is what made choosing a directory in a fresh session cost
  * two clicks.
  */
+type PanelLoadFailure = { message: string; kind: 'recent' | 'browse' | 'dialog' }
+
 export function RecentProjectsPanel({
   value,
   onSelect,
@@ -86,6 +91,9 @@ export function RecentProjectsPanel({
   onBeforeNativeDialog,
   onModeChange,
   onProjectsChange,
+  loadFailure,
+  setLoadFailure,
+  onNativeDialogFailed,
 }: PanelProps) {
   const t = useTranslation()
   const [mode, setMode] = useState<DirectoryPanelMode>('recent')
@@ -94,6 +102,8 @@ export function RecentProjectsPanel({
   const [browsePath, setBrowsePath] = useState('')
   const [browseParent, setBrowseParent] = useState('')
   const [loading, setLoading] = useState(false)
+  // v1.7.3 A4/A5/A6：失败态 state 由外层持有（native 流程会卸载本面板，
+  // 内层自持会在重开后丢失）——loadFailure/setLoadFailure 经 props 传入。
 
   // Both callbacks fire from effects. Holding them in a ref means an inline
   // arrow from the caller cannot re-trigger the project load on every render.
@@ -108,6 +118,22 @@ export function RecentProjectsPanel({
     onModeChangeRef.current?.(mode)
   }, [mode])
 
+  const loadRecentProjects = useCallback(() => {
+    setLoading(true)
+    setLoadFailure(null)
+    sessionsApi.getRecentProjects()
+      .then(({ projects: p }) => {
+        setCachedRecentProjects(p)
+        setProjects(p)
+        onProjectsChangeRef.current?.(p)
+      })
+      .catch(() => {
+        setProjects([])
+        setLoadFailure({ message: t('dirPicker.recentLoadFailed'), kind: 'recent' })
+      })
+      .finally(() => setLoading(false))
+  }, [t])
+
   // The panel only exists while its host is open, so mounting is the load
   // signal — no `isOpen` to thread through.
   useEffect(() => {
@@ -118,25 +144,23 @@ export function RecentProjectsPanel({
       onProjectsChangeRef.current?.(cachedProjects)
       return
     }
-    setLoading(true)
-    sessionsApi.getRecentProjects()
-      .then(({ projects: p }) => {
-        setCachedRecentProjects(p)
-        setProjects(p)
-        onProjectsChangeRef.current?.(p)
-      })
-      .catch(() => setProjects([]))
-      .finally(() => setLoading(false))
+    loadRecentProjects()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode])
 
   const loadBrowseDir = async (path?: string) => {
     setLoading(true)
+    setLoadFailure(null)
     try {
       const result = await filesystemApi.browse(path)
       setBrowsePath(result.currentPath)
       setBrowseParent(result.parentPath)
       setBrowseEntries(result.entries)
-    } catch { /* API not available */ }
+    } catch {
+      // v1.7.3 A5：浏览失败不再静默空列表。
+      setBrowseEntries([])
+      setLoadFailure({ message: t('dirPicker.browseLoadFailed'), kind: 'browse' })
+    }
     setLoading(false)
   }
 
@@ -160,7 +184,12 @@ export function RecentProjectsPanel({
         })
         if (typeof selected === 'string' && selected.length > 0) handleSelect(selected)
       } catch (err) {
+        // v1.7.3 A6：原生对话框失败不再仅 console。native 流程开始前菜单被
+        // onBeforeNativeDialog 关闭（:428），失败时须把菜单带回来，否则失败态
+        // 无处可显示（测试诚实抓到这个缺陷）。
         console.error('[DirectoryPicker] Failed to open folder dialog:', err)
+        setLoadFailure({ message: t('dirPicker.dialogFailed'), kind: 'dialog' })
+        onNativeDialogFailed?.()
       }
     } else {
       // Web browser: directory tree via backend API
@@ -199,7 +228,12 @@ export function RecentProjectsPanel({
                   <span className="text-xs text-[var(--color-text-secondary)]">..</span>
                 </button>
               )}
-              {browseEntries.length === 0 ? (
+              {loadFailure?.kind === 'browse' ? (
+                <div className="flex flex-col items-center gap-2 py-6 text-center" data-testid="dir-picker-error">
+                  <p className="text-xs text-[var(--color-error)]">{loadFailure.message}</p>
+                  <Button variant="secondary" size="xs" onClick={() => void loadBrowseDir(browsePath || undefined)}>{t('common.retry')}</Button>
+                </div>
+              ) : browseEntries.length === 0 ? (
                 <EmptyState description={t('dirPicker.noSubdirs')} variant="plain" size="sm" />
               ) : browseEntries.map((entry) => (
                 <div
@@ -243,6 +277,17 @@ export function RecentProjectsPanel({
       <div className={`${touch ? '' : 'max-h-[300px]'} overflow-y-auto`}>
         {loading ? (
           <LoadingState label={t('common.loading')} variant="block" size="sm" />
+        ) : loadFailure && loadFailure.kind !== 'browse' ? (
+          <div className="flex flex-col items-center gap-2 py-6 text-center" data-testid="dir-picker-error">
+            <p className="text-xs text-[var(--color-error)]">{loadFailure.message}</p>
+            <Button
+              variant="secondary"
+              size="xs"
+              onClick={loadFailure.kind === 'dialog' ? () => void handleChooseFolder() : loadRecentProjects}
+            >
+              {t('common.retry')}
+            </Button>
+          </div>
         ) : projects.length === 0 ? (
           <EmptyState description={t('dirPicker.noRecent')} variant="plain" size="sm" />
         ) : (
@@ -300,6 +345,9 @@ export function RecentProjectsPanel({
 export function DirectoryPicker({ value, onChange, variant = 'chip', isGitProject = false }: Props) {
   const t = useTranslation()
   const [isOpen, setIsOpen] = useState(false)
+  // v1.7.3 A4/A5/A6：失败态在外层持有——native 流程会 setIsOpen(false) 卸载
+  // 面板，失败时重开并让面板显示失败态（内层自持会随卸载丢失）。
+  const [loadFailure, setLoadFailure] = useState<PanelLoadFailure | null>(null)
   const [mode, setMode] = useState<DirectoryPanelMode>('recent')
   const [projects, setProjects] = useState<RecentProject[]>([])
   const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number; direction: 'up' | 'down' } | null>(null)
@@ -393,6 +441,9 @@ export function DirectoryPicker({ value, onChange, variant = 'chip', isGitProjec
       onBeforeNativeDialog={() => setIsOpen(false)}
       onModeChange={setMode}
       onProjectsChange={setProjects}
+      loadFailure={loadFailure}
+      setLoadFailure={setLoadFailure}
+      onNativeDialogFailed={() => setIsOpen(true)}
     />
   )
 

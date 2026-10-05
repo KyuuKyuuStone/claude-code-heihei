@@ -127,6 +127,9 @@ export function RepositoryLaunchControls({
   const isToolbar = placement === 'toolbar' && !isMobileBrowser
   const [context, setContext] = useState<RepositoryContextResult | null>(null)
   const [loading, setLoading] = useState(false)
+  // v1.7.3 A4/A5/A6：RecentProjectsPanel 的失败态 holder（它会在 native 流程
+  // 中被卸载，失败态需留在外层）。
+  const [panelLoadFailure, setPanelLoadFailure] = useState<{ message: string; kind: 'recent' | 'browse' | 'dialog' } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [view, setView] = useState<MenuView>('root')
@@ -616,6 +619,9 @@ export function RepositoryLaunchControls({
       onSelect={handleWorkDirChange}
       touch={isMobileBrowser}
       showRecentHeading={!isMobileBrowser}
+      loadFailure={panelLoadFailure}
+      setLoadFailure={setPanelLoadFailure}
+      onNativeDialogFailed={() => setMenuOpen(true)}
     />
   )
 

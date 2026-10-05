@@ -119,3 +119,28 @@ describe('NewTaskModal', () => {
     })
   })
 })
+
+describe('NewTaskModal 提交失败态（v1.7.3 A3）', () => {
+  it('shows a visible error and keeps the modal open when create fails', async () => {
+    const createTask = vi.fn(async () => {
+      throw new Error('create boom')
+    })
+    useTaskStore.setState({ createTask } as Partial<ReturnType<typeof useTaskStore.getState>>)
+    useSettingsStore.setState({ locale: 'en' })
+    useProviderStore.setState({ providers: [] })
+    const onClose = vi.fn()
+
+    render(<NewTaskModal open onClose={onClose} />)
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'Task A' } })
+    fireEvent.change(screen.getByLabelText(/^Description/), { target: { value: 'Desc A' } })
+    fireEvent.change(screen.getByPlaceholderText(/Look at the commits/i), {
+      target: { value: 'Say hello.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Create task' }))
+
+    // 失败态可见（role=alert 错误行），弹窗保持打开
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('create boom')
+    expect(onClose).not.toHaveBeenCalled()
+  })
+})

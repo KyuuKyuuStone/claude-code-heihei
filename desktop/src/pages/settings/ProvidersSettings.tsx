@@ -34,6 +34,10 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { SettingsPageHeader } from '@/components/settings/SettingsSection'
 import type { ProviderTestResult, SavedProvider } from '../../types/provider'
 import { ProviderFormModal } from './ProviderFormModal'
+import { ErrorState } from '@/components/ui/ErrorState'
+import { useUIStore } from '../../stores/uiStore'
+import { describeApiFailure } from '../../lib/apiErrorMessage'
+import type { ApiErrorWithKind } from '../../api/client'
 
 type ProviderListItem = { id: string; kind: 'saved'; provider: SavedProvider }
 
@@ -93,6 +97,7 @@ export function ProviderSettings() {
     activeId,
     presets,
     isLoading,
+    error: providersError,
     fetchProviders,
     deleteProvider,
     reorderProviders,
@@ -100,6 +105,7 @@ export function ProviderSettings() {
     testProvider,
   } = useProviderStore()
   const fetchSettings = useSettingsStore((s) => s.fetchAll)
+  const addToast = useUIStore((s) => s.addToast)
   const t = useTranslation()
   const [editingProvider, setEditingProvider] = useState<SavedProvider | null>(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -136,7 +142,11 @@ export function ProviderSettings() {
       await deleteProvider(pendingDeleteProvider.id)
       setPendingDeleteProvider(null)
     } catch (error) {
-      console.error(error)
+      // v1.7.3 A1：删除失败不再静默——toast 人话反馈，确认弹窗保留可再试。
+      addToast({
+        type: 'error',
+        message: describeApiFailure((error as ApiErrorWithKind).kind, error instanceof Error ? error.message : String(error), t),
+      })
     } finally {
       setIsDeletingProvider(false)
     }
@@ -271,6 +281,14 @@ export function ProviderSettings() {
         <div className="flex justify-center py-8">
           <Spinner size={20} tone="brand" label={t('common.loading')} />
         </div>
+      ) : providersError && providers.length === 0 ? (
+        // v1.7.3 A2：拉取失败不再落进「暂无供应商」空态（把失败读成没配过）。
+        <ErrorState
+          title={t('common.error')}
+          detail={providersError}
+          onRetry={() => void fetchProviders()}
+          retryLabel={t('common.retry')}
+        />
       ) : !isLoading && providers.length === 0 ? (
         <div className="py-4">
           <EmptyState

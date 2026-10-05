@@ -35,6 +35,11 @@ type ProviderStore = {
   hasLoadedProviders: boolean
   presets: ProviderPreset[]
   isLoading: boolean
+  /**
+   * v1.7.3 A2/B8 口径登记（一处即可）：store **只负责存 error**，面板/弹窗
+   * **负责渲染**（失败态 + 重试）。历史缺陷即「store 有 error、UI 从不消费」
+   * 导致空态吞错；新增数据面加载时，请同步给消费面板加失败分支。
+   */
   error: string | null
 
   fetchProviders: () => Promise<void>
