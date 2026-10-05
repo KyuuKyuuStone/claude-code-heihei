@@ -2311,6 +2311,7 @@ export const en = {
   // ─── Session collaboration（会话级上下级协作）───────────────────
   'sidebar.newSessionOptions': 'New session options',
   'sidebar.newServantSession': 'New collaborator session…',
+  'sidebar.newServantSessionChooseFolder': 'New collaboration session (choose folder)…',
   'sidebar.servantSettings': 'Collaboration settings…',
   'sidebar.servantRole': 'Collaboration role',
   'servant.modal.createTitle': 'New collaborator session',

@@ -475,6 +475,35 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
     ))
   }, [hiddenProjectKeys, persistSidebarProjectPreferences, pinnedProjectKeys, projectOrganization])
 
+  // v1.7.3 事 1（方案 B）：新建协作会话弹窗无目录入口——在「新建会话」菜单加一条
+  // 「新建协作会话（选择目录…）」：复用既有的原生目录选择，拿到目录后直接开弹窗
+  // （弹窗本身不改）。
+  const createServantSessionFromExistingFolder = useCallback(async () => {
+    setNewSessionMenu(null)
+    if (!canUseNativeDialogs) {
+      addToast({
+        type: 'error',
+        message: t('sidebar.chooseProjectFolderUnavailable'),
+      })
+      return
+    }
+    try {
+      const selected = await getDesktopHost().dialogs.open({
+        directory: true,
+        multiple: false,
+        title: t('sidebar.newServantSessionChooseFolder'),
+      })
+      if (typeof selected === 'string' && selected.trim()) {
+        setServantModal({ mode: 'create', workDir: selected })
+      }
+    } catch (error) {
+      addToast({
+        type: 'error',
+        message: error instanceof Error ? describeApiFailure((error as ApiErrorWithKind).kind, error.message, t) : t('sidebar.sessionListFailed'),
+      })
+    }
+  }, [addToast, t])
+
   const createSessionFromExistingFolder = useCallback(async () => {
     setProjectHeaderMenu(null)
     setProjectHeaderSubmenu(null)
@@ -1329,6 +1358,14 @@ const [broadcastDialog, setBroadcastDialog] = useState<{ supervisorSessionId: st
             className="w-full px-4 py-2 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
           >
             {t('sidebar.newServantSession')}
+          </button>
+          <button
+            onClick={() => {
+              void createServantSessionFromExistingFolder()
+            }}
+            className="w-full px-4 py-2 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+          >
+            {t('sidebar.newServantSessionChooseFolder')}
           </button>
         </div>
       )}

@@ -2314,6 +2314,7 @@ export const zh: Record<TranslationKey, string> = {
   // ─── 会话级上下级协作 ──────────────────────────────────────
   'sidebar.newSessionOptions': '新建会话选项',
   'sidebar.newServantSession': '新建协作会话…',
+  'sidebar.newServantSessionChooseFolder': '新建协作会话（选择目录…）',
   'sidebar.servantSettings': '协作设置…',
   'sidebar.servantRole': '协作角色',
   'servant.modal.createTitle': '新建协作会话',

@@ -23,10 +23,27 @@ vi.mock('../../stores/openTargetStore', () => ({
   },
 }))
 
+const dialogOpenMock = vi.hoisted(() => vi.fn())
+vi.mock('../../lib/desktopHost', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/desktopHost')>()
+  const base = actual.getDesktopHost()
+  const host = {
+    ...base,
+    isDesktop: true,
+    capabilities: { ...base.capabilities, dialogs: true },
+    dialogs: { ...base.dialogs, open: dialogOpenMock },
+  }
+  return { ...actual, desktopHost: host, getDesktopHost: () => host }
+})
+
 vi.mock('../../i18n', () => ({
   useTranslation: () => (key: string, params?: Record<string, string | number>) => {
     const translations: Record<string, string> = {
       'sidebar.newSession': 'New Session',
+      'sidebar.newSessionOptions': 'New session options',
+      'sidebar.newServantSession': 'New collaboration session',
+      'sidebar.newServantSessionChooseFolder': 'New collaboration session (choose folder)…',
+      'servant.modal.createTitle': 'New collaboration session',
       'sidebar.scheduled': 'Scheduled',
       'sidebar.market': 'Skills Market',
       'sidebar.settings': 'Settings',
@@ -1868,6 +1885,33 @@ describe('Sidebar', () => {
       expect(
         sessionRunState({ turnInProgress: false, hasDispatchedTask: false, servantRunning: false }),
       ).toBe('idle')
+    })
+  })
+})
+
+describe('Sidebar 新建协作会话（选择目录）（v1.7.3 方案 B）', () => {
+  it('菜单里存在「选择目录」入口，点击后弹原生目录选择并以所选目录开弹窗', async () => {
+    dialogOpenMock.mockReset()
+    dialogOpenMock.mockResolvedValue('D:/new-project')
+    render(<Sidebar />)
+
+    // 打开「新建会话」菜单（右上角选项按钮）
+    fireEvent.click(screen.getByRole('button', { name: 'New session options' }))
+    const item = await screen.findByRole('button', { name: 'New collaboration session (choose folder)…' })
+    expect(item).toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.click(item)
+    })
+
+    // 目录选择被调用（directory 模式），并随后出现协作设置弹窗
+    await waitFor(() => {
+      expect(dialogOpenMock).toHaveBeenCalledWith(
+        expect.objectContaining({ directory: true }),
+      )
+    })
+    await waitFor(() => {
+      expect(screen.getByText('New collaboration session')).toBeInTheDocument()
     })
   })
 })

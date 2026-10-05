@@ -2313,6 +2313,7 @@ export const jp: Record<TranslationKey, string> = {
   // ─── セッション間コラボレーション ────────────────────────────────
   'sidebar.newSessionOptions': '新規セッションのオプション',
   'sidebar.newServantSession': '新規コラボセッション…',
+  'sidebar.newServantSessionChooseFolder': 'コラボセッションを新規作成（フォルダを選択…）',
   'sidebar.servantSettings': 'コラボ設定…',
   'sidebar.servantRole': 'コラボロール',
   'servant.modal.createTitle': '新規コラボセッション',

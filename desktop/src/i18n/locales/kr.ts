@@ -2313,6 +2313,7 @@ export const kr: Record<TranslationKey, string> = {
   // ─── 세션 간 협업 ──────────────────────────────────────
   'sidebar.newSessionOptions': '새 세션 옵션',
   'sidebar.newServantSession': '새 협업 세션…',
+  'sidebar.newServantSessionChooseFolder': '협업 세션 새로 만들기(폴더 선택…)',
   'sidebar.servantSettings': '협업 설정…',
   'sidebar.servantRole': '협업 역할',
   'servant.modal.createTitle': '새 협업 세션',

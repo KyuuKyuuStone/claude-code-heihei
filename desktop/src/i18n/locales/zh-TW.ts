@@ -2313,6 +2313,7 @@ export const zh: Record<TranslationKey, string> = {
   // ─── 會話級上下級協作 ──────────────────────────────────────
   'sidebar.newSessionOptions': '新增會話選項',
   'sidebar.newServantSession': '新增協作會話…',
+  'sidebar.newServantSessionChooseFolder': '新增協作會話（選擇資料夾…）',
   'sidebar.servantSettings': '協作設定…',
   'sidebar.servantRole': '協作角色',
   'servant.modal.createTitle': '新增協作會話',
