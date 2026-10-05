@@ -98,6 +98,14 @@
    - **影响面（真实用户场景）**：常规用户目录（`C:\Users\<名>\`）无 8.3 形态、不触发；触发面＝路径经 subst/网络映射/旧安装器残留短名/第三方工具以短路径传入 workDir 的场景 ⇒ 会出现「同一项目被拆成两个台账 hash」「花名册按项目过滤漏会话」。
    - **方向（未实施）**：归一化前对存在性路径做 `fs.realpathSync` 展开，或比较时两侧都 resolve；产品改动需后端实施并补用例。
 
+0b. **server-full 残余 20 条＝runner 环境型已知家族（挂账，停止追查）**（**v1.7.4 候选**；2026-10-05 止，主管停止线裁决）
+   - 现状：**真失败 0**——四道 gate 全绿（server-tests/desktop/layers/docs）、**本地全量全绿**；仅 CI runner 的 `Server full suite (scheduled)` 稳定红 **20 条**（searchService.sessions ×18、sessions ×4、settings ×2、collab-cli-tools ×2，聚合=文件×轮次口径），复跑 0绿/3红。
+   - **已修复部分（8.3 根因，实证清零）**：collab-tasks-api、report-target-resolver、conversations、agents-api、collabContext、dispatch-mailbox 共 6 文件（`0355134` + `83575c3` 的 `mkdtempReal` 模式，RUNNER~1 日志 1059→177 次）。
+   - **已排除候选（逐项有据）**：① ripgrep 可用性/版本（诊断 diff 证明 rg 阶段根本未执行）；② bun test 模块串扰（acceptance 复跑为单文件独立进程）；③ CLAUDE_CONFIG_DIR 构造时缓存（`searchService.ts:329` 为调用时直读）；④ env 注入/路径形态（trace 实测 runner 上 `fn=async () => null` 注入生效、env 为 realpath 长路径、projects stat 正常、`results` 内容正常）。
+   - **保留疑点**：runner 上「`results` 正常但 `phaseAArgs`（rg mock 调用数）=0」并存——结果走了非 rg 路径且注入 null 未改变它，内部分支未明；需产品侧断点级 trace（超出测试侧取证能力）。
+   - **诊断基建（已上线，`2e6ba71`）**：acceptance 复跑仍红时打印 bun test stderr 断言关键行（此前 stderr 被 pipe 丢弃）——后续任何红都可先看 diff 再动手。
+   - **恢复条件**：产品侧愿意加内部 trace/断点，或 Bun/runner 环境变化后复测；在此之前每次 push 的 server-full 红按本条挂账口径解读，**不视为新回归**（真回归仍会以「红文件清单变化」形式显现，对照本条清单即可分辨）。
+
 1. **Bun 1.3.14 的 `fs` 系 `truncate` 永不返回 ⇒ 两处产品路径静默挂死**（全仓 `fs` 系 truncate 共 **3 处**：`src/history.ts:391`、`src/utils/sessionStorage.ts:949`、以及已修的测试 `79b2ffe`）
    - 路径甲 `src/history.ts:391`（`await truncate(...)`）：**提示历史写入器的回滚分支**，其 `catch` 以 `historyWriterPoisoned` 兜底（标志定义 `:305`，置位点 `:371`/`:394`/`:401`）⇒ 命中即 `await` 永不返回、`catch` 不执行、毒化标记不置位 ⇒ **静默挂死**（不报错、不自愈）。
    - 路径乙 `src/utils/sessionStorage.ts:949`（`await fh.truncate(absLineStart)`）：会话存储**「按 uuid 移除单条会话条目」**路径（定位块 `:928` 起：尾部窗口找 `"uuid":"<targetUuid>"` → 前后换行定行 `:931-942` → 记 `absLineStart` 与 `afterLen = bytesRead - lineEnd` `:944-945`）。**两个分支都会挂**：`afterLen === 0`（删的是**最后一条**，常见）**直接命中**——纯 ftruncate 即挂死；`afterLen > 0` 时 truncate 即便成功，随后 `await fh.write(tail, lineEnd, afterLen, absLineStart)`（`:950-952`）**补尾部时挂住 ⇒ 尾部永久丢失**。**发生情形＝删除/移除一条会话条目时，不是每次写文件**。⚠ 注释里「afterLen 为 0 时这是一次 ftruncate」（`:946-948`）**只是注释、不是免死金牌**——**读注释不等于执行**：0 与 >0 **两条路径都命中该缺陷**（后果不同：前者直接挂死、后者尾部丢失）。
