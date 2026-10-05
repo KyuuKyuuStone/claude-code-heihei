@@ -165,11 +165,20 @@ function findGroupFor(suiteGroups: Group[], file: string): Group {
 async function rerunSingle(group: Group, failure: JunitCase, junitPath: string): Promise<boolean> {
   const { cmd, args, cwd } = commandFor(group, 'file', failure.file, junitPath)
   const proc = Bun.spawn([cmd, ...args], { cwd, stdout: 'inherit', stderr: 'pipe', env: process.env })
-  await new Response(proc.stderr).text()
+  // bun test 的断言 diff 走 stderr；复跑仍红时打印关键行，供 CI 日志直接定位失败原因（只加诊断、不改判定）。
+  const stderrText = await new Response(proc.stderr).text()
   await proc.exited
   const xml = await readJunit(group, junitPath)
-  if (!xml) return false
-  return isRerunGreen(parseJunit(xml), failure)
+  const green = xml ? isRerunGreen(parseJunit(xml), failure) : false
+  if (!green && stderrText) {
+    const key = stderrText
+      .split('\n')
+      .filter((line) => /(error:|expect\(|Expected|Received|✗|fail\b|\(fail\))/.test(line))
+      .slice(0, 60)
+    console.log(`  [复跑诊断 · ${failure.file} · ${failure.name}]`)
+    for (const line of key) console.log(`    ${line.trim().slice(0, 400)}`)
+  }
+  return green
 }
 
 async function main() {
