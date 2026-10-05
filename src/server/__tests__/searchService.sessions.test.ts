@@ -47,7 +47,10 @@ async function writeSessionFile(
 
 beforeEach(async () => {
   await setupTmpConfigDir()
-  service = new SearchService()
+  // runner 上全局 sessionService 单例的 localIndex 指向 fallback 目录（import 时 env 未设），
+  // 其索引状态可能是「稳定已完成且为空」⇒ searchIndexedContent 返回空数组吞掉 rg 阶段。
+  // 这些用例测的是两相 rg 引擎：统一禁用索引分支（null ⇒ 跳过索引），与用例本意一致。
+  service = new SearchService({ searchIndexedContent: async () => null } as never)
 })
 
 afterEach(cleanupTmpDir)
@@ -59,6 +62,7 @@ describe('SearchService.searchSessions', () => {
       type: 'user',
       uuid: 'escaped',
       message: { role: 'user', content: query },
+      searchIndexedContent: async () => null,
     }
     const filePath = await writeSessionFile('proj-a', 'escaped-session', [entry])
     const expectedLiteral = JSON.stringify(query).slice(1, -1)
@@ -70,6 +74,7 @@ describe('SearchService.searchSessions', () => {
         bytesRead: Buffer.byteLength(JSON.stringify(entry)) + 1,
         rangesRead: 1,
       }),
+      searchIndexedContent: async () => null,
     } as never)
     ;(escapedService as unknown as { commandExists: () => Promise<boolean> }).commandExists =
       async () => true
@@ -153,6 +158,7 @@ describe('SearchService.searchSessions', () => {
         bytesRead: 100,
         rangesRead: 1,
       }),
+      searchIndexedContent: async () => null,
     } as never)
     ;(rankedService as unknown as { commandExists: () => Promise<boolean> }).commandExists =
       async () => true
@@ -235,6 +241,7 @@ describe('SearchService.searchSessions', () => {
     })
     const targetedService = new SearchService({
       readEntriesAtLines: targetedRead,
+      searchIndexedContent: async () => null,
     } as never)
     const metrics = {
       candidateFiles: 0,
@@ -274,6 +281,7 @@ describe('SearchService.searchSessions', () => {
     }]])
     const indexed = new SearchService({
       getCandidatesForFilters: async () => metadata,
+      searchIndexedContent: async () => null,
     } as never)
     ;(indexed as unknown as { commandExists: () => Promise<boolean> }).commandExists = async () => true
     ;(indexed as unknown as {
@@ -314,6 +322,7 @@ describe('SearchService.searchSessions', () => {
       readEntriesAtLines: async () => null,
       getCandidatesForFilters: async () => null,
       getMetadataForPaths: async () => staleMetadata,
+      searchIndexedContent: async () => null,
     })
     ;(stale as unknown as { commandExists: () => Promise<boolean> }).commandExists = async () => false
 
@@ -349,6 +358,7 @@ describe('SearchService.searchSessions', () => {
     const indexed = new SearchService({
       getCandidatesForFilters: async () => metadata,
       getMetadataForPaths: async () => null,
+      searchIndexedContent: async () => null,
     })
     let calls = 0
     ;(indexed as unknown as { commandExists: () => Promise<boolean> }).commandExists = async () => true
@@ -423,6 +433,7 @@ describe('SearchService.searchSessions', () => {
             ])
       },
       getMetadataForPaths: async () => null,
+      searchIndexedContent: async () => null,
     })
     let rgCalls = 0
     ;(indexed as unknown as { commandExists: () => Promise<boolean> }).commandExists = async () => true
@@ -495,6 +506,7 @@ describe('SearchService.searchSessions', () => {
           : new Map([[path.resolve(included), metadata(included)]])
       },
       getMetadataForPaths: async () => null,
+      searchIndexedContent: async () => null,
     })
     let rgCalls = 0
     ;(indexed as unknown as { commandExists: () => Promise<boolean> }).commandExists = async () => true
@@ -545,6 +557,7 @@ describe('SearchService.searchSessions', () => {
         }]])
       },
       getMetadataForPaths: async () => null,
+      searchIndexedContent: async () => null,
     })
     let rgCalls = 0
     ;(indexed as unknown as { commandExists: () => Promise<boolean> }).commandExists = async () => true
@@ -600,6 +613,7 @@ describe('SearchService.searchSessions', () => {
         }]])
       },
       getMetadataForPaths: async () => null,
+      searchIndexedContent: async () => null,
     } as never)
     let rgCalls = 0
     ;(indexed as unknown as { commandExists: () => Promise<boolean> }).commandExists = async () => true
@@ -653,6 +667,7 @@ describe('SearchService.searchSessions', () => {
     }]))
     const indexed = new SearchService({
       getCandidatesForFilters: async () => metadata,
+      searchIndexedContent: async () => null,
     } as never)
     const batches: string[][] = []
     ;(indexed as unknown as { commandExists: () => Promise<boolean> }).commandExists = async () => true
@@ -680,6 +695,7 @@ describe('SearchService.searchSessions', () => {
     }])
     const fallback = new SearchService({
       getCandidatesForFilters: async () => null,
+      searchIndexedContent: async () => null,
     } as never)
     ;(fallback as unknown as { commandExists: () => Promise<boolean> }).commandExists = async () => true
     ;(fallback as unknown as {
@@ -743,6 +759,7 @@ describe('SearchService.searchSessions', () => {
       getCandidatesForFilters: filters =>
         indexedSessionService.getIndexedSessionSearchCandidates(filters),
       getMetadataForPaths: async () => null,
+      searchIndexedContent: async () => null,
     })
 
     const { results } = await indexed.searchSessions('nesteddateonlyneedle', {
@@ -783,6 +800,7 @@ describe('SearchService.searchSessions', () => {
           rangesRead: 1,
         }),
         getMetadataForPaths: async () => metadata,
+        searchIndexedContent: async () => null,
       })
 
       await targeted.searchSessions(query, { metrics })
@@ -959,6 +977,7 @@ describe('SearchService.searchSessions', () => {
         bytesRead: Buffer.byteLength(JSON.stringify(entry)) + 1,
         rangesRead: 1,
       }),
+      searchIndexedContent: async () => null,
     })
 
     const { results } = await indexedTitleService.searchSessions('searchword')
@@ -984,6 +1003,7 @@ describe('SearchService.searchSessions', () => {
         bytesRead: Buffer.byteLength(JSON.stringify(entry)) + 1,
         rangesRead: 1,
       }),
+      searchIndexedContent: async () => null,
     })
 
     const { results } = await indexedTitleService.searchSessions('another searchword')
@@ -1093,6 +1113,7 @@ describe('SearchService.searchSessions', () => {
     ])
     service = new SearchService({
       resolveRipgrepCommand: () => ({ rgPath: '', rgArgs: [] }),
+      searchIndexedContent: async () => null,
     })
     const metrics = { candidateFiles: 0, filesOpened: 0, bytesRead: 0, fallbackFiles: 0 }
 
@@ -1118,6 +1139,7 @@ describe('SearchService.searchSessions', () => {
         rgArgs: ['--no-config'],
         argv0: 'rg',
       }),
+      searchIndexedContent: async () => null,
     })
     const invocations: Array<{
       command: string
