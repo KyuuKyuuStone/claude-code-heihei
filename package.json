@@ -96,6 +96,7 @@
     "follow-redirects": "^1.16.0"
   },
   "devDependencies": {
+    "bun-types": "1.4.2",
     "dependency-cruiser": "^18.4.0",
     "mermaid": "^11.14.0",
     "typescript": "6"
