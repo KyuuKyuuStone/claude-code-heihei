@@ -113,10 +113,26 @@ describe('rosterDigest（修缺陷）UI 读路径剥离', () => {
     expect(out).toContain('用户正文')
   })
 
-  test('⑦b 历史数据形态（无包裹的裸摘要行）**不动**（按裁决：旧数据另行处置）', () => {
-    const legacy = `派活正文\n\n${DIGEST_LINE}`
-    expect(stripRosterDigestSegment(legacy)).toBe(legacy)
+  test('⑦b 历史裸行也剥：行首【在册】+ 主管/员工计数 ⇒ 整行去掉，正文保留', () => {
+    const legacy = `我需要开始新功能的开发了\n\n${DIGEST_LINE}`
+    const out = stripRosterDigestSegment(legacy)
+    expect(out).not.toContain(ROSTER_DIGEST_MARK)
+    expect(out).toBe('我需要开始新功能的开发了')
   })
+
+  test('⑦c 边界收窄：正文里提到「在册」/行中出现标记/形态不符的都不误伤', () => {
+    const cases = [
+      '请参考在册员工名单，按角色派活',
+      '员工名单见【在册】一节，另有说明',
+      `${ROSTER_DIGEST_MARK}主管 一人；员工 零人`,
+      `${ROSTER_DIGEST_MARK}这是主管自己写的备注`,
+      `正文如下：${DIGEST_LINE}`,
+    ]
+    for (const text of cases) expect(stripRosterDigestSegment(text)).toBe(text)
+    // 行首标记 + 合法计数（缩进也算行首）⇒ 剥
+    expect(stripRosterDigestSegment(`  ${DIGEST_LINE}\n正文`)).toBe('正文')
+  })
+
   test('⑧ content 形态：string 与 block 数组都剥；无命中保持原引用（不动下游 memo）', () => {
     const blocks = [
       { type: 'text', text: `${SEGMENT}\n\n正文 A` },

@@ -1188,3 +1188,45 @@ describe('SearchService.searchSessions', () => {
     expect(truncated).toBe(false)
   })
 })
+
+// v1.7.4 花名册摘要修缺陷（收尾②）：检索面同样剥离——**不动存储与索引**，只剥返回给前端的命中片段。
+describe('SearchService.searchSessions 花名册摘要不进片段', () => {
+  it('历史裸行与新系统段都不出现在片段里；摘要词本身检索不到', async () => {
+    await writeSessionFile('proj-a', 'roster-digest-session', [
+      {
+        type: 'user',
+        uuid: 'u1',
+        timestamp: '2026-06-01T00:00:00.000Z',
+        message: {
+          role: 'user',
+          content: `我需要开始新功能的开发了\n\n【在册】主管 1 人；员工 2 人：前端、后端`,
+        },
+      },
+      {
+        type: 'user',
+        uuid: 'u2',
+        timestamp: '2026-06-01T00:01:00.000Z',
+        message: {
+          role: 'user',
+          content: `<system-reminder>\n【在册】主管 1 人；员工 1 人：前端\n</system-reminder>\n\n派活正文在此`,
+        },
+      },
+    ])
+
+    const { results } = await service.searchSessions('开发')
+    expect(results).toHaveLength(1)
+    const snippet = results[0].matches[0].snippet
+    expect(snippet).not.toContain('【在册】')
+    expect(snippet).toContain('开发')
+
+    const wrapped = await service.searchSessions('派活')
+    expect(wrapped.results).toHaveLength(1)
+    expect(wrapped.results[0].matches[0].snippet).not.toContain('【在册】')
+    expect(wrapped.results[0].matches[0].snippet).toContain('派活正文在此')
+
+    // 只命中摘要的行不算用户内容命中（存储/索引未动，剥的是显示与判定面）
+    const byDigest = await service.searchSessions('在册')
+    expect(byDigest.results).toHaveLength(0)
+  })
+})
+

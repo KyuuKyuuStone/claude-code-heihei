@@ -117,11 +117,21 @@ export async function buildRosterDigestSegmentForSupervisor(
 }
 
 /**
- * UI 读路径剥离：只剥**本模块注入的**系统段（段内必须带 `【在册】` 标记），
- * 其它 `<system-reminder>`（CLI 自己的）原样保留。
+ * 历史裸行形态（v1.7.4 之前摘要**直接拼在正文尾部**，没有包裹段）：
+ * 行首必须是 `【在册】主管 N 人；员工 M 人`。**边界刻意收窄**——正文里正常提到
+ * 「在册」（如「请参考在册员工」）或行中出现该标记的句子都不匹配。
+ */
+const ROSTER_DIGEST_LEGACY_LINE_RE = new RegExp(
+  `^${ROSTER_DIGEST_MARK}主管 \\d+ 人；员工 \\d+ 人`,
+)
+
+/**
+ * UI 读路径剥离：剥掉两类摘要痕迹，**只剥本模块自己的**——
+ * ① 新形态：`<system-reminder>` 包裹的整段（段内必须带 `【在册】` 标记）；
+ * ② 历史裸行：行首即 `【在册】主管 N 人；员工 M 人`（用户回看旧消息时也不再看见）。
+ * 其它 `<system-reminder>`（CLI 自己的）与正文里提到「在册」的句子原样保留。
  *
- * 只处理「整段独占若干连续行」的形态（wrapRosterDigestSegment 的产物）；未命中即原样返回，
- * 不做任何空白规整（避免无谓地改动正文）。
+ * 未命中即原样返回，不做任何空白规整（避免无谓地改动正文）。
  */
 export function stripRosterDigestSegment(content: string): string {
   if (!content.includes(ROSTER_DIGEST_MARK)) return content
@@ -134,6 +144,10 @@ export function stripRosterDigestSegment(content: string): string {
     const isClose = (lines[i + 2] ?? '').trim() === ROSTER_DIGEST_SEGMENT_CLOSE
     if (isOpen && isDigest && isClose) {
       i += 2
+      removed++
+      continue
+    }
+    if (ROSTER_DIGEST_LEGACY_LINE_RE.test((lines[i] ?? '').trimStart())) {
       removed++
       continue
     }

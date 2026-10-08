@@ -23,6 +23,7 @@ import {
   extractSearchableSegments,
   type SearchableTranscriptEntry,
 } from './localIndex/searchContentProjector.js'
+import { stripRosterDigestSegment } from './rosterDigest.js'
 import {
   searchContentCoordinator,
 } from './localIndex/searchContentCoordinator.js'
@@ -654,7 +655,9 @@ export class SearchService {
             timestamp !== match.timestamp ||
             !haystack?.includes(needle)
           ) return null
-          matches.push({ ...match, body: segment.text })
+          // body 是**给前端的片段源**（802 行 buildSnippet）⇒ 剥掉花名册摘要；
+          // 上行 `segment.text !== match.body` 的校验仍用原文（索引里存的就是原文，不能动）。
+          matches.push({ ...match, body: stripRosterDigestSegment(segment.text) })
         }
         sessions.push({ ...session, matches })
       }
@@ -767,6 +770,9 @@ export class SearchService {
     for (const session of indexedContent.sessions) {
       throwIfAborted(options.signal)
       const exactMatches = session.matches
+        // v1.7.4 修缺陷：索引里存的是原文（不动存储/索引），这里把**摘要痕迹**剥掉后再
+        // 判定命中与出片段 ⇒ 只命中摘要的行不再算用户内容命中，片段里也不出现摘要。
+        .map((match) => ({ ...match, body: stripRosterDigestSegment(match.body) }))
         .filter((match) => {
           const haystack = options.caseSensitive ? match.body : match.body.toLowerCase()
           return haystack.includes(needle)
@@ -1086,13 +1092,16 @@ export class SearchService {
     for (const { entry: rawEntry, lineNumber: lineNo } of entries) {
       const entry = rawEntry as RawSearchEntry
       for (const segment of this.extractUserAssistantSegments(entry)) {
-        const haystack = opts.caseSensitive ? segment.text : segment.text.toLowerCase()
+        // v1.7.4 修缺陷：花名册摘要（系统段 / 历史裸行）不是用户内容 ⇒ 先剥再做
+        // 命中判定与片段，摘要词本身检索不到、片段里也不出现（存储与索引不动）。
+        const searchable = stripRosterDigestSegment(segment.text)
+        const haystack = opts.caseSensitive ? searchable : searchable.toLowerCase()
         if (!haystack.includes(needle)) continue // ripgrep false positive (JSON noise)
 
         matchCount += 1
         if (matches.length < opts.matchesPerSession) {
           const { snippet, highlights } = this.buildSnippet(
-            segment.text,
+            searchable,
             query,
             opts.caseSensitive,
           )
