@@ -112,7 +112,6 @@ import {
   ensureSessionRegistered,
   getDefaultOpenAIReasoningEffort,
   getGrokReasoningEfforts,
-  normalizeCliTaskNotification,
   persistSessionPermissionMode,
   persistSessionRuntimeConfig,
   readObject,
@@ -138,6 +137,17 @@ import {
 // 类型与组合函数的定义点陆续迁往该模块，但本模块导出面须逐项不变 ⇒ 原样再导出。
 export type { SessionChatActivityState } from './sessionActivity.js'
 export { getSessionChatActivityState } from './sessionActivity.js'
+
+// v1.7.4 结构拆分（B1-3 · 任务通知持久化组外移）：`taskNotificationPersistence` 表与
+// `persistCliTaskNotification` 迁往 ./taskNotificationPersistence.ts（语义属转录持久化，
+// 非会话活动，故不并入 sessionActivity）。表转为模块私有，handler 只经
+// 写入/清理三个原语使用；`__persistCliTaskNotificationForTests` 原样再导出以维持导出面。
+import {
+  forgetSessionTaskNotifications,
+  persistCliTaskNotification,
+  resetTaskNotificationPersistenceForTests,
+} from './taskNotificationPersistence.js'
+export { __persistCliTaskNotificationForTests } from './taskNotificationPersistence.js'
 
 const settingsService = new SettingsService()
 const providerService = new ProviderService()
@@ -309,7 +319,6 @@ const clientOutputCallbacks = new Map<
     callback: (cliMsg: any) => void
   }
 >()
-const taskNotificationPersistence = new Map<string, Map<string, Promise<void>>>()
 
 export const handleWebSocket = {
   open(ws: ServerWebSocket<WebSocketData>) {
@@ -1586,7 +1595,7 @@ function cleanupSessionRuntimeState(sessionId: string) {
   runtimeTransitionPromises.delete(sessionId)
   sessionStartupPromises.delete(sessionId)
   lastResolvedStartupWorkDirs.delete(sessionId)
-  taskNotificationPersistence.delete(sessionId)
+  forgetSessionTaskNotifications(sessionId)
   clearPrewarmState(sessionId)
 }
 
@@ -2518,39 +2527,6 @@ function removeClientOutputCallback(ws: ServerWebSocket<WebSocketData>): void {
   clientOutputCallbacks.delete(ws)
 }
 
-function persistCliTaskNotification(
-  sessionId: string,
-  cliMsg: any,
-): Promise<void> | null {
-  const notification = normalizeCliTaskNotification(cliMsg)
-  if (!notification) return null
-
-  let sessionWrites = taskNotificationPersistence.get(sessionId)
-  if (!sessionWrites) {
-    sessionWrites = new Map()
-    taskNotificationPersistence.set(sessionId, sessionWrites)
-  }
-  const eventKey = typeof cliMsg.uuid === 'string' && cliMsg.uuid
-    ? cliMsg.uuid
-    : JSON.stringify(notification)
-  const existing = sessionWrites.get(eventKey)
-  if (existing) return existing
-
-  const write = sessionService.appendSessionTaskNotification(sessionId, notification)
-    .catch((error) => {
-      sessionWrites?.delete(eventKey)
-      console.warn(
-        `[WS] Failed to persist task notification for ${sessionId}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      )
-    })
-  sessionWrites.set(eventKey, write)
-  return write
-}
-
-export const __persistCliTaskNotificationForTests = persistCliTaskNotification
-
 function bindAllClientSessionOutputs(
   sessionId: string,
   options?: {
@@ -3195,7 +3171,7 @@ export function __resetWebSocketHandlerStateForTests(): void {
   activeSessions.clear()
   globalEventClients.clear()
   clientOutputCallbacks.clear()
-  taskNotificationPersistence.clear()
+  resetTaskNotificationPersistenceForTests()
   sessionCleanupTimers.clear()
   sessionDisconnectWatchers.clear()
   prewarmPendingSessions.clear()
