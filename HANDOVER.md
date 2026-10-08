@@ -211,8 +211,35 @@
      · 另序（`collab-push`+`collab-task-service`+`websocket-handler`）：87 pass / 0 fail
    - **残留未确定项**：修后另有 **2 次**（序A 1/18、5 文件批 1/15）出现过「1 fail」，我**只读了 tail 未留失败行**（自曝失误）。此后共 ~30 次连跑均未复现；怀疑是同批内既有的 harness 级偶发（`conversations.test.ts:3459` socket closed 在修前也见过一次），**与合并窗口泄漏无关**（泄漏路径已被探针证伪）。
    - **通用纪律（2026-10-08 主管采纳，适用于全部后续批次）**：凡「改动后需证明测试行为」的交付，**必须捕获失败行原文**——`tail`/计数摘要**不算证据** ✗（上面的残留偶发正是因为只读了 tail，才至今无法定位）。跑测试时一律重定向到文件、失败时 `grep` 出 `(fail)` 行 + `Expected/Received` + 调用栈原文再回报。
+   - **通用纪律·第二批（2026-10-08 主管升级，适用全部后续批次）**：凡「**零新增**」类证据（tsc 错误数、门禁计数、导出面差集、行数基线…）**必须在代码静止后测** ✗ —— 反例实证：我曾在后台跑 `tsc` 的同时做破坏性实验，tsc 读到**半破坏态**文件而多报 1 条（`taskNotificationPersistence.ts(34,26) TS2322`），我差点据此去「修」一个不存在的 +1，靠最小复现探针才拦住；安静态重跑即 7255 == 基线。**口径：产出结论性数字之前，不得有并发的文件改动（含自己的实验插桩）。**
    - **记名排队**：「潜伏偶发」专项批次（2026-10-08 主管裁决**记名 + 排队**，**本轮不做** ✗，还债批优先）——目标：定位上述 2 次未留证的「1 fail」；执行纪律＝失败行原文捕获（见上）。
    - 证据来源：探针插桩实测（插桩后已逐字节撤净，`git diff` 只余 +4 行）+ 序列复跑。
+
+11. **handler 剩余可外移域普查（2026-10-08，B1-3 之后；只普查不动手）**
+   - **口径（可复核）**：`node D:/xxw_p/hh-dispatch/handler-survey.js`（只读脚本，仓库外）。定义：**跨度** = 本顶层声明首行 → 下一顶层声明前一行（含块间空行与紧贴下一块的注释，故略偏高）；**净估** = 跨度 × 0.73（由 B1-3 实测校准：表 1 行 + 函数 32 行 = 跨度 33 ⇒ handler 净 −24）。实测总量：文件 **3228** 行 = import/常量段 151 + 顶层块 3077（135 个 declaration）。基线表 `src/server/ws/handler.ts = 3322, kind: own`（**own ⇒ 文字标准 ≤2500**，现 3227 已比基线低 95）；豁免条目 cap 3372 / 过期版 1.7.4。
+   - **域清单（跨度 / 净估 / 跨域引用个数 = 域体出现的域外顶层名计数）**：
+     | 域 | 跨度 | 净估 | 跨域引用 | 判断 |
+     |---|---|---|---|---|
+     | **T0 传输枢纽族**（sendToSession/broadcastGlobalEvent/broadcastTurnChangeListener/add-removeActiveClient/bind*ClientSessionOutput/sendError/closeSessionConnection/…13 块） | 196 | ≈143 | 11（activeSessions×8、WebSocketData×5、sendMessage×4、clientOutputCallbacks×3、globalEventClients…） | **必先做**：叶子模块，附带走三张连接表 + `sendMessage`/`WebSocketData`；做完后其余域才可能不踩新环 |
+     | **D1 CLI 消息翻译域**（translateCliMessage 562 + 4 小件） | 610 | ≈445 | 10（SessionStreamState/getStreamState/resetCurrentStreamAttempt/cliParentToolUseId/sessionStopRequested/sessionSlashCommands…） | **单域最大**；零服务 token（不碰任何 services）⇒ 环险最低；需把流状态小件一起下沉 |
+     | D2 标题生成域（7 块） | 185 | ≈135 | 7（sessionTitleState×4、WebSocketData×4…） | 低-中；需带走 sessionTitleState 表 |
+     | D3 运行时配置/权限/重启域（15 块） | 468 | ≈342 | 18（WebSocketData×8、sendMessage×6、sendToSession×3、runtimeOverrides×3…） | **与 D4 双向交织**（D3↔D4 互引 buildSessionStartupDiagnosticMessage/getRuntimeSettings/isKnownRuntimeProviderId）⇒ 建议与 D4 **合成一批**，否则拆开必成新环 |
+     | D4 运行时设置读取/诊断域（6 块） | 254 | ≈185 | 12（providerService×3、settingsService×2、runtimeOverrides、sessionStreamStates…） | 同 D3 |
+     | D5 断开清理/回合看护域（5 块） | 148 | ≈108 | 12（sessionCleanupTimers×3、hasPendingOrActiveUserTurn×3、hasActiveClients×3…） | 中；**依赖 D3/D9/D11**，批序靠后 |
+     | D6 预热域（6 块） | 165 | ≈120 | 15（sessionStartupPromises、prewarm*、prewarmedSessions、runtimeOverrideVersions…） | 中；需先下沉「会话生存期状态族」 |
+     | D7 权限重放/computer-use 域（4 块） | 84 | ≈61 | 3（WebSocketData、sendToSession、sendMessage） | 体量小但**环险最高**（见下）⇒ 必须走注入缝 |
+     | D8 广播域（协作推送/花名册/权限超时，4 块） | 103 | ≈75 | 5（broadcastGlobalEvent×2、pendingListEpoch×2、SESSION_LIST_MERGE_MS…） | T0 之后即易做 |
+     | **D9 主循环/分派**（handleWebSocket 228 + handleUserMessage 166 + …4 块） | 445 | ≈325 | **43** | **建议不动**（43 个跨域引用 = 它就是汇聚点，动它收益最低、风险最高） |
+     | D10 斜杠命令域（2 块） | 49 | ≈36 | 3 | 易做；被 `api/sessions.ts` + `sessionComponentReloadService` 消费 ⇒ 需再导出 `getSlashCommands`/`updateSessionSlashCommands` |
+     | D11 会话清理/测试缝（3 块） | 52 | ≈38 | 21（复位器必然触全表） | **最后做**（等各表随域搬走后复位器自然瘦身） |
+   - **依赖边风险（三类环，都是「新增即门禁红」）**：
+     1. **新模块 ⇄ handler**：新模块**不得** import handler 的任何符号（`sendToSession` 等）——handler 已 import 新模块 ⇒ 反向 import 即 `no-circular` 新违规。**这就是 T0 必须先下沉的原因**（T0 一旦成为叶子，D3/D5/D7/D8 里那 3 处 `sendToSession` 引用才合法）。
+     2. **新模块 → computerUseApprovalService / sessionComponentReloadService / teamWatcher**：这三个 L2 服务**import 了 `ws/handler`**（既有冻结），新模块若 import 它们 ⇒ 组环。**既有断环先例**：`sessionActivity.ts:16-21,191` 用注入缝 `registerSessionActivityDeps`（装配根注入）——**D7（computer-use 请求）与 D5（`scheduleDisconnectCleanup` 触 `computerUseApprovalService.cancelSession`）必须走同一口径**，不得直连。
+     3. **L2 → L4 禁令**：任何新模块必须留在 `src/server/ws/**`（L4）。若下沉到 `services/**` 则 3 个服务反向依赖会变成层级违规。
+   - **冻结清单 18 条中涉 handler 的 4 条**（`.dependency-cruiser-known-violations.json` 实测，条数以该文件为准）：`layer-L2-no-upward` ×3（computerUseApprovalService / sessionComponentReloadService / teamWatcher → `ws/handler`）+ `no-circular` ×1（computerUseApprovalService → `ws/handler`）。本专项只需**不新增**；T0 下沉后**可**让这 3 个服务改指叶子模块从而收敛冻结，但**收敛＝改动 L2 服务 import 面，需另行裁决**。
+   - **handler 导出面必须逐批保住**（非测试外部消费方实测 11 个绑定 + 1 类型）：`api/conversations.ts` ← `clearLegacySessionChatState, getSessionChatActivityState, markSessionChatQueued`；`api/sessions.ts` ← `closeSessionConnection, getSlashCommands, interruptSessionRuntime`；`index.ts` ← `handleWebSocket, WebSocketData`；`computerUseApprovalService` ← `sendToSession`；`sessionComponentReloadService` ← `updateSessionSlashCommands`；`teamWatcher` ← `sendToSession, getActiveSessionIds`。**口径不变：机器机检「HEAD 导出面 vs 工作区导出面」差集为空（当前 31 项）。**
+   - **总判断：可达 ≤2500 ✓，但绝非一批之功**。需净减 ≥728。最小可行组合实测推演：T0(143) + D1′(≈490，含下沉小件) = 633 ⇒ 2595 **仍不达标**；再叠 D8(75) → 2520 **仍差一点**；再叠 D10(36) → **2484 ✓（余量仅 16，不建议就此收手）**。稳妥组合：T0 + D1′ + D4(+D3) + D8 + D10 ≈ 929 ⇒ **≈2299**（余量 201）。彻底组合再叠 D2(135) + D6(120) ⇒ **≈2044**。**建议批序：T0 → D1′ → (D3+D4) → D8 → D10 → D2 → D6 → 视余量收口；D5/D7 走注入缝，D11 最后，D9 不动。**
+   - **未确定项**：① 跨度口径含块间空行，**净估误差 ±10–15%**，实际以每批落地后 `wc -l` 实测为准；② `sendMessage`/`getActiveSessionIds`/`getSlashCommands`/`clearLegacySessionChatState` 等小符号的**当前定义点未逐一确认**（T0 批开工前须 grep 确认是 handler 本地还是已外部化）；③ D3/D4 交织的具体最小拆分点需在开工前做一次跨域引用复查；④ 本清单未覆盖 handler 头部 151 行 import/常量段里可下沉的实例（`settingsService`/`providerService` 等）。
 
 ### 能工作的
 - **v1.5.0 用户实测**：用户从 v1.2.7 升级后确认无 bug。`release-notes/v1.5.0.md` 与 README 定位一致：花名册高危修复、Windows 专属、移除外部 IM 适配器、bun 打包链；本地模型仍可用但已冻结，不参与协作会话。
