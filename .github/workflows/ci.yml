@@ -60,6 +60,21 @@ jobs:
         run: bun run lint:layers
       - name: Run file size gate (v1.7.0 structure track)
         run: bun run lint:file-size -- --baseline-ref origin/main
+      - name: Run tsc type baseline gate (G9 ratchet)
+        # root 类型关卡（G9）：签名多重集只紧不松 + 基线相对 origin/main 防倒转 + 真空自毁。
+        # 全量 tsc 分钟级，故只进 CI 不进 pre-commit；脚本自带 node 堆旗标（默认堆 OOM）。
+        run: bun run lint:types -- --baseline-ref origin/main
+      - name: Seed-error drill (gate must catch injected type error)
+        # G9 判别力自证·管道段：注入一行类型错 ⇒ 闸门必须红 ⇒ 复原后再跑必须绿。
+        # apply 失败同样判红（自证管道坏了不能静默绿）。
+        run: |
+          git apply scripts/g9-seed-error.patch
+          if bun run lint:types; then
+            echo "::error::G9 判别力失效：种子类型错误未被闸门判红"
+            exit 1
+          fi
+          git apply -R scripts/g9-seed-error.patch
+          bun run lint:types
 
   docs:
     name: Docs site build & check

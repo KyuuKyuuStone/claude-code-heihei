@@ -1,0 +1,11 @@
+diff --git a/src/utils/array.ts b/src/utils/array.ts
+index 909fcd2..81bcac5 100644
+--- a/src/utils/array.ts
++++ b/src/utils/array.ts
+@@ -11,3 +11,6 @@ export function count<T>(arr: readonly T[], pred: (x: T) => unknown): number {
+ export function uniq<T>(xs: Iterable<T>): T[] {
+   return [...new Set(xs)]
+ }
++
++// G9 种子错误演练占位（scripts/g9-seed-error.patch 注入，CI 判别力自证用；本行不应存在于源码）
++const g9SeedDrill: number = "g9-seed-error-drill"

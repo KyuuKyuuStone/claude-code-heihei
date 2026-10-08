@@ -5,7 +5,6 @@
     "moduleResolution": "bundler",
     "allowJs": true,
     "jsx": "react-jsx",
-    "baseUrl": ".",
     "paths": {
       "@ant/claude-for-chrome-mcp": [
         "./stubs/ant-claude-for-chrome-mcp.ts"
