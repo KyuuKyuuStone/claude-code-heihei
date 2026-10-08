@@ -6,7 +6,7 @@ import { homedir } from "node:os";
 import {
   buildSignatures,
   compareSignatures,
-  normalizeFilePath,
+  foldVendorForms,
   normalizeMessage,
   parsePositionlessErrors,
   parseTscOutput,
@@ -28,15 +28,33 @@ describe("G9 parsePositionlessErrors（观测：config 级错误证据）", () =
   });
 });
 
-describe("G9 normalizeFilePath（主目录折叠，跨机器稳定）", () => {
-  test("本机主目录前缀折叠为 ~/（bun-types 缓存类绝对路径）", () => {
+describe("G9 foldVendorForms（跨机器形态折叠）", () => {
+  test("本机缓存形态与 CI 实体目录形态折叠后同 key（bun-types）", () => {
     const home = homedir().replace(/\\/g, "/");
-    expect(normalizeFilePath(`${home}/.bun/install/cache/bun-types@1.4.2/bun.d.ts`)).toBe(
-      "~/.bun/install/cache/bun-types@1.4.2/bun.d.ts",
+    expect(foldVendorForms(`${home}/.bun/install/cache/bun-types@1.4.2@@@1/globals.d.ts`)).toBe(
+      foldVendorForms("node_modules/bun-types/globals.d.ts"),
+    );
+    expect(foldVendorForms(`${home}/.bun/install/cache/bun-types@1.4.2@@@1/bun.d.ts`)).toBe(
+      "node_modules/bun-types/bun.d.ts",
     );
   });
-  test("相对路径不变", () => {
-    expect(normalizeFilePath("src/utils/array.ts")).toBe("src/utils/array.ts");
+  test("仓库根绝对路径折叠（TS7016 类 message 内嵌 resolved 路径）", () => {
+    const repoRoot = process.cwd().replace(/\\/g, "/");
+    const msg = `Could not find a declaration file for module 'react'. '${repoRoot}/node_modules/react/index.js' implicitly has an 'any' type.`;
+    expect(foldVendorForms(msg)).toBe(
+      "Could not find a declaration file for module 'react'. 'node_modules/react/index.js' implicitly has an 'any' type.",
+    );
+  });
+  test("嵌套 node_modules 取最内层", () => {
+    expect(foldVendorForms("node_modules/vitest/node_modules/vite/types/hot.d.ts")).toBe(
+      "node_modules/vite/types/hot.d.ts",
+    );
+  });
+  test("相对路径与无路径文本不变", () => {
+    expect(foldVendorForms("src/utils/array.ts")).toBe("src/utils/array.ts");
+    expect(foldVendorForms("Types of property 'x' are incompatible.")).toBe(
+      "Types of property 'x' are incompatible.",
+    );
   });
 });
 

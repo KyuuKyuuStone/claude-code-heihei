@@ -18,9 +18,10 @@
 //
 // 归一化规则（签名 = 文件::错误码::归一化 message，行号不入签名——行号漂移不算新增）：
 //   1) 取诊断行 message 全文（--pretty false 下单行；续行为 related information，不入签名）
-//   2) 数字串全部替换为 N（防同错误因参数个数/行内数字漂移被误判新增；首版宁紧，不做其他折叠）
-//   3) 文件路径反斜杠归一为正斜杠，且用户主目录前缀折叠为 ~/（bun-types 等缓存诊断带本机绝对路径，
-//      Windows 与 CI Linux 形态不同，不折叠则基线跨机器漂移假红）
+//   2) 跨机器形态折叠（foldVendorForms）：反斜杠归一 + 仓库根绝对路径折叠 + 主目录 ~/ 折叠 +
+//      bun 全局缓存目录归一为 node_modules/<包主名> + 嵌套 node_modules 取最内层——只折叠安装/环境形态，
+//      不折叠错误内容（Windows 本机与 CI Linux 的路径形态差异见 foldVendorForms 注释）
+//   3) 数字串全部替换为 N（在折叠之后；防同错误因参数个数/行内数字漂移被误判新增；首版宁紧，不做其他折叠）
 //
 // 堆上限：全量 tsc 默认堆 OOM（exit 134，架构师实测）⇒ spawn node 自带 --max-old-space-size=12288。
 // 7255 存量 = 长期债务，本批只立闸门不清算（规格 §②.6）。
@@ -46,14 +47,40 @@ export interface TscDiag {
   message: string;
 }
 
-// 用户主目录折叠：bun-types 等缓存诊断带本机绝对路径（Windows C:/Users/<名>/... vs CI /home/runner/...），
-// 不折叠则基线跨机器必然漂移 ⇒ 统一折叠为 ~/ 前缀（大小写不敏感比对）。
+// 跨机器形态折叠（home 折叠 + 仓库根折叠 + vendor 归一）：
+// 诊断文本（file 与 message）中嵌的路径在 Windows 本机与 CI linux 形态不同，不折叠则基线跨机器必漂移：
+//   ① 主目录：C:/Users/<名>/... 与 /home/runner/... ⇒ ~/（大小写不敏感）
+//   ② 仓库根：tsc message 里嵌的仓库绝对路径前缀（TS7016 类错误的 resolved 路径）两环境不同 ⇒ 折掉
+//   ③ bun 全局缓存：~/.bun/install/cache/<pkg>@<ver>@@@<n>/ 与 CI 的 node_modules/<pkg>/ 是同一类型库
+//      的两种安装形态（Windows bun 用链接指向缓存、linux 为实体目录）⇒ 统一归一为 node_modules/<pkg>/
+//   ④ 嵌套 node_modules：/node_modules/a/node_modules/b/ ⇒ /node_modules/b/（取最内层，两环境 hoist 形态差异兜底）
+// 只做形态归一，不改错误内容；数字占位在折叠之后（防先占位破坏包名折叠）。
 const HOME = homedir().replace(/\\/g, "/");
+const REPO_ROOT_SLASH = REPO_ROOT.replace(/\\/g, "/");
+
+export function foldVendorForms(s: string): string {
+  let out = s.replace(/\\/g, "/");
+  // ② 仓库根折叠（全局替换，message 中可能多处出现；大小写不敏感匹配、原串切片）
+  const rrLower = REPO_ROOT_SLASH.toLowerCase();
+  let idx = out.toLowerCase().indexOf(rrLower + "/");
+  while (idx >= 0) {
+    out = out.slice(0, idx) + out.slice(idx + rrLower.length + 1);
+    idx = out.toLowerCase().indexOf(rrLower + "/");
+  }
+  // ① home 折叠
+  if (out.toLowerCase().startsWith(HOME.toLowerCase() + "/")) out = "~" + out.slice(HOME.length);
+  // ③ bun 全局缓存 → node_modules/<包主名>（前导 ~ 或 / 均接受；随后去 ~/node_modules 折叠副产物——
+  //    vendor 包不在用户目录语义下）
+  out = out.replace(/(^|\/)\.bun\/install\/cache\/([^/@]+)@[^/]*@@@\d+\//g, "$1node_modules/$2/");
+  out = out.replace(/^~\/node_modules\//g, "node_modules/");
+  // ④ 嵌套 node_modules 取最内层
+  while (/node_modules\/[^/]+\/node_modules\//.test(out))
+    out = out.replace(/node_modules\/[^/]+\/node_modules\//g, "node_modules/");
+  return out;
+}
 
 export function normalizeFilePath(f: string): string {
-  const norm = f.replace(/\\/g, "/");
-  if (norm.toLowerCase().startsWith(HOME.toLowerCase() + "/")) return "~" + norm.slice(HOME.length);
-  return norm;
+  return foldVendorForms(f);
 }
 
 export function parseTscOutput(text: string): TscDiag[] {
@@ -68,7 +95,7 @@ export function parseTscOutput(text: string): TscDiag[] {
 
 export function normalizeMessage(message: string): string {
   const firstLine = message.split(/\r?\n/)[0] ?? "";
-  return firstLine.replace(/\d+/g, "N");
+  return foldVendorForms(firstLine).replace(/\d+/g, "N");
 }
 
 export function buildSignatures(diags: TscDiag[]): Map<string, number> {
