@@ -10,6 +10,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { ProviderService } from './providerService.js'
+import { appendRosterDigestIfSupervisor } from './rosterDigest.js'
 import {
   OPENAI_CODEX_OAUTH_FILE_ENV_KEY,
   OPENAI_OAUTH_PROVIDER_ENV_KEY,
@@ -700,13 +701,12 @@ export class ConversationService {
   getSessionInitMessage(sessionId: string): any | null {
     return this.sessions.get(sessionId)?.initMessage ?? null
   }
-
   async sendMessage(
     sessionId: string,
     content: string,
     attachments?: AttachmentRef[],
   ): Promise<boolean> {
-    const userContent = await this.buildUserContent(content, sessionId, attachments)
+  const userContent = await this.buildUserContent(await appendRosterDigestIfSupervisor(sessionId, content), sessionId, attachments)
     let session = this.sessions.get(sessionId)
     if (session && !await this.refreshNetworkEnvironmentBeforeTurn(sessionId, session)) {
       return false

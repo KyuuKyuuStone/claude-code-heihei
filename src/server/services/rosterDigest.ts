@@ -1,0 +1,88 @@
+/**
+ * rosterDigest —— 给**主管**的每次注入消息捎带一段「当前花名册摘要」（v1.7.4 B2）。
+ *
+ * 动机（用户报的缺陷）：花名册变更信号**只喂 WS/UI**（`ws/handler.ts:3205` 是唯一消费者），
+ * **不进任何会话的模型上下文** ⇒ 主管只能靠提示词约定轮询花名册，时机一错就报「没有员工可用」。
+ * B2 = 让主管**每次交互都看得见实况**：纯文本、单行、**不带 taskId、不加页脚**。
+ *
+ * 接线点**只有一处**：`conversationService.sendMessage`（WS 用户上行 `handler.ts:775` 与
+ * 投递注入 `sessionMessenger.ts:214` 都在此汇合 —— 已穷举核实；`api/conversations.ts:98`
+ * 的 legacy 端点只回 202 不投递，无需接）。
+ *
+ * 硬约束：**摘要必须插在页脚之前**（折叠契约要求页脚是最后一个非空行）。
+ */
+
+/** 摘要里最多列出的 role 数（超出以「等 N 人」聚合）。8 ≈ 40–60 字符：每次注入都带，须与上下文成本相称。 */
+export const ROSTER_DIGEST_MAX_ROLES = 8
+
+/** 幂等标记：正文已含即不重复追加。 */
+export const ROSTER_DIGEST_MARK = '【在册】'
+
+export type RosterDigestEntry = {
+  sessionId?: string
+  role?: string
+  supervisor?: boolean
+  enabled?: boolean
+}
+
+export type RosterDigestDeps = {
+  listServants: () => Promise<RosterDigestEntry[]>
+}
+
+let depsOverride: RosterDigestDeps | null = null
+
+/** 测试注入（避免真读花名册）。传 null 复位。 */
+export function setRosterDigestDepsForTests(deps: RosterDigestDeps | null): void {
+  depsOverride = deps
+}
+
+async function resolveDeps(): Promise<RosterDigestDeps> {
+  if (depsOverride) return depsOverride
+  // 动态 import：避免 conversationService → rosterDigest → servantService 的静态环。
+  const { servantService } = await import('./servantService.js')
+  return { listServants: () => servantService.listServants() as unknown as Promise<RosterDigestEntry[]> }
+}
+
+/** 由花名册条目构造摘要（纯函数，供测试直接调用）。 */
+export function formatRosterDigest(entries: RosterDigestEntry[]): string {
+  const supervisors = entries.filter((e) => e.supervisor)
+  const employees = entries.filter((e) => !e.supervisor && e.enabled !== false)
+  if (employees.length === 0) {
+    return `${ROSTER_DIGEST_MARK}主管 ${supervisors.length} 人；员工 0 人（暂无可用员工）`
+  }
+  const roles = employees.map((e) => (e.role ?? '').trim()).filter(Boolean)
+  const shown = roles.slice(0, ROSTER_DIGEST_MAX_ROLES)
+  const overflow = roles.length - shown.length
+  const list = `${shown.join('、')}${overflow > 0 ? `等 ${roles.length} 人` : ''}`
+  return `${ROSTER_DIGEST_MARK}主管 ${supervisors.length} 人；员工 ${employees.length} 人：${list}`
+}
+
+/**
+ * 若 `sessionId` 是**在册主管**，把花名册摘要捎带进 `content` 并返回；
+ * 否则**原样返回**（员工侧不注入）。幂等：已含摘要则不重复。
+ */
+export async function appendRosterDigestIfSupervisor(
+  sessionId: string,
+  content: string,
+): Promise<string> {
+  const deps = await resolveDeps()
+  const entries = await deps.listServants()
+  const self = entries.find((e) => e.sessionId === sessionId)
+  if (!self?.supervisor) return content
+  if (content.includes(ROSTER_DIGEST_MARK)) return content
+
+  const digest = formatRosterDigest(entries)
+  const lines = content.split('\n')
+  let lastNonEmpty = -1
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if ((lines[i] ?? '').trim()) {
+      lastNonEmpty = i
+      break
+    }
+  }
+  // 硬约束：页脚（派活/汇报页脚）必须仍是最后一个非空行 ⇒ 摘要插在它之前。
+  const isFooter = lastNonEmpty >= 0 && /任务 ID：|汇报自：/.test(lines[lastNonEmpty] ?? '')
+  if (isFooter) lines.splice(lastNonEmpty, 0, digest)
+  else lines.push(digest)
+  return lines.join('\n')
+}
