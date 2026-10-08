@@ -10,7 +10,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { ProviderService } from './providerService.js'
-import { appendRosterDigestIfSupervisor } from './rosterDigest.js'
+import { buildRosterDigestSegmentForSupervisor } from './rosterDigest.js'
 import {
   OPENAI_CODEX_OAUTH_FILE_ENV_KEY,
   OPENAI_OAUTH_PROVIDER_ENV_KEY,
@@ -714,7 +714,11 @@ export class ConversationService {
     content: string,
     attachments?: AttachmentRef[],
   ): Promise<boolean> {
-  const userContent = await this.buildUserContent(await appendRosterDigestIfSupervisor(sessionId, content), sessionId, attachments)
+  // v1.7.4 修缺陷：花名册摘要改**独立系统段前置**（模型/主管上下文照旧可见，B2 不退），
+  // 用户可见的正文与转录渲染由读路径 stripRosterDigestSegment 剥掉（见 messageConversion）。
+  const rosterSegment = await buildRosterDigestSegmentForSupervisor(sessionId, content)
+  const modelContent = rosterSegment ? `${rosterSegment}${String.fromCharCode(10)}${String.fromCharCode(10)}${content}` : content
+  const userContent = await this.buildUserContent(modelContent, sessionId, attachments)
     let session = this.sessions.get(sessionId)
     if (session && !await this.refreshNetworkEnvironmentBeforeTurn(sessionId, session)) {
       return false

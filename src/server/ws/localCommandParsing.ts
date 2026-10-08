@@ -35,6 +35,7 @@
  */
 
 import { parseSlashCommand } from '../../utils/slashCommandParsing.js'
+import { stripRosterDigestSegment } from '../services/rosterDigest.js'
 import {
   COMMAND_NAME_TAG,
   LOCAL_COMMAND_STDERR_TAG,
@@ -296,6 +297,8 @@ export function extractReplayUserText(cliMsg: any): string | null {
         .join('\n')
       : ''
 
-  const trimmed = text.trim()
+  // v1.7.4 修缺陷：花名册摘要只是**给模型的系统段**，不得作为用户消息重放进 UI
+  // （replay 文本取自 CLI 回显的原始正文，含前置系统段）⇒ 此处剥掉再 trim。
+  const trimmed = stripRosterDigestSegment(text).trim()
   return trimmed || null
 }

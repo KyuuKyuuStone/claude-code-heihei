@@ -43,6 +43,7 @@ import {
   isToolResultContent,
 } from './transcriptContent.js'
 import { shouldHideTranscriptEntry } from './transcriptEntries.js'
+import { stripRosterDigestFromContent } from '../rosterDigest.js'
 import type { RawEntry } from './transcriptAgents.js'
 
 type RawMessageUsage = NonNullable<RawEntry['message']>['usage']
@@ -117,7 +118,9 @@ export function entryToMessage(
   return {
     id: entry.uuid || crypto.randomUUID(),
     type,
-    content: msg.content,
+    // v1.7.4 修缺陷：花名册摘要系统段按**模型可见、用户不可见**处理 ⇒ 转录读路径（历史 API /
+    // transcriptDerivation / 子链）统一在此剥掉**本系统段**（其它 system-reminder 不动）。
+    content: stripRosterDigestFromContent(msg.content),
     ...(entry.toolUseResult !== undefined ? { toolUseResult: entry.toolUseResult } : {}),
     timestamp: entry.timestamp || new Date().toISOString(),
     model: msg.model,
