@@ -207,7 +207,9 @@
      · 序A（`conversations.test.ts` → `websocket-handler.test.ts`，修前必红）：修后 **17/17 连绿**（146 pass / 0 fail）
      · 序B（`conversation-status`/`websocket-handler`/`ws-memory-events`/`task-notification-persistence`/`conversations`/`agents-api`，上轮失误序）：**206 pass / 0 fail**
      · 另序（`collab-push`+`collab-task-service`+`websocket-handler`）：87 pass / 0 fail
-   - **残留未确定项**：修后另有 **2 次**（序A 1/18、5 文件批 1/15）出现过「1 fail」，我**只读了 tail 未留失败行**（自曝失误）。此后共 ~30 次连跑均未复现；怀疑是同批内既有的 harness 级偶发（`conversations.test.ts:3459` socket closed 在修前也见过一次），**与合并窗口泄漏无关**（泄漏路径已被探针证伪）。如需收口建议单开「潜伏偶发」专项批次（改动须带失败行捕获）。
+   - **残留未确定项**：修后另有 **2 次**（序A 1/18、5 文件批 1/15）出现过「1 fail」，我**只读了 tail 未留失败行**（自曝失误）。此后共 ~30 次连跑均未复现；怀疑是同批内既有的 harness 级偶发（`conversations.test.ts:3459` socket closed 在修前也见过一次），**与合并窗口泄漏无关**（泄漏路径已被探针证伪）。
+   - **通用纪律（2026-10-08 主管采纳，适用于全部后续批次）**：凡「改动后需证明测试行为」的交付，**必须捕获失败行原文**——`tail`/计数摘要**不算证据** ✗（上面的残留偶发正是因为只读了 tail，才至今无法定位）。跑测试时一律重定向到文件、失败时 `grep` 出 `(fail)` 行 + `Expected/Received` + 调用栈原文再回报。
+   - **记名排队**：「潜伏偶发」专项批次（2026-10-08 主管裁决**记名 + 排队**，**本轮不做** ✗，还债批优先）——目标：定位上述 2 次未留证的「1 fail」；执行纪律＝失败行原文捕获（见上）。
    - 证据来源：探针插桩实测（插桩后已逐字节撤净，`git diff` 只余 +4 行）+ 序列复跑。
 
 ### 能工作的
