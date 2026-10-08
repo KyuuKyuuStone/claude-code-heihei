@@ -29,10 +29,6 @@
       "lines": 3795,
       "kind": "own"
     },
-    "src/server/ws/handler.ts": {
-      "lines": 3322,
-      "kind": "own"
-    },
     "src/services/api/claude.ts": {
       "lines": 3831,
       "kind": "upstream"
