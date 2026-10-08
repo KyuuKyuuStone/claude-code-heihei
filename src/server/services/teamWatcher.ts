@@ -12,7 +12,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
-import { sendToSession, getActiveSessionIds } from '../ws/handler.js'
+import { sendToSession, getActiveSessionIds } from '../ws/sessionTransport.js'
 import type { ServerMessage, TeamMemberStatus } from '../ws/events.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────

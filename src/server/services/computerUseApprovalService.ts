@@ -1,5 +1,5 @@
 import type { CuPermissionRequest, CuPermissionResponse } from '../../vendor/computer-use-mcp/types.js'
-import { sendToSession } from '../ws/handler.js'
+import { sendToSession } from '../ws/sessionTransport.js'
 
 type PendingApproval = {
   sessionId: string

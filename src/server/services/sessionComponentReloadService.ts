@@ -1,5 +1,5 @@
 import { conversationService } from './conversationService.js'
-import { updateSessionSlashCommands } from '../ws/handler.js'
+import { updateSessionSlashCommands } from '../ws/cliMessageTranslation.js'
 
 export type SessionComponentReloadSummary = {
   applied: boolean

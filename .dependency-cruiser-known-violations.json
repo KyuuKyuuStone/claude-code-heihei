@@ -30,8 +30,8 @@
   {
     "type": "dependency",
     "from": "src/server/services/computerUseApprovalService.ts",
-    "to": "src/server/ws/handler.ts",
-    "unresolvedTo": "../ws/handler.js",
+    "to": "src/server/ws/sessionTransport.ts",
+    "unresolvedTo": "../ws/sessionTransport.js",
     "dependencyTypes": [
       "local",
       "import"
@@ -72,8 +72,8 @@
   {
     "type": "dependency",
     "from": "src/server/services/sessionComponentReloadService.ts",
-    "to": "src/server/ws/handler.ts",
-    "unresolvedTo": "../ws/handler.js",
+    "to": "src/server/ws/cliMessageTranslation.ts",
+    "unresolvedTo": "../ws/cliMessageTranslation.js",
     "dependencyTypes": [
       "local",
       "import"
@@ -100,8 +100,8 @@
   {
     "type": "dependency",
     "from": "src/server/services/teamWatcher.ts",
-    "to": "src/server/ws/handler.ts",
-    "unresolvedTo": "../ws/handler.js",
+    "to": "src/server/ws/sessionTransport.ts",
+    "unresolvedTo": "../ws/sessionTransport.js",
     "dependencyTypes": [
       "local",
       "import"
@@ -166,36 +166,6 @@
       "severity": "error",
       "name": "layer-L4-no-same-layer"
     }
-  },
-  {
-    "type": "cycle",
-    "from": "src/server/services/computerUseApprovalService.ts",
-    "to": "src/server/ws/handler.ts",
-    "unresolvedTo": "../ws/handler.js",
-    "dependencyTypes": [
-      "local",
-      "import"
-    ],
-    "rule": {
-      "severity": "error",
-      "name": "no-circular"
-    },
-    "cycle": [
-      {
-        "name": "src/server/ws/handler.ts",
-        "dependencyTypes": [
-          "local",
-          "import"
-        ]
-      },
-      {
-        "name": "src/server/services/computerUseApprovalService.ts",
-        "dependencyTypes": [
-          "local",
-          "import"
-        ]
-      }
-    ]
   },
   {
     "type": "cycle",
