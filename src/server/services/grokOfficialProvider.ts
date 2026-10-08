@@ -11,7 +11,8 @@ import {
   GROK_OFFICIAL_PROVIDER_ID,
   type SavedProvider,
 } from '../types/provider.js'
-import { getHeiheiGrokOAuthFilePath } from './heiheiGrokOAuthService.js'
+// G2 批：路径助手改从 L0 取（原 import 该服务 ⇒ no-circular）
+import { getHeiheiGrokOAuthFilePath } from '../../utils/grokOAuthPath.js'
 
 export { GROK_OFFICIAL_PROVIDER_ID, GROK_OAUTH_FILE_ENV_KEY }
 export const GROK_OFFICIAL_PROVIDER_NAME = 'Grok Official'

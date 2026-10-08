@@ -1,5 +1,4 @@
 import * as fs from 'fs/promises'
-import * as os from 'os'
 import * as path from 'path'
 import { AuthCodeListener } from '../../services/oauth/auth-code-listener.js'
 import {
@@ -16,6 +15,9 @@ import {
 } from '../../services/grokAuth/client.js'
 import type { GrokOAuthTokenResponse } from '../../services/grokAuth/types.js'
 import { logTokenRefreshFailure } from './oauthRefreshLog.js'
+// G2 批：路径助手下沉 L0（./grokOAuthPath.ts）——本文件 import 引用并**按名再导出**（导出面不变）。
+import { getHeiheiGrokOAuthFilePath } from '../../utils/grokOAuthPath.js'
+export { getHeiheiGrokOAuthFilePath }
 import {
   getNetworkProxyUrl,
   loadNetworkSettings,
@@ -65,11 +67,6 @@ function escapeHtml(value: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;')
-}
-
-export function getHeiheiGrokOAuthFilePath(): string {
-  const configDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
-  return path.join(configDir, 'cc-heihei', 'grok-oauth.json')
 }
 
 export class HeiheiGrokOAuthService {

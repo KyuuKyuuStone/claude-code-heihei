@@ -28,62 +28,6 @@
     }
   },
   {
-    "type": "dependency",
-    "from": "src/server/api/computer-use.ts",
-    "to": "src/server/api/computer-use-python.ts",
-    "unresolvedTo": "./computer-use-python.js",
-    "dependencyTypes": [
-      "local",
-      "import"
-    ],
-    "rule": {
-      "severity": "error",
-      "name": "layer-L4-no-same-layer"
-    }
-  },
-  {
-    "type": "dependency",
-    "from": "src/server/api/localFile.ts",
-    "to": "src/server/api/filesystem.ts",
-    "unresolvedTo": "./filesystem.js",
-    "dependencyTypes": [
-      "local",
-      "import"
-    ],
-    "rule": {
-      "severity": "error",
-      "name": "layer-L4-no-same-layer"
-    }
-  },
-  {
-    "type": "dependency",
-    "from": "src/server/api/localFile.ts",
-    "to": "src/server/api/previewFs.ts",
-    "unresolvedTo": "./previewFs.js",
-    "dependencyTypes": [
-      "local",
-      "import"
-    ],
-    "rule": {
-      "severity": "error",
-      "name": "layer-L4-no-same-layer"
-    }
-  },
-  {
-    "type": "dependency",
-    "from": "src/server/api/workspaceSearch.ts",
-    "to": "src/server/api/filesystem.ts",
-    "unresolvedTo": "./filesystem.js",
-    "dependencyTypes": [
-      "local",
-      "import"
-    ],
-    "rule": {
-      "severity": "error",
-      "name": "layer-L4-no-same-layer"
-    }
-  },
-  {
     "type": "cycle",
     "from": "src/server/services/conversationService.ts",
     "to": "src/server/services/servantIncidentNotifier.ts",
@@ -109,57 +53,6 @@
         "dependencyTypes": [
           "local",
           "dynamic-import"
-        ]
-      }
-    ]
-  },
-  {
-    "type": "cycle",
-    "from": "src/server/services/grokOfficialProvider.ts",
-    "to": "src/server/services/heiheiGrokOAuthService.ts",
-    "unresolvedTo": "./heiheiGrokOAuthService.js",
-    "dependencyTypes": [
-      "local",
-      "import"
-    ],
-    "rule": {
-      "severity": "error",
-      "name": "no-circular"
-    },
-    "cycle": [
-      {
-        "name": "src/server/services/heiheiGrokOAuthService.ts",
-        "dependencyTypes": [
-          "local",
-          "import"
-        ]
-      },
-      {
-        "name": "src/server/services/networkSettings.ts",
-        "dependencyTypes": [
-          "local",
-          "import"
-        ]
-      },
-      {
-        "name": "src/server/services/settingsService.ts",
-        "dependencyTypes": [
-          "local",
-          "import"
-        ]
-      },
-      {
-        "name": "src/server/services/persistentStorageMigrations.ts",
-        "dependencyTypes": [
-          "local",
-          "import"
-        ]
-      },
-      {
-        "name": "src/server/services/grokOfficialProvider.ts",
-        "dependencyTypes": [
-          "local",
-          "import"
         ]
       }
     ]

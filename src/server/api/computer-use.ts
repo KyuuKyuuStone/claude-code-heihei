@@ -15,7 +15,8 @@ import { fileURLToPath } from 'url'
 import type { CuPermissionRequest } from '../../vendor/computer-use-mcp/types.js'
 import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
-import { detectPythonRuntime, isPythonVersionAtLeast } from './computer-use-python.js'
+// G2 批：改从 L2 实现取（原 import api 同层文件 ⇒ layer-L4-no-same-layer）
+import { detectPythonRuntime, isPythonVersionAtLeast } from '../services/computerUsePython.js'
 import { buildPipInstallAttempts } from '../../utils/computerUse/pipInstall.js'
 import {
   DEFAULT_DESKTOP_GRANT_FLAGS,

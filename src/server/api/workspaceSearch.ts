@@ -1,6 +1,7 @@
 import * as path from 'node:path'
 import { ApiError } from '../middleware/errorHandler.js'
-import { searchFilesystemEntries } from './filesystem.js'
+// G2 B-c 批：改从 L2 实现取（原 import api 同层文件 ⇒ layer-L4-no-same-layer）
+import { searchFilesystemEntries } from '../services/filesystemSearch.js'
 
 const WORKSPACE_SEARCH_RESULT_LIMIT = 200
 

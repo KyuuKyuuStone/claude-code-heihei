@@ -1,7 +1,10 @@
 import * as path from 'node:path'
-import { isAllowedFilesystemPath } from './filesystem.js'
-import { serveFileWithRange } from './previewFs.js'
-import { canonicalizeExistingFilesystemPath } from '../services/filesystemPathSecurity.js'
+// G2 B-c 批：两项都改从 L2 实现取（原 import api 同层文件 ⇒ layer-L4-no-same-layer）
+import { serveFileWithRange } from '../services/fileServing.js'
+import {
+  canonicalizeExistingFilesystemPath,
+  isAllowedFilesystemPath,
+} from '../services/filesystemPathSecurity.js'
 import { normalizeDriveRootPathForPlatform } from '../services/windowsDrivePath.js'
 
 const PREFIX = '/local-file/'
