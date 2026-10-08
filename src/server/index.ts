@@ -49,6 +49,11 @@ import { registerServantIncidentDeliver } from './services/servantIncidentNotifi
 registerServantIncidentDeliver((targetSessionId, content, serverHost) =>
   sessionMessenger.deliver(targetSessionId, content, serverHost),
 )
+// v1.7.4 B1-2 断环：rosterDigest 的花名册读取改为注入缝（原在服务内动态 import
+// servantService，触发 no-dynamic-import-in-services，且为绕开
+// conversationService → rosterDigest → servantService 静态环）。本模块是 L4 汇聚点。
+import { registerRosterDigestDeps } from './services/rosterDigest.js'
+registerRosterDigestDeps({ listServants: () => servantService.listServants() })
 import { dispatchMailboxService } from './services/dispatchMailboxService.js'
 // v1.6.0 任务台账：订阅 sessionRegistry 的回合事件，把「员工回合开始消费」
 // 落成任务状态 accepted → in_progress。L1 → 本模块（L4 汇聚点）单向订阅，

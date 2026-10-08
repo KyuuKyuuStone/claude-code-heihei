@@ -29,18 +29,22 @@ export type RosterDigestDeps = {
   listServants: () => Promise<RosterDigestEntry[]>
 }
 
-let depsOverride: RosterDigestDeps | null = null
+let depsProvider: RosterDigestDeps | null = null
 
-/** 测试注入（避免真读花名册）。传 null 复位。 */
-export function setRosterDigestDepsForTests(deps: RosterDigestDeps | null): void {
-  depsOverride = deps
+/**
+ * 装配根注入（生产）：server/index.ts 启动序调用，形态同 registerServantInfoSource。
+ *
+ * 本模块**不 import 任何业务模块**。原实现用动态 import 取 servantService 以绕开
+ * conversationService → rosterDigest → servantService 静态环，但那触发
+ * `no-dynamic-import-in-services` 门禁；改由 L4 汇聚点（server/index.ts）反向接线。
+ */
+export function registerRosterDigestDeps(provider: RosterDigestDeps): void {
+  depsProvider = provider
 }
 
-async function resolveDeps(): Promise<RosterDigestDeps> {
-  if (depsOverride) return depsOverride
-  // 动态 import：避免 conversationService → rosterDigest → servantService 的静态环。
-  const { servantService } = await import('./servantService.js')
-  return { listServants: () => servantService.listServants() as unknown as Promise<RosterDigestEntry[]> }
+/** 测试注入（避免真读花名册）。传 null 复位。 */
+export function setRosterDigestDepsForTests(provider: RosterDigestDeps | null): void {
+  depsProvider = provider
 }
 
 /** 由花名册条目构造摘要（纯函数，供测试直接调用）。 */
@@ -65,8 +69,9 @@ export async function appendRosterDigestIfSupervisor(
   sessionId: string,
   content: string,
 ): Promise<string> {
-  const deps = await resolveDeps()
-  const entries = await deps.listServants()
+  // 未装配（未走 L4 启动序，如单测）⇒ 不注入。摘要属加强项，不得阻塞投递。
+  if (!depsProvider) return content
+  const entries = await depsProvider.listServants()
   const self = entries.find((e) => e.sessionId === sessionId)
   if (!self?.supervisor) return content
   if (content.includes(ROSTER_DIGEST_MARK)) return content
