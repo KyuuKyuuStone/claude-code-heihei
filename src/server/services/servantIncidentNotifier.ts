@@ -79,7 +79,7 @@ export function registerServantIncidentDeliver(
   fn: (targetSessionId: string, content: string, serverHost: string) => Promise<boolean>,
 ): void {
   wiredDeliver = fn
-}
+}
 /** G2 B-d 批：中断通道接线（原为动态 import conversationService）。 */
 export function registerServantIncidentInterrupt(fn: (sessionId: string) => void): void {
   wiredInterrupt = fn
