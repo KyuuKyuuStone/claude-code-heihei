@@ -29,7 +29,7 @@ import { getDesktopHost } from '../../lib/desktopHost'
 import { hasRunningBackgroundTasks } from '../../lib/backgroundTasks'
 import { WindowControls, showWindowControls } from './WindowControls'
 import { OpenProjectMenu } from './OpenProjectMenu'
-import { Folder, FolderOpen, SquareTerminal, ListChecks } from 'lucide-react'
+import { ClipboardList, Folder, FolderOpen, SquareTerminal } from 'lucide-react'
 import { ActionDialog } from '@/components/ui/ActionDialog'
 import { buildSessionActivityModel, hasVisibleSessionActivity } from '../activity/sessionActivityModel'
 import { SessionActivityButton } from '../activity/SessionActivityButton'
@@ -276,7 +276,7 @@ export function TabBar() {
       </div>
       <div className="relative flex shrink-0 items-center gap-1 px-2 before:absolute before:left-0 before:top-1/2 before:h-4 before:w-px before:-translate-y-1/2 before:bg-[var(--color-tab-separator)]">
         {showActivityButton && activeTabId && <SessionActivityButton sessionId={activeTabId} />}
-        {isDesktopRuntime && <IconButton icon={<ListChecks size={17} strokeWidth={1.9} />} label="协作任务台账" onClick={() => useTabStore.getState().openCollabTasksTab()} size="md" tone={activeTabId === COLLAB_TASKS_TAB_ID ? 'default' : 'muted'} pressed={activeTabId === COLLAB_TASKS_TAB_ID} />}
+        {isDesktopRuntime && <IconButton icon={<ClipboardList size={17} strokeWidth={1.9} />} label="协作任务台账" onClick={() => useTabStore.getState().openCollabTasksTab()} size="md" tone={activeTabId === COLLAB_TASKS_TAB_ID ? 'default' : 'muted'} pressed={activeTabId === COLLAB_TASKS_TAB_ID} />}
         {isDesktopRuntime && isActiveSessionTab && <OpenProjectMenu path={openProjectPath} />}
         <IconButton icon={<SquareTerminal size={17} strokeWidth={1.9} />} label={t('tabs.openTerminal')} onClick={() => { if (activeTabId && isActiveSessionTab) { useTerminalPanelStore.getState().togglePanel(activeTabId); return } useTabStore.getState().openTerminalTab() }} size="md" tone={isTerminalPanelOpen ? 'default' : 'muted'} pressed={isTerminalPanelOpen} data-active={isTerminalPanelOpen ? 'true' : 'false'} />
         {isActiveSessionTab && activeTabId && <IconButton icon={isWorkspacePanelOpen ? <FolderOpen size={18} strokeWidth={1.9} /> : <Folder size={18} strokeWidth={1.9} />} label={t(isWorkspacePanelOpen ? 'tabs.hideWorkspace' : 'tabs.showWorkspace')} onClick={() => { const workbench = useWorkspacePanelStore.getState(); if (workbench.isPanelOpen(activeTabId) && workbench.getMode(activeTabId) === 'workspace') workbench.closePanel(activeTabId); else { workbench.setMode(activeTabId, 'workspace'); workbench.openPanel(activeTabId) } }} size="md" tone={isWorkspacePanelOpen ? 'default' : 'muted'} pressed={isWorkspacePanelOpen} data-active={isWorkspacePanelOpen ? 'true' : 'false'} />}
