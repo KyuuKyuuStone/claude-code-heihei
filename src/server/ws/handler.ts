@@ -119,6 +119,23 @@ import {
   resolveSessionWorkDir,
 } from './handlerPures.js'
 
+// v1.7.4 结构拆分（B1-1 · 会话活动域批①）：三张活动状态表与写入原语迁往
+// ./sessionActivity.ts（同目录、定义点唯一）。类型与三个导出名仍由本模块提供，
+// 故此处按名接回，消费方 import 面不变。
+import {
+  beginSessionChatActivity,
+  clearSessionChatActivity,
+  failSessionChatActivity,
+  getSessionChatTerminalState,
+  isSessionChatInterrupted,
+  isSessionChatLegacyQueued,
+  markLegacySessionChatQueued,
+  markSessionChatInterrupted,
+  resetSessionChatActivityForTests,
+  settleSessionChatActivity,
+  type SessionChatActivityState,
+} from './sessionActivity.js'
+
 const settingsService = new SettingsService()
 const providerService = new ProviderService()
 
@@ -180,51 +197,9 @@ const activeBackgroundTaskIds = new Map<string, Set<string>>()
 // ── (C) 类批①：deferredRuntimeRestarts / deferredPermissionModes 两个 Map 已搬到
 // ./deferredRuntimeState.ts（定义点唯一），此处经同名 import 使用其单操作原语。
 
-export type SessionChatActivityState =
-  | 'waiting'
-  | 'failed'
-  | 'review'
-  | 'running'
-  | 'idle'
-
-/**
- * Activity status deliberately reuses the authoritative WebSocket turn and
- * permission state above. Only failures and the legacy REST queue fallback
- * need their own memory; successful completion returns directly to idle.
- */
-const terminalSessionChatStates = new Map<string, 'failed'>()
-const legacyQueuedSessionChats = new Set<string>()
-const interruptedSessionChats = new Set<string>()
-
-function beginSessionChatActivity(sessionId: string): void {
-  terminalSessionChatStates.delete(sessionId)
-  legacyQueuedSessionChats.delete(sessionId)
-  interruptedSessionChats.delete(sessionId)
-}
-
-function failSessionChatActivity(sessionId: string): void {
-  legacyQueuedSessionChats.delete(sessionId)
-  interruptedSessionChats.delete(sessionId)
-  terminalSessionChatStates.set(sessionId, 'failed')
-}
-
-function settleSessionChatActivity(sessionId: string, cliMsg: any): void {
-  if (cliMsg?.type !== 'result') return
-
-  legacyQueuedSessionChats.delete(sessionId)
-  if (interruptedSessionChats.has(sessionId)) {
-    terminalSessionChatStates.delete(sessionId)
-    return
-  }
-  if (cliMsg.is_error) {
-    terminalSessionChatStates.set(sessionId, 'failed')
-    return
-  }
-
-  // A successful result is complete. Keeping the tab open does not imply that
-  // the user has an outstanding review action.
-  terminalSessionChatStates.delete(sessionId)
-}
+// ── (B1-1) 会话活动状态三表与写入原语已上提到 ./sessionActivity.ts：
+// getSessionChatActivityState / markSessionChatQueued / clearLegacySessionChatState
+// 三个导出留在本文件（消费方 import 面逐项不变），改为调该模块的访问器与原语。
 
 type CliBackgroundTaskLifecycle = {
   taskId: string
@@ -288,7 +263,7 @@ export function getSessionChatActivityState(sessionId: string): SessionChatActiv
   // An explicit stop wins over permission queues that the CLI has not emitted
   // cancellation events for yet. Otherwise a stopped session would remain stuck
   // in waiting until that asynchronous cleanup arrived.
-  if (interruptedSessionChats.has(sessionId)) return 'idle'
+  if (isSessionChatInterrupted(sessionId)) return 'idle'
   if (
     conversationService.getPendingPermissionRequests(sessionId).length > 0 ||
     computerUseApprovalService.getPendingRequests(sessionId).length > 0
@@ -296,21 +271,18 @@ export function getSessionChatActivityState(sessionId: string): SessionChatActiv
     return 'waiting'
   }
   if (hasActiveTurn(sessionId) || hasActiveBackgroundTasks(sessionId)) return 'running'
-  return terminalSessionChatStates.get(sessionId)
-    ?? (legacyQueuedSessionChats.has(sessionId) ? 'running' : 'idle')
+  return getSessionChatTerminalState(sessionId)
+    ?? (isSessionChatLegacyQueued(sessionId) ? 'running' : 'idle')
 }
 
 /** Compatibility fallback for the legacy REST enqueue endpoint. */
 export function markSessionChatQueued(sessionId: string): void {
-  beginSessionChatActivity(sessionId)
-  legacyQueuedSessionChats.add(sessionId)
+  markLegacySessionChatQueued(sessionId)
 }
 
 /** Compatibility reset for the legacy REST stop endpoint. */
 export function clearLegacySessionChatState(sessionId: string): void {
-  legacyQueuedSessionChats.delete(sessionId)
-  terminalSessionChatStates.delete(sessionId)
-  interruptedSessionChats.delete(sessionId)
+  clearSessionChatActivity(sessionId)
 }
 const validPermissionModes = new Set<PermissionMode>([
   'default',
@@ -1350,9 +1322,7 @@ export function interruptSessionRuntime(sessionId: string): { stopped: boolean }
   console.log(`[WS] Stop generation requested for session: ${sessionId}`)
 
   sessionStopRequested.add(sessionId)
-  legacyQueuedSessionChats.delete(sessionId)
-  terminalSessionChatStates.delete(sessionId)
-  interruptedSessionChats.add(sessionId)
+  markSessionChatInterrupted(sessionId)
 
   const stopped = Boolean(
     stoppedTurnOwner !== null && conversationService.hasSession(sessionId),
@@ -1680,9 +1650,7 @@ function cleanupSessionRuntimeState(sessionId: string) {
   clearSession(sessionId)
   sessionStopRequested.delete(sessionId)
   activeBackgroundTaskIds.delete(sessionId)
-  terminalSessionChatStates.delete(sessionId)
-  legacyQueuedSessionChats.delete(sessionId)
-  interruptedSessionChats.delete(sessionId)
+  clearSessionChatActivity(sessionId)
   deleteDeferredRuntimeRestart(sessionId)
   deleteDeferredPermissionMode(sessionId)
   runtimeTransitionPromises.delete(sessionId)
@@ -3306,9 +3274,7 @@ export function __resetWebSocketHandlerStateForTests(): void {
   resetRegistryForTests()
   activeBackgroundTaskIds.clear()
   sessionStopRequested.clear()
-  terminalSessionChatStates.clear()
-  legacyQueuedSessionChats.clear()
-  interruptedSessionChats.clear()
+  resetSessionChatActivityForTests()
 }
 
 export function __markPrewarmPendingForTests(sessionId: string): void {
