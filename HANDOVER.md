@@ -275,6 +275,8 @@
 （界面侧 `desktop/src/components/activity/SessionActivityPanel.tsx` 存在、但**不调任何 HTTP 端点**
 （无 fetch/api/store 调用，数据经 props/WS），全仓 `session-activity` 的 HTTP 引用零命中；CLI/工具亦无调用）
 ⇒ 不造没人用的接口。**本条即放弃留痕**（含理由与日期），不再悬着。逐条状态表与证据：`D:/xxw_p/cc-heihei-plan/框架改造目标对账_2026-10-08.md`
+- **v1.7.4 sessionService 族外移（B2/B3/B4，2026-10-08，已落地；下一批族④待做）**：按方案「每族一批」把四个族整簇外移到同层（L2）新模块 `src/server/services/transcriptDerivation.ts`，注入缝为 `TranscriptDerivationHost`（5 项：`providerService` / `readJsonlFile`〔**测试接缝**，必须注入〕/ `findSessionFile` / `getSessionLaunchInfo` / `sessionEffortLevels`〔常量在族外另有 4 处使用，故不随族搬〕），**依赖单向**（新模块不 import sessionService，含 `import type`）。已落：**B2 族①** 上下文窗口/用量族（`37595c3`，sessionService **3796 → 3301**）；**B3 族②** 检查快照族（`3d4c103`，**3301 → 2984**）；**B4 族③** 消息窗口/用量族（sessionService **2984 → 2659**）。各族均：门面导出类型**按名再导出**（导出面逐项不变）、逐字保真比对、tsc 错误签名多重集净 0。**未确定**：sessionService 仍 > 2500 ⇒ 豁免（cap 3846）保留，「只紧不松」是否收紧待裁；族④（会话写入/维护族）未开工。
+- **`SessionLaunchInfo` 归属备忘（2026-10-08，B3 裁决遗留）**：该类型的**定义点**已随族② 搬到 `src/server/services/transcriptDerivation.ts`（族②本色构造它；搬回或复制都会违反「禁反向 import」/引漂移险），sessionService 仅**按名再导出**；但它的**生产者** `getSessionLaunchInfo` 仍留在 sessionService（不属已搬的 ①②③ 族）⇒ **该类型暂由新模块持有，待其生产者所在批次再论归属**（搬族④ 或专门批次时一并裁决，别让它悬着）。
 
 **待核实候选**（2026-09-14 协作实测发现；2026-09-16 更新处置状态）
 - **文件信箱通道未消费** → **已加固（随 v1.2.0 发布）**：核实结论为「未复现失败、重启自愈、链路零代码差异」——失效机理是 watcher 未建立或事后失效，**无补建/重试/日志机制、完全静默**，故会复发；v1.2.0 已加**周期兜底扫描（默认 45 秒）+ 重建缺失 watcher**。见 `D:/xxw_p/cc-heihei-docs/v1.2.x/批次1_信箱通道核实报告_20260915.md`
