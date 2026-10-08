@@ -31,7 +31,10 @@ import { roughTokenCountEstimationForMessage } from '../../services/tokenEstimat
 import type { PersistedWorktreeSession } from './localIndex/types.js'
 import type { PreparedSessionWorkspace } from './repositoryLaunchService.js'
 import {
+  appendJsonlEntry,
   appendSubagentToolMessages,
+  getProjectsDir,
+  sanitizePath,
   streamJsonlFile,
   subagentTranscriptPath,
 } from './session/jsonlStorage.js'
@@ -40,8 +43,14 @@ import { ApiError } from '../middleware/errorHandler.js'
 import { createReadStream } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import { createInterface } from 'node:readline'
+import * as path from 'node:path'
 import { entriesToMessages, normalizeMessageUsage } from './session/messageConversion.js'
 import { isVisibleTranscriptMessageEntry } from './session/transcriptEntries.js'
+import {
+  parsePersistedTaskNotification,
+  parseTaskNotificationContent,
+} from './session/transcriptContent.js'
+import type { FileHistorySnapshot } from '../../utils/fileHistory.js'
 import {
   extractAgentIdFromResultText,
   extractAgentToolUseId,
@@ -49,14 +58,17 @@ import {
 } from './session/transcriptAgents.js'
 import { sessionSummaryIndexStore, type SessionUsageTotals } from './sessionSummaryIndexStore.js'
 import { ProviderService } from './providerService.js'
-import { formatCost } from './session/sessionUtils.js'
+import { formatCost, isValidSessionId } from './session/sessionUtils.js'
 import {
   applyRuntimeContextMetadata,
+  countTranscriptMessages,
   desanitizePath,
+  resolvePermissionModeFromEntries,
+  resolveRepositoryFromEntries,
+  resolveWorkDirFromEntries,
   resolveRuntimeContextMetadataFromEntries,
   VALID_SESSION_PERMISSION_MODES,
 } from './session/sessionEntryMetadata.js'
-
 
 export type TranscriptUsageSnapshot = {
   source: 'transcript'
@@ -210,6 +222,24 @@ function safeJsonLength(value: unknown): number {
   }
 }
 
+/** 任务通知条目类型标记（随族④ 搬来；全仓只此族使用） */
+const PERSISTED_TASK_NOTIFICATION_ENTRY_TYPE = 'cc-heihei-task-notification'
+
+export type TrimSessionResult = {
+  removedCount: number
+  removedMessageIds: string[]
+}
+
+export type SessionTaskNotification = {
+  taskId: string
+  toolUseId: string
+  status: 'completed' | 'failed' | 'stopped'
+  summary?: string
+  result?: string
+  outputFile?: string
+  timestamp?: string
+}
+
 /**
  * launch 提示的最小结构面（= sessionEntryMetadata 里 `ProviderContextWindowHint` 的同形定义）。
  * 那边**刻意不导出**该类型（见 sessionService 的对应注释），本模块若 import 会把它的既存
@@ -232,11 +262,25 @@ export type TranscriptDerivationHost = {
   readJsonlFile: (filePath: string) => Promise<RawEntry[]>
   /** 定位会话转录文件；依赖 sessionService 的索引模式实例状态 ⇒ 以函数注入 */
   findSessionFile: (sessionId: string) => Promise<SessionFileMatch | null>
+  /** 失效会话列表缓存；族外另有 4 处调用点（会话列表族）⇒ 不随族 */
+  invalidateSessionListCache: () => void
+  /** 找同名会话的全部文件；:1519 的 findSessionFile 也用它 ⇒ 不随族 */
+  findSessionFiles: (sessionId: string) => Promise<Array<{ filePath: string; projectDir: string }>>
+  /** 按类型定向读条目；内部依赖 local index 机制（getUsableIndexMode /
+   *  localIndexGateway / markIndexReadFailure / targetedEntryReader）⇒ 不随族 */
+  readTargetedJsonlEntries: (
+    found: { filePath: string; projectDir: string },
+    entryTypes: string[],
+  ) => Promise<RawEntry[] | null>
+  /** 只读时钟（构造选项可注入）⇒ 保持单一真源，不随族 */
+  now: () => number
   /** 会话 effort 档位白名单；该常量在 sessionService 另有族外使用点（:658/:2942/:3086）
    *  ⇒ 不随本族搬（以免重复定义），经宿主注入。 */
   sessionEffortLevels: ReadonlySet<string>
-  /** 族外方法（P2-a 加固过），本族仅 1 处调用 */
-  getSessionLaunchInfo: (sessionId: string) => Promise<TranscriptDerivationLaunchHint | null>
+  /** 族外方法（P2-a 加固过）；返回**完整** SessionLaunchInfo——族④ 的
+   *  metadataMatchesLaunchInfo 要逐字段比对（workDir/repository/permissionMode/…），
+   *  窄化的 LaunchHint 不足以赋值 ⇒ 这里用精确类型 */
+  getSessionLaunchInfo: (sessionId: string) => Promise<SessionLaunchInfo | null>
 }
 
 export class TranscriptDerivation {
@@ -969,7 +1013,6 @@ export class TranscriptDerivation {
     }
   }
 
-
   async getSessionMessages(sessionId: string): Promise<MessageEntry[]> {
     const found = await this.host.findSessionFile(sessionId)
     if (!found) {
@@ -1272,6 +1315,369 @@ export class TranscriptDerivation {
     )
 
     return `${count}:${last}:${subagentSignatures.join('|')}`
+  }
+
+  private metadataMatchesLaunchInfo(
+    launchInfo: SessionLaunchInfo | null,
+    metadata: {
+      workDir: string
+      repository?: PreparedSessionWorkspace['repository']
+      permissionMode?: string
+      runtimeProviderId?: string | null
+      runtimeModelId?: string
+      effortLevel?: string
+    },
+  ): boolean {
+    if (!launchInfo) return false
+    if (normalizeDriveRootPathForPlatform(launchInfo.workDir) !== metadata.workDir) {
+      return false
+    }
+    if (
+      JSON.stringify(launchInfo.repository ?? null) !==
+      JSON.stringify(metadata.repository ?? null)
+    ) {
+      return false
+    }
+    if (
+      metadata.permissionMode &&
+      VALID_SESSION_PERMISSION_MODES.has(metadata.permissionMode) &&
+      launchInfo.permissionMode !== metadata.permissionMode
+    ) {
+      return false
+    }
+    if (
+      metadata.runtimeProviderId !== undefined &&
+      launchInfo.runtimeProviderId !== metadata.runtimeProviderId
+    ) {
+      return false
+    }
+    if (metadata.runtimeModelId && launchInfo.runtimeModelId !== metadata.runtimeModelId) {
+      return false
+    }
+    if (
+      metadata.effortLevel &&
+      this.host.sessionEffortLevels.has(metadata.effortLevel) &&
+      launchInfo.effortLevel !== metadata.effortLevel
+    ) {
+      return false
+    }
+    return true
+  }
+
+  async deleteSessionFile(sessionId: string): Promise<void> {
+    const found = await this.host.findSessionFile(sessionId)
+    if (!found) return
+    await fs.unlink(found.filePath)
+    this.host.invalidateSessionListCache()
+  }
+
+  async clearSessionTranscript(
+    sessionId: string,
+    fallbackWorkDir?: string,
+    preservedPermissionMode?: string,
+  ): Promise<void> {
+    let found = await this.host.findSessionFile(sessionId)
+    if (!found && fallbackWorkDir) {
+      const resolvedPath = path.resolve(normalizeDriveRootPathForPlatform(fallbackWorkDir))
+      const absWorkDir = await fs.realpath(resolvedPath).catch(() => resolvedPath)
+      const dirPath = path.join(getProjectsDir(), sanitizePath(absWorkDir))
+      await fs.mkdir(dirPath, { recursive: true })
+      found = {
+        filePath: path.join(dirPath, `${sessionId}.jsonl`),
+        projectDir: sanitizePath(absWorkDir),
+      }
+    }
+    if (!found) {
+      throw ApiError.notFound(`Session not found: ${sessionId}`)
+    }
+
+    const entries = await this.host.readJsonlFile(found.filePath)
+    const workDir = resolveWorkDirFromEntries(entries, found.projectDir) || fallbackWorkDir || process.cwd()
+    const repository = resolveRepositoryFromEntries(entries)
+    const permissionMode = (
+      preservedPermissionMode &&
+      VALID_SESSION_PERMISSION_MODES.has(preservedPermissionMode)
+    )
+      ? preservedPermissionMode
+      : resolvePermissionModeFromEntries(entries)
+    const now = new Date().toISOString()
+
+    const initialEntry = {
+      type: 'file-history-snapshot',
+      messageId: crypto.randomUUID(),
+      snapshot: {
+        messageId: crypto.randomUUID(),
+        trackedFileBackups: {},
+        timestamp: now,
+      },
+      isSnapshotUpdate: false,
+    }
+
+    const metaEntry = {
+      type: 'session-meta',
+      isMeta: true,
+      workDir,
+      repository,
+      ...(permissionMode ? { permissionMode } : {}),
+      timestamp: now,
+    }
+
+    await fs.writeFile(
+      found.filePath,
+      `${JSON.stringify(initialEntry)}\n${JSON.stringify(metaEntry)}\n`,
+      'utf-8',
+    )
+    this.host.invalidateSessionListCache()
+  }
+
+  async appendSessionMetadata(
+    sessionId: string,
+    metadata: {
+      workDir: string
+      customTitle?: string | null
+      repository?: PreparedSessionWorkspace['repository']
+      permissionMode?: string
+      runtimeProviderId?: string | null
+      runtimeModelId?: string
+      effortLevel?: string
+    }
+  ): Promise<void> {
+    const matches = await this.host.findSessionFiles(sessionId)
+    if (matches.length === 0) return
+
+    let repository = metadata.repository
+    if (!repository) {
+      for (const match of matches) {
+        const candidate = resolveRepositoryFromEntries(await this.host.readJsonlFile(match.filePath))
+        if (candidate) {
+          repository = candidate
+          break
+        }
+      }
+    }
+
+    const normalizedWorkDir = normalizeDriveRootPathForPlatform(metadata.workDir)
+    const targetProjectDir = sanitizePath(normalizedWorkDir)
+    const targetFilePath = path.join(getProjectsDir(), targetProjectDir, `${sessionId}.jsonl`)
+
+    if (!metadata.customTitle) {
+      const launchInfo = await this.host.getSessionLaunchInfo(sessionId)
+      if (this.metadataMatchesLaunchInfo(launchInfo, {
+        ...metadata,
+        workDir: normalizedWorkDir,
+        repository,
+      })) {
+        return
+      }
+    }
+
+    await fs.mkdir(path.dirname(targetFilePath), { recursive: true })
+
+    await appendJsonlEntry(targetFilePath, {
+      type: 'session-meta',
+      isMeta: true,
+      workDir: normalizedWorkDir,
+      repository,
+      ...(metadata.permissionMode && VALID_SESSION_PERMISSION_MODES.has(metadata.permissionMode)
+        ? { permissionMode: metadata.permissionMode }
+        : {}),
+      ...(metadata.runtimeProviderId !== undefined
+        ? { runtimeProviderId: metadata.runtimeProviderId }
+        : {}),
+      ...(metadata.runtimeModelId ? { runtimeModelId: metadata.runtimeModelId } : {}),
+      ...(metadata.effortLevel && this.host.sessionEffortLevels.has(metadata.effortLevel)
+        ? { effortLevel: metadata.effortLevel }
+        : {}),
+      timestamp: new Date().toISOString(),
+    })
+
+    if (metadata.customTitle) {
+      await appendJsonlEntry(targetFilePath, {
+        type: 'custom-title',
+        customTitle: metadata.customTitle,
+        timestamp: new Date().toISOString(),
+      })
+    }
+    this.host.invalidateSessionListCache()
+  }
+
+  async deletePlaceholderSessionFiles(
+    sessionId: string,
+    keepWorkDir: string,
+  ): Promise<number> {
+    if (!isValidSessionId(sessionId)) return 0
+
+    const projectsDir = getProjectsDir()
+    let projectDirs: import('node:fs').Dirent[]
+    try {
+      projectDirs = await fs.readdir(projectsDir, { withFileTypes: true })
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 0
+      throw err
+    }
+
+    const keepProjectDir = sanitizePath(normalizeDriveRootPathForPlatform(keepWorkDir))
+    let removed = 0
+    for (const projectDir of projectDirs) {
+      if (!projectDir.isDirectory()) continue
+      if (projectDir.name === keepProjectDir) continue
+      const filePath = path.join(projectsDir, projectDir.name, `${sessionId}.jsonl`)
+      const entries = await this.host.readJsonlFile(filePath)
+      if (entries.length === 0) continue
+
+      if (countTranscriptMessages(entries) > 0) continue
+
+      await fs.rm(filePath, { force: true })
+      removed += 1
+    }
+    if (removed > 0) this.host.invalidateSessionListCache()
+    return removed
+  }
+
+  async trimSessionMessagesFrom(
+    sessionId: string,
+    startMessageId: string,
+  ): Promise<TrimSessionResult> {
+    const found = await this.host.findSessionFile(sessionId)
+    if (!found) {
+      throw ApiError.notFound(`Session not found: ${sessionId}`)
+    }
+
+    const entries = await this.host.readJsonlFile(found.filePath)
+    const activeMessages = entriesToMessages(entries)
+    const startIndex = activeMessages.findIndex((message) => message.id === startMessageId)
+
+    if (startIndex < 0) {
+      throw ApiError.badRequest(`Message not found in active session chain: ${startMessageId}`)
+    }
+
+    const removedMessageIds = activeMessages
+      .slice(startIndex)
+      .map((message) => message.id)
+    const remainingMessageIds = new Set(
+      activeMessages
+        .slice(0, startIndex)
+        .map((message) => message.id),
+    )
+
+    if (removedMessageIds.length === 0) {
+      return { removedCount: 0, removedMessageIds: [] }
+    }
+
+    const removedIds = new Set(removedMessageIds)
+    const filteredEntries = entries.filter(
+      (entry) => {
+        if (typeof entry.uuid !== 'string') return true
+        if (removedIds.has(entry.uuid)) return false
+        if (
+          entry.message?.role &&
+          (entry.type === 'user' || entry.type === 'assistant' || entry.type === 'system')
+        ) {
+          return remainingMessageIds.has(entry.uuid)
+        }
+        return true
+      },
+    )
+
+    const content =
+      filteredEntries.length > 0
+        ? filteredEntries.map((entry) => JSON.stringify(entry)).join('\n') + '\n'
+        : ''
+    await fs.writeFile(found.filePath, content, 'utf-8')
+    this.host.invalidateSessionListCache()
+
+    return {
+      removedCount: removedMessageIds.length,
+      removedMessageIds,
+    }
+  }
+
+  async getSessionFileHistorySnapshots(
+    sessionId: string,
+  ): Promise<FileHistorySnapshot[]> {
+    const found = await this.host.findSessionFile(sessionId)
+    if (!found) {
+      throw ApiError.notFound(`Session not found: ${sessionId}`)
+    }
+
+    const entries = await this.host.readTargetedJsonlEntries(
+      found,
+      ['file-history-snapshot'],
+    ) ?? await this.host.readJsonlFile(found.filePath)
+    const snapshotsByMessageId = new Map<string, FileHistorySnapshot>()
+
+    for (const entry of entries) {
+      if (entry.type !== 'file-history-snapshot' || !entry.snapshot) continue
+
+      const snapshotMessageId =
+        typeof entry.snapshot.messageId === 'string'
+          ? entry.snapshot.messageId
+          : typeof entry.messageId === 'string'
+            ? entry.messageId
+            : null
+
+      if (!snapshotMessageId) continue
+
+      snapshotsByMessageId.set(snapshotMessageId, {
+        messageId: snapshotMessageId as FileHistorySnapshot['messageId'],
+        trackedFileBackups:
+          entry.snapshot.trackedFileBackups &&
+          typeof entry.snapshot.trackedFileBackups === 'object'
+            ? (entry.snapshot.trackedFileBackups as FileHistorySnapshot['trackedFileBackups'])
+            : {},
+        timestamp: new Date(
+          entry.snapshot.timestamp || entry.timestamp || new Date().toISOString(),
+        ),
+      })
+    }
+
+    return [...snapshotsByMessageId.values()]
+  }
+
+  async appendSessionTaskNotification(
+    sessionId: string,
+    notification: SessionTaskNotification,
+  ): Promise<void> {
+    const normalized = parsePersistedTaskNotification(
+      notification,
+      notification.timestamp ?? new Date(this.host.now()).toISOString(),
+    )
+    if (!normalized) return
+
+    const found = await this.host.findSessionFile(sessionId)
+    if (!found) return
+
+    await appendJsonlEntry(found.filePath, {
+      type: PERSISTED_TASK_NOTIFICATION_ENTRY_TYPE,
+      isMeta: true,
+      taskNotification: normalized,
+      timestamp: normalized.timestamp,
+    })
+    this.host.invalidateSessionListCache()
+  }
+
+  async getSessionTaskNotifications(
+    sessionId: string,
+  ): Promise<SessionTaskNotification[]> {
+    const found = await this.host.findSessionFile(sessionId)
+    if (!found) {
+      throw ApiError.notFound(`Session not found: ${sessionId}`)
+    }
+
+    const entries = await this.host.readTargetedJsonlEntries(
+      found,
+      ['user', PERSISTED_TASK_NOTIFICATION_ENTRY_TYPE],
+    ) ?? await this.host.readJsonlFile(found.filePath)
+    const notifications = new Map<string, SessionTaskNotification>()
+    for (const entry of entries) {
+      const notification = entry.type === PERSISTED_TASK_NOTIFICATION_ENTRY_TYPE
+        ? parsePersistedTaskNotification(entry.taskNotification, entry.timestamp)
+        : entry.message?.role === 'user'
+          ? parseTaskNotificationContent(entry.message.content, entry.timestamp)
+          : null
+      if (notification) notifications.set(notification.toolUseId, notification)
+    }
+    return [...notifications.values()]
   }
 
 }
