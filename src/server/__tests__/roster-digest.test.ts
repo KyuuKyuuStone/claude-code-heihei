@@ -6,6 +6,7 @@ import {
   setRosterDigestDepsForTests,
   type RosterDigestEntry,
 } from '../services/rosterDigest.js'
+import { setDiagnosticsLogWriterForTests } from '../../utils/diagLogs.js'
 
 /** v1.7.4 B2：给在册主管的注入消息捎带花名册摘要（只对主管、幂等、插在页脚之前）。 */
 
@@ -15,7 +16,10 @@ const emp = (role: string, i = 0): RosterDigestEntry => ({ sessionId: `emp-${rol
 function withRoster(entries: RosterDigestEntry[]) {
   setRosterDigestDepsForTests({ listServants: async () => entries })
 }
-afterEach(() => setRosterDigestDepsForTests(null))
+afterEach(() => {
+  setRosterDigestDepsForTests(null)
+  setDiagnosticsLogWriterForTests(null)
+})
 
 describe('rosterDigest（B2）', () => {
   test('① 出现位置：主管注入⇒摘要落在正文之后；非主管⇒原样不注入', async () => {
@@ -59,5 +63,28 @@ describe('rosterDigest（B2）', () => {
     withRoster([sup, emp('前端')])
     const once = await appendRosterDigestIfSupervisor('sup-1', 'hi')
     expect(await appendRosterDigestIfSupervisor('sup-1', once)).toBe(once)
+  })
+
+  test('⑥ 花名册读失败 ⇒ 降级不阻塞：原样送达 + 留痕（不静默）', async () => {
+    const logs: Array<{ level: string; event: string; data: Record<string, unknown> }> = []
+    setDiagnosticsLogWriterForTests((level, event, data) => {
+      logs.push({ level, event, data })
+    })
+    setRosterDigestDepsForTests({
+      listServants: async () => {
+        throw new Error('roster read boom')
+      },
+    })
+
+    const original = '派活正文\n\n任务 ID：abc-123；完工汇报目标：sup-1；'
+    const out = await appendRosterDigestIfSupervisor('sup-1', original)
+    // 降级：一字不改、不含摘要、页脚仍是最后非空行（投递不被阻塞）
+    expect(out).toBe(original)
+    expect(out).not.toContain(ROSTER_DIGEST_MARK)
+    // 留痕：warn 级 + 明确事件名 + 可诊断的错误信息
+    const hit = logs.find((l) => l.event === 'roster_digest_list_failed')
+    expect(hit).toBeTruthy()
+    expect(hit?.level).toBe('warn')
+    expect(hit?.data.error).toBe('roster read boom')
   })
 })

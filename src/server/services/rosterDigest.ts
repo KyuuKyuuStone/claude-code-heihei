@@ -12,6 +12,8 @@
  * 硬约束：**摘要必须插在页脚之前**（折叠契约要求页脚是最后一个非空行）。
  */
 
+import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
+
 /** 摘要里最多列出的 role 数（超出以「等 N 人」聚合）。8 ≈ 40–60 字符：每次注入都带，须与上下文成本相称。 */
 export const ROSTER_DIGEST_MAX_ROLES = 8
 
@@ -71,7 +73,20 @@ export async function appendRosterDigestIfSupervisor(
 ): Promise<string> {
   // 未装配（未走 L4 启动序，如单测）⇒ 不注入。摘要属加强项，不得阻塞投递。
   if (!depsProvider) return content
-  const entries = await depsProvider.listServants()
+
+  // 摘要挂在**每条注入消息**的通路上：花名册读失败绝不可冒泡阻塞所有投递 ⇒
+  // 降级为原文，但留可诊断痕迹（对齐 servantInfoSource 的「加强项不得阻塞」口径）。
+  let entries: RosterDigestEntry[]
+  try {
+    entries = await depsProvider.listServants()
+  } catch (error) {
+    logForDiagnosticsNoPII('warn', 'roster_digest_list_failed', {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return content
+  }
+
   const self = entries.find((e) => e.sessionId === sessionId)
   if (!self?.supervisor) return content
   if (content.includes(ROSTER_DIGEST_MARK)) return content
