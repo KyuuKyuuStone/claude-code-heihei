@@ -58,6 +58,24 @@ describe("G9 foldVendorForms（跨机器形态折叠）", () => {
   });
 });
 
+describe("G9 sortLiteralUnions（并集成员序跨平台归一）", () => {
+  test("两环境 union 顺序差归一后同 key", () => {
+    const a = `Type '"keep_alive"' is not comparable to type '"ping" | "sync_state" | "set_runtime_config"'.`;
+    const b = `Type '"keep_alive"' is not comparable to type '"ping" | "set_runtime_config" | "sync_state"'.`;
+    expect(normalizeMessage(a)).toBe(normalizeMessage(b));
+  });
+  test("成员集合有真实差异排序后仍不同（不放宽）", () => {
+    const a = `Type '"keep_alive"' is not comparable to type '"ping" | "sync_state"'.`;
+    const b = `Type '"keep_alive"' is not comparable to type '"ping" | "sync_state" | "extra"'.`;
+    expect(normalizeMessage(a)).not.toBe(normalizeMessage(b));
+  });
+  test("非 union 文本不变", () => {
+    expect(normalizeMessage("Type 'A' is not assignable to type 'B'.")).toBe(
+      "Type 'A' is not assignable to type 'B'.",
+    );
+  });
+});
+
 const LINE = (file: string, line: number, col: number, code: string, msg: string) =>
   `${file}(${line},${col}): ${code}: ${msg}`;
 

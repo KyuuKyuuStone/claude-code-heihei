@@ -93,9 +93,19 @@ export function parseTscOutput(text: string): TscDiag[] {
   return out;
 }
 
+// 字面量并集成员排序归一：TS 对 union 的成员序在跨平台间不稳定（文件枚举顺序差 ⇒ 同一类型两环境
+// 打印顺序不同，如 '"ping" | "sync_state"' vs '"ping" | "permission_response"'）⇒ 按字典序重排成员。
+// 只排序不增删：成员集合有真实差异（一边多一个成员）排序后仍不同 ⇒ 仍判红，不放宽。
+function sortLiteralUnions(s: string): string {
+  return s.replace(
+    /(['"])(?:[^'"\\]|\\.)*\1(?:\s*\|\s*(['"])(?:[^'"\\]|\\.)*\2)+/g,
+    (m) => m.split(/\s*\|\s*/).sort().join(" | "),
+  );
+}
+
 export function normalizeMessage(message: string): string {
   const firstLine = message.split(/\r?\n/)[0] ?? "";
-  return foldVendorForms(firstLine).replace(/\d+/g, "N");
+  return sortLiteralUnions(foldVendorForms(firstLine).replace(/\d+/g, "N"));
 }
 
 export function buildSignatures(diags: TscDiag[]): Map<string, number> {
