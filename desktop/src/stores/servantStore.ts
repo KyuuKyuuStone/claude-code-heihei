@@ -45,6 +45,12 @@ type ServantStore = {
    */
   turnInProgressBySessionId: Record<string, boolean>
   isLoading: boolean
+  /**
+   * v1.7.3 裁决（未登记会话可登记）：花名册拉取失败时置原始错误串——
+   * store 只存 error（B8 口径），消费面板负责渲染（与「未登记（永久）」
+   * 区分开，后者可放行登记、前者给重试）。
+   */
+  error: string | null
 
   fetchServants: () => Promise<void>
   setServant: (sessionId: string, input: ServantInput) => Promise<void>
@@ -101,9 +107,10 @@ export const useServantStore = create<ServantStore>((set) => ({
   bySessionId: {},
   turnInProgressBySessionId: {},
   isLoading: false,
+  error: null,
 
   fetchServants: async () => {
-    set({ isLoading: true })
+    set({ isLoading: true, error: null })
     try {
       const bySessionId = await fetchAll()
       set((s) => ({
@@ -118,8 +125,8 @@ export const useServantStore = create<ServantStore>((set) => ({
           ),
         },
       }))
-    } catch {
-      set({ isLoading: false })
+    } catch (err) {
+      set({ isLoading: false, error: err instanceof Error ? err.message : String(err) })
     }
   },
 

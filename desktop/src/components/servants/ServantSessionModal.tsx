@@ -45,6 +45,13 @@ type Identity = 'employee' | 'supervisor'
 
 const CLAUDE_OFFICIAL_OPTION_VALUE = ''
 
+function bySessionIdKey(
+  bySessionId: Record<string, unknown>,
+  sessionId: string | undefined,
+): unknown {
+  return sessionId ? bySessionId[sessionId] : undefined
+}
+
 function SectionTitle({ children }: { children: ReactNode }) {
   return (
     <div className="flex items-center gap-2.5" aria-hidden="true">
@@ -71,11 +78,19 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
     activeProviderName,
   } = useSettingsStore()
 
-  // edit 模式花名册尚未读到：不渲染空表单，避免用户误保存覆盖原身份（设计稿 2.2）。
-  // 「未读到」要区分两态：花名册拉取尚未完成（继续 loading），与拉取完成后确实
-  // 不在花名册（缺陷 #2 曾永久转圈——对此给出明确失败态 + 重试）。
-  const [rosterState, setRosterState] = useState<'pending' | 'ready' | 'missing'>('pending')
+  // edit 模式花名册三态（v1.7.3 裁决）：服务端 PUT 是 upsert 且专门实现了「首次
+  // 登记」流程——对未登记会话应**放行表单并完成登记**（此前误判为死路并给伪重试）。
+  //   pending      拉取中（锁表单，防误保存）
+  //   ready        已在花名册（编辑既有身份）
+  //   unregistered 拉取成功但确实不在册 → 放行表单，提交即首次登记
+  //   loadFailed   拉取失败（可重试；与「未登记」永久条件区分开）
+  const [rosterState, setRosterState] = useState<'pending' | 'ready' | 'unregistered' | 'loadFailed'>('pending')
   const rosterAttemptedRef = useRef<string | undefined>(undefined)
+  const resolveRosterState = (): 'ready' | 'unregistered' | 'loadFailed' => {
+    const store = useServantStore.getState()
+    if (bySessionIdKey(store.bySessionId, sessionId)) return 'ready'
+    return store.error ? 'loadFailed' : 'unregistered'
+  }
   useEffect(() => {
     if (!open || mode !== 'edit') return
     if (existing) {
@@ -86,7 +101,7 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
     rosterAttemptedRef.current = sessionId
     setRosterState('pending')
     void useServantStore.getState().fetchServants().then(() => {
-      setRosterState(useServantStore.getState().bySessionId[sessionId ?? ''] ? 'ready' : 'missing')
+      setRosterState(resolveRosterState())
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, mode, existing, sessionId])
@@ -94,11 +109,12 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
     if (!sessionId) return
     setRosterState('pending')
     void useServantStore.getState().fetchServants().then(() => {
-      setRosterState(useServantStore.getState().bySessionId[sessionId] ? 'ready' : 'missing')
+      setRosterState(resolveRosterState())
     })
   }
-  const rosterMissing = mode === 'edit' && !existing && rosterState === 'missing'
-  const editingLoading = mode === 'edit' && !existing && !rosterMissing
+  const rosterLoadFailed = mode === 'edit' && !existing && rosterState === 'loadFailed'
+  const showUnregisteredHint = mode === 'edit' && !existing && rosterState === 'unregistered'
+  const editingLoading = mode === 'edit' && !existing && rosterState === 'pending'
 
   const [identity, setIdentity] = useState<Identity>(
     existing?.supervisor ? 'supervisor' : 'employee',
@@ -342,8 +358,8 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
 
   const roleRequired = mode === 'create' && identity === 'employee' && !role.trim()
   const writeDirsInvalid = constraint === 'whitelist' && parsedWriteDirs.length === 0
-  // rosterMissing（不在花名册）下表单未渲染，提交同样锁死——否则空表单可被误提交
-  const canSubmit = !editingLoading && !rosterMissing && !isSubmitting && !roleRequired && !writeDirsInvalid
+  // v1.7.3：未登记（unregistered）放行提交（upsert 首次登记）；仅拉取中/拉取失败锁。
+  const canSubmit = !editingLoading && !rosterLoadFailed && !isSubmitting && !roleRequired && !writeDirsInvalid
 
   const handleSubmit = async () => {
     if (!canSubmit) return
@@ -452,10 +468,10 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
         </div>
       }
     >
-      {rosterMissing ? (
+      {rosterLoadFailed ? (
         <div className="flex flex-col items-center gap-3 py-8">
           <p className="text-center text-[13px] leading-5 text-[var(--color-text-secondary)]">
-            {t('servant.modal.notInRoster')}
+            {t('servant.modal.rosterLoadFailed')}
           </p>
           <Button variant="secondary" size="sm" onClick={retryRoster}>
             {t('common.retry')}
@@ -467,6 +483,11 @@ export function ServantSessionModal({ open, onClose, mode, sessionId, workDir }:
         </p>
       ) : (
         <div className="flex flex-col gap-4">
+          {showUnregisteredHint && (
+            <p className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2 text-[12.5px] leading-5 text-[var(--color-text-secondary)]">
+              {t('servant.modal.notInRoster')}
+            </p>
+          )}
           {/* ── 身份 ───────────────────────────────────────────── */}
           <section className="flex flex-col gap-3">
             <SectionTitle>{t('servant.modal.identity')}</SectionTitle>

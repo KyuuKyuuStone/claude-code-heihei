@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -369,21 +369,47 @@ describe('ServantSessionModal i18n', () => {
 })
 
 describe('ServantSessionModal 编辑路径 · 目标不在花名册（缺陷 #2 永久加载态）', () => {
-  it('显示失败态与重试入口，提交按钮锁死', async () => {
+  it('未登记会话放行表单，提交即完成登记（v1.7.3 裁决：upsert 首次登记）', async () => {
     seedStores()
+    const onClose = vi.fn()
+    render(<ServantSessionModal open mode="edit" sessionId="ghost-session" onClose={onClose} />)
+
+    // 引导语（不再是失败语 + 伪重试），表单放行
+    expect(await screen.findByText('该会话尚未登记为协作会话；填写以下信息并保存即完成登记。')).toBeInTheDocument()
+    expect(screen.queryByText(/正在加载原设置/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '重试' })).not.toBeInTheDocument()
+    const submit = screen.getByRole('button', { name: '保存设置' })
+    expect(submit).toBeEnabled()
+
+    // 提交走既有 upsert → 首次登记（服务端流程），弹窗关闭
+    await act(async () => {
+      fireEvent.click(submit)
+    })
+    await waitFor(() => {
+      expect(vi.mocked(servantsApi.set)).toHaveBeenCalledWith(
+        'ghost-session',
+        expect.objectContaining({ enabled: true }),
+      )
+      expect(onClose).toHaveBeenCalled()
+    })
+  })
+
+  it('花名册拉取失败时给出失败态与重试，重试成功后转为未登记引导', async () => {
+    seedStores()
+    vi.mocked(servantsApi.list).mockRejectedValueOnce(new Error('roster boom'))
     render(<ServantSessionModal open mode="edit" sessionId="ghost-session" onClose={vi.fn()} />)
 
-    // 失败态出现（不再永久「正在加载原设置」）
-    expect(await screen.findByText('未在协作花名册中找到该会话，无法编辑其协作设置。')).toBeInTheDocument()
-    expect(screen.queryByText(/正在加载原设置/)).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '重试' })).toBeInTheDocument()
-    // 提交按钮与失败态一致：锁死
-    expect(screen.getByRole('button', { name: '保存设置' })).toBeDisabled()
+    // 拉取失败（可重试）与「未登记（永久）」区分开
+    expect(await screen.findByText('花名册读取失败，请重试。')).toBeInTheDocument()
+    const retry = screen.getByRole('button', { name: '重试' })
 
-    // 重试后仍不在册 → 失败态保持（不吞结果）
-    fireEvent.click(screen.getByRole('button', { name: '重试' }))
-    expect(await screen.findByText(/未在协作花名册/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '保存设置' })).toBeDisabled()
+    // 重试成功（空花名册）→ 未登记引导 + 表单放行
+    vi.mocked(servantsApi.list).mockResolvedValue({ servants: [] })
+    await act(async () => {
+      fireEvent.click(retry)
+    })
+    expect(await screen.findByText(/尚未登记为协作会话/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '保存设置' })).toBeEnabled()
   })
 
   it('edit 模式目标在花名册：正常渲染表单，不误伤', async () => {
