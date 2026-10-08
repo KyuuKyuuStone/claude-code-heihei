@@ -198,6 +198,18 @@
    - 相关不变量：表须保持**模块私有 + 状态唯一**，handler 侧改为经原语/访问器使用（同 B1-1/B1-2 口径）。
    - 证据来源：代码阅读 + B1-2 普查（`handler.ts` 读写点已列全：定义 `:384`(旧行号)/读 `:2600`/写 `:2603`/会话销毁 `:1661`/测试复位 `:3270`；行号随 B1-2 搬迁已前移）。
 
+10. **【测试卫生真缺陷·已修】协作推送 250ms 合并窗口未随用例复位 ⇒ 跨文件顺序依赖假红**（2026-10-08 登记并修复；**不进 `scripts/known-flaky.json`**——它是**确定性**缺陷，登记进去会误导后人以为「重跑就好」）
+   - **现象**：`bun test <文件A> <文件B>` 单进程多文件跑时，若先跑的文件里有用例在 C12 之前 ~250ms 内发过 `session_list` 信号，则 `websocket-handler.test.ts` 的 C12（`merges bursty session_list signals into one epoch broadcast`）必红：**Expected 5 / Received 193~199**。单跑该文件恒绿 ⇒ 典型「顺序依赖假红」（与产品行为无关）。
+   - **污染源定位（探针实测，非推断）**：`src/server/ws/handler.ts` 的 `pendingListEpoch` + `listMergeTimer` 是**模块级**合并窗口状态，只有专用钩子 `resetCollabPushBroadcastForTests()`（`:3111`）会清；而共享的每用例复位钩子 `__resetWebSocketHandlerStateForTests()`（`:3195`）清掉了十几项状态却**漏了这一对** ⇒ 上一个用例残留的**未超时窗口**把下一个用例自己的信号并了进去。探针输出（原序跑，修前）：
+     `[PROBE] signal e=199 timerPending=true pending=198 t=…567` → C12 自己的 `e=3/5/4 timerPending=true pending=199`（三次发射全被吞）→ `[PROBE] timerFire e=199` ⇒ 广播出「别人的」epoch 199（期望 5）。
+   - **修法**（`3251` 行，+4）：在 `__resetWebSocketHandlerStateForTests()` 末尾追加一行 `resetCollabPushBroadcastForTests()`（含 3 行注释说明成因）；未动门禁、未加白名单、未改产品行为（该钩子是 `__` 前缀的测试缝，生产不调用）。
+   - **原序复跑证据（修后，探针同步显示窗口已独立）**：`[PROBE] signal e=3 timerPending=false pending=null` → `e=5 pending=3` → `e=4 pending=5` → `timerFire e=5` ⇒ **C12 绿**。
+     · 序A（`conversations.test.ts` → `websocket-handler.test.ts`，修前必红）：修后 **17/17 连绿**（146 pass / 0 fail）
+     · 序B（`conversation-status`/`websocket-handler`/`ws-memory-events`/`task-notification-persistence`/`conversations`/`agents-api`，上轮失误序）：**206 pass / 0 fail**
+     · 另序（`collab-push`+`collab-task-service`+`websocket-handler`）：87 pass / 0 fail
+   - **残留未确定项**：修后另有 **2 次**（序A 1/18、5 文件批 1/15）出现过「1 fail」，我**只读了 tail 未留失败行**（自曝失误）。此后共 ~30 次连跑均未复现；怀疑是同批内既有的 harness 级偶发（`conversations.test.ts:3459` socket closed 在修前也见过一次），**与合并窗口泄漏无关**（泄漏路径已被探针证伪）。如需收口建议单开「潜伏偶发」专项批次（改动须带失败行捕获）。
+   - 证据来源：探针插桩实测（插桩后已逐字节撤净，`git diff` 只余 +4 行）+ 序列复跑。
+
 ### 能工作的
 - **v1.5.0 用户实测**：用户从 v1.2.7 升级后确认无 bug。`release-notes/v1.5.0.md` 与 README 定位一致：花名册高危修复、Windows 专属、移除外部 IM 适配器、bun 打包链；本地模型仍可用但已冻结，不参与协作会话。
 - **本地模型（冻结的可选功能）**：现有设置页、跑分、启动、下载中心、多模态、自定义引擎仍可用；不再新增功能、不参与协作会话。核心产品方向是会话级协作。
