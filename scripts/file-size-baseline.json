@@ -25,10 +25,6 @@
       "lines": 5005,
       "kind": "upstream"
     },
-    "src/server/services/sessionService.ts": {
-      "lines": 3795,
-      "kind": "own"
-    },
     "src/services/api/claude.ts": {
       "lines": 3831,
       "kind": "upstream"

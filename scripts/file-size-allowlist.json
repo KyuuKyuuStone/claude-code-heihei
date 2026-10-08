@@ -1,13 +1,4 @@
 {
   "comment": "文件行数豁免清单（v1.7.0 结构专项，架构评估 §2.3 + 补充裁决十一）。**只有架构师能添加条目**，实施者不得自行添加。每条必须含 path、kind（file|directory）、reason（拆不动的具体原因）、decisionRef（决策文档名）、expiresInVersion（计划降到 2500 行的版本）；expiresInVersion ≤ 当前 desktop/package.json 版本即过期，过期条目本身会导致门禁失败。kind=directory 用于上游整目录排除（同样走本豁免流程）。可选 cap 为该条目专属发版行数上限（缺省 3000），只紧不松。豁免是有时效的债务登记，own 文件 ≤2500 的文字标准不变。初始条目见 entries。",
-  "entries": [
-    {
-      "path": "src/server/services/sessionService.ts",
-      "kind": "file",
-      "reason": "v1.7.2 已履行上档附加条件：红灯批首批=候选 A（派活/拉起解耦）落地——98c0280（session/transcriptReadCache.ts 新模块+用例）+ a97b534（三处读取点换线，净 +1，实测 3796）；本批为成本解耦非减行（裁决二十四如实声明）。下一档条件：1.7.3 须含红灯批次批（实例状态耦合区或裁决十候选 D）；cap 按实测 3796+50 收紧至 3846（补充裁决二十三/二十四/二十五）；**1.7.3 已含红灯区缺陷批 ⇒ 条件达成，续签至 1.7.4**（2026-10-04 主管代行裁决；普查定性「红灯区＝缺陷修复批」，v1.7.3 即该批：5 条登记缺陷 4 条已修、#5 带数据挂档）",
-      "decisionRef": "架构决策_v1.7结构拆分边界.md 补充裁决二十五",
-      "expiresInVersion": "1.7.4",
-      "cap": 3846
-    }
-  ]
+  "entries": []
 }
