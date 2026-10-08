@@ -8,32 +8,22 @@
 import { readTranscriptCached } from './session/transcriptReadCache.js'
 import { createReadStream, type Stats } from 'node:fs'
 import { createHash } from 'node:crypto'
+import { createInterface } from 'node:readline'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import * as os from 'node:os'
-import { createInterface } from 'node:readline'
 import { ApiError } from '../middleware/errorHandler.js'
 import type { FileHistorySnapshot } from '../../utils/fileHistory.js'
 // v1.7 结构拆分（sessionService 第③批）：findCanonicalGitRoot 的唯一使用者
 // resolveProjectRootFromSessionMetadata 已搬走，本文件不再需要该导入。
 import { calculateUSDCost, MODEL_COSTS } from '../../utils/modelCost.js'
 import {
-  MODEL_CONTEXT_WINDOW_DEFAULT,
-  getContextWindowForModel,
   getModelMaxOutputTokens,
-  is1mContextDisabled,
 } from '../../utils/context.js'
 import {
-  MODEL_CONTEXT_WINDOWS_ENV_KEY,
-  getModelContextWindowFromEnvValue,
-} from '../../utils/model/modelContextWindows.js'
-import {
-  calculateContextBudget,
-  getProviderUsageTrust,
   hasMediaInput,
 } from '../../utils/contextBudget.js'
 import { getCanonicalName } from '../../utils/model/model.js'
-import { isFirstPartyAnthropicBaseUrl } from '../../utils/model/providers.js'
 import {
   resolveSessionWorkspaceLaunch,
   type CreateSessionRepositoryOptions,
@@ -52,6 +42,19 @@ import {
   roughTokenCountEstimationForMessage,
 } from '../../services/tokenEstimation.js'
 import { ProviderService } from './providerService.js'
+import { TranscriptDerivation } from './transcriptDerivation.js'
+import type {
+  TranscriptContextEstimate,
+  TranscriptMetadataSnapshot,
+  TranscriptUsageSnapshot,
+} from './transcriptDerivation.js'
+// B2 族①：3 个类型的定义点随族迁到 ./transcriptDerivation.ts —— 本文件按名再导出
+// （导出面零变化），并以 import type 引用（族② :2191-2193 与类型 :259-261 仍在使用）。
+export type {
+  TranscriptContextEstimate,
+  TranscriptMetadataSnapshot,
+  TranscriptUsageSnapshot,
+} from './transcriptDerivation.js'
 import { reduceTranscript } from './localIndex/transcriptReducer.js'
 import {
   extractTitle,
@@ -296,71 +299,6 @@ export type SessionTaskNotification = {
   timestamp?: string
 }
 
-export type TranscriptUsageSnapshot = {
-  source: 'transcript'
-  totalCostUSD: number
-  costDisplay: string
-  hasUnknownModelCost: boolean
-  totalAPIDuration: number
-  totalDuration: number
-  totalLinesAdded: number
-  totalLinesRemoved: number
-  totalInputTokens: number
-  totalOutputTokens: number
-  totalCacheReadInputTokens: number
-  totalCacheCreationInputTokens: number
-  totalWebSearchRequests: number
-  models: Array<{
-    model: string
-    displayName: string
-    inputTokens: number
-    outputTokens: number
-    cacheReadInputTokens: number
-    cacheCreationInputTokens: number
-    webSearchRequests: number
-    costUSD: number
-    costDisplay: string
-    contextWindow: number
-    maxOutputTokens: number
-  }>
-}
-
-export type TranscriptMetadataSnapshot = {
-  model?: string
-  cwd?: string
-  version?: string
-}
-
-export type TranscriptContextEstimate = {
-  categories: Array<{
-    name: string
-    tokens: number
-    color: string
-    isDeferred?: boolean
-  }>
-  totalTokens: number
-  maxTokens: number
-  rawMaxTokens: number
-  percentage: number
-  gridRows: Array<Array<{
-    color: string
-    isFilled: boolean
-    categoryName: string
-    tokens: number
-    percentage: number
-    squareFullness: number
-  }>>
-  model: string
-  memoryFiles: Array<{ path: string; type: string; tokens: number }>
-  mcpTools: Array<{ name: string; serverName: string; tokens: number; isLoaded?: boolean }>
-  agents: Array<{ agentType: string; source: string; tokens: number }>
-  apiUsage: {
-    input_tokens: number
-    output_tokens: number
-    cache_creation_input_tokens: number
-    cache_read_input_tokens: number
-  }
-}
 
 // v1.7 结构拆分（sessionService 第②批）：RawEntry 随 Agent 子链 / Goal 本地命令
 // 解析方法搬到 ./session/transcriptAgents.ts，本文件改为 import type（仍不对外导出）。
@@ -409,34 +347,6 @@ const VALID_SESSION_EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'xhigh', '
 // NO_RESPONSE_REQUESTED_TEXT / TASK_NOTIFICATION_RE / TASK_NOTIFICATION_BLOCK_RE
 // 只被转录内容解析那 10 个方法使用，已随它们搬到 ./session/transcriptContent.js。
 const PERSISTED_TASK_NOTIFICATION_ENTRY_TYPE = 'cc-heihei-task-notification'
-const PROVIDER_MODEL_ALIAS_SEPARATORS = ['-', '_', ':', '/', '.', ' ']
-
-function normalizeProviderModelAlias(model: string): string {
-  return model
-    .trim()
-    .toLowerCase()
-    .replace(/\[1m\]$/i, '')
-    .replace(/:1m$/i, '')
-    .trim()
-}
-
-function providerModelLooksRelated(
-  transcriptModel: string,
-  configuredModel: string,
-): boolean {
-  const transcript = normalizeProviderModelAlias(transcriptModel)
-  const configured = normalizeProviderModelAlias(configuredModel)
-  if (!transcript || !configured) return false
-  if (transcript === configured) return true
-
-  const shorter = Math.min(transcript.length, configured.length)
-  if (shorter < 6) return false
-
-  return PROVIDER_MODEL_ALIAS_SEPARATORS.some((separator) => (
-    transcript.startsWith(`${configured}${separator}`) ||
-    configured.startsWith(`${transcript}${separator}`)
-  ))
-}
 
 function safeJsonLength(value: unknown): number {
   if (value === undefined) return 0
@@ -1711,207 +1621,38 @@ export class SessionService {
 
   private formatCost = formatCost
 
-  private async getProviderContextWindowForSession(
+  // ── B2 族①（上下文窗口/用量族）已整簇外移到 ./transcriptDerivation.ts ──────────
+  // 4 项族外能力经宿主对象注入（箭头惰性读 this.xxx，故字段次序无关、测试接缝仍生效）；
+  // 3 个 public 方法以同名类成员委托保留（测试有 spyOn(sessionService, 'getTranscriptContextEstimate')）。
+  private transcriptDerivation = new TranscriptDerivation({
+    providerService: this.providerService,
+    readJsonlFile: (filePath) => this.readJsonlFile(filePath),
+    findSessionFile: (sessionId) => this.findSessionFile(sessionId),
+    getSessionLaunchInfo: (sessionId) => this.getSessionLaunchInfo(sessionId),
+  })
+
+  async getTranscriptMetadata(sessionId: string): Promise<TranscriptMetadataSnapshot | null> {
+    return this.transcriptDerivation.getTranscriptMetadata(sessionId)
+  }
+
+  async getTranscriptContextEstimate(
     sessionId: string,
-    model: string,
-    launchInfoOverride?: ProviderContextWindowHint | null,
-  ): Promise<number | undefined> {
-    const launchInfo = launchInfoOverride ?? await this.getSessionLaunchInfo(sessionId).catch(() => null)
-    const providerIds: string[] = []
-    const allowSavedProviderInference = launchInfo?.runtimeProviderId === undefined
-
-    if (typeof launchInfo?.runtimeProviderId === 'string') {
-      providerIds.push(launchInfo.runtimeProviderId)
-    } else if (launchInfo?.runtimeProviderId !== null) {
-      const { activeId } = await this.providerService.listProviders().catch(() => ({ activeId: null }))
-      if (activeId) providerIds.push(activeId)
-    }
-
-    // Provider env model keys — these are the configured model names that
-    // should be used as fallback matching keys when the transcript model name
-    // (from the API response) doesn't match the modelContextWindows keys.
-    // Third-party APIs may return model names with provider-specific suffixes
-    // (e.g. "LongCat-2.0-Preview-LongCatAI" instead of "LongCat-2.0-Preview").
-    const providerEnvModelKeys = [
-      'ANTHROPIC_MODEL',
-      'ANTHROPIC_DEFAULT_FABLE_MODEL',
-      'ANTHROPIC_DEFAULT_HAIKU_MODEL',
-      'ANTHROPIC_DEFAULT_SONNET_MODEL',
-      'ANTHROPIC_DEFAULT_OPUS_MODEL',
-    ] as const
-
-    for (const providerId of providerIds) {
-      const env = await this.providerService.getProviderRuntimeEnv(providerId).catch(() => null)
-      const rawContextWindows = env?.[MODEL_CONTEXT_WINDOWS_ENV_KEY] ?? null
-      // Step 1: Try matching the transcript model name directly (current behavior)
-      const contextWindow = getModelContextWindowFromEnvValue(
-        model,
-        rawContextWindows,
-      )
-      if (contextWindow !== undefined) {
-        if (contextWindow > MODEL_CONTEXT_WINDOW_DEFAULT && is1mContextDisabled()) {
-          return MODEL_CONTEXT_WINDOW_DEFAULT
-        }
-        return contextWindow
-      }
-
-      // Step 2: Prefer the model this session actually launched with. Some
-      // third-party APIs return provider-specific aliases, but Desktop persists
-      // the requested runtime model in session metadata.
-      if (launchInfo?.runtimeModelId) {
-        const runtimeModelWindow = getModelContextWindowFromEnvValue(
-          launchInfo.runtimeModelId,
-          rawContextWindows,
-        )
-        if (runtimeModelWindow !== undefined) {
-          if (runtimeModelWindow > MODEL_CONTEXT_WINDOW_DEFAULT && is1mContextDisabled()) {
-            return MODEL_CONTEXT_WINDOW_DEFAULT
-          }
-          return runtimeModelWindow
-        }
-      }
-
-      // Step 3: If transcript model name didn't match, try matching with
-      // the provider's configured model names as fallback keys.
-      // This handles the case where the API response returns a model name
-      // that differs from the user-configured model name (e.g. provider
-      // appends its own suffix like "-LongCatAI").
-      if (env && rawContextWindows) {
-        for (const envKey of providerEnvModelKeys) {
-          const configuredModel = env[envKey]
-          if (!configuredModel) continue
-          if (!providerModelLooksRelated(model, configuredModel)) continue
-          const fallbackWindow = getModelContextWindowFromEnvValue(
-            configuredModel,
-            rawContextWindows,
-          )
-          if (fallbackWindow !== undefined) {
-            if (fallbackWindow > MODEL_CONTEXT_WINDOW_DEFAULT && is1mContextDisabled()) {
-              return MODEL_CONTEXT_WINDOW_DEFAULT
-            }
-            return fallbackWindow
-          }
-        }
-      }
-    }
-
-    if (allowSavedProviderInference) {
-      return this.getUniqueSavedProviderContextWindow(model)
-    }
-
-    return undefined
+  ): Promise<TranscriptContextEstimate | null> {
+    return this.transcriptDerivation.getTranscriptContextEstimate(sessionId)
   }
 
-  private async getUniqueSavedProviderContextWindow(model: string): Promise<number | undefined> {
-    const { providers } = await this.providerService.listProviders().catch(() => ({ providers: [] }))
-    const matches: number[] = []
-    const providerEnvModelKeys = [
-      'ANTHROPIC_MODEL',
-      'ANTHROPIC_DEFAULT_FABLE_MODEL',
-      'ANTHROPIC_DEFAULT_HAIKU_MODEL',
-      'ANTHROPIC_DEFAULT_SONNET_MODEL',
-      'ANTHROPIC_DEFAULT_OPUS_MODEL',
-    ] as const
-
-    for (const provider of providers) {
-      const env = await this.providerService.getProviderRuntimeEnv(provider.id).catch(() => null)
-      const rawContextWindows = env?.[MODEL_CONTEXT_WINDOWS_ENV_KEY] ?? null
-      // Step 1: Try matching the transcript model name directly
-      const contextWindow = getModelContextWindowFromEnvValue(
-        model,
-        rawContextWindows,
-      )
-      if (contextWindow !== undefined) {
-        matches.push(contextWindow)
-        continue
-      }
-
-      // Step 2: Fallback to provider configured model names.
-      if (env && rawContextWindows) {
-        for (const envKey of providerEnvModelKeys) {
-          const configuredModel = env[envKey]
-          if (!configuredModel) continue
-          if (!providerModelLooksRelated(model, configuredModel)) continue
-          const fallbackWindow = getModelContextWindowFromEnvValue(
-            configuredModel,
-            rawContextWindows,
-          )
-          if (fallbackWindow !== undefined) {
-            matches.push(fallbackWindow)
-            break // One match per provider is enough
-          }
-        }
-      }
-    }
-
-    if (matches.length === 0) {
-      return undefined
-    }
-
-    const uniqueWindows = new Set(matches)
-    if (uniqueWindows.size !== 1) {
-      return undefined
-    }
-
-    const contextWindow = [...uniqueWindows][0]!
-    if (
-      contextWindow > MODEL_CONTEXT_WINDOW_DEFAULT &&
-      is1mContextDisabled()
-    ) {
-      return MODEL_CONTEXT_WINDOW_DEFAULT
-    }
-    return contextWindow
+  async getTranscriptUsage(sessionId: string): Promise<TranscriptUsageSnapshot | null> {
+    return this.transcriptDerivation.getTranscriptUsage(sessionId)
   }
 
+  // 族②（getInspectionTranscriptSnapshot，:1868/:1897）仍在本文件调用这两个原本私有的
+  // 方法 ⇒ 以同名私有成员委托保留，**调用点文本一行未改**（先例：workspace 可用性组）。
   private async getTranscriptContextWindow(
     sessionId: string,
     model: string,
     launchInfo?: ProviderContextWindowHint | null,
   ): Promise<number> {
-    const providerContextWindow = await this.getProviderContextWindowForSession(
-      sessionId,
-      model,
-      launchInfo,
-    )
-    if (providerContextWindow !== undefined) {
-      return providerContextWindow
-    }
-
-    try {
-      return getContextWindowForModel(model)
-    } catch (err) {
-      if (
-        err instanceof Error &&
-        err.message.includes('Config accessed before allowed')
-      ) {
-        return MODEL_CONTEXT_WINDOW_DEFAULT
-      }
-      throw err
-    }
-  }
-
-  async getTranscriptMetadata(sessionId: string): Promise<TranscriptMetadataSnapshot | null> {
-    const found = await this.findSessionFile(sessionId)
-    if (!found) return null
-
-    const entries = await this.readJsonlFile(found.filePath)
-    const metadata: TranscriptMetadataSnapshot = {}
-
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const entry = entries[i]!
-      if (!metadata.model && typeof entry.message?.model === 'string') {
-        metadata.model = entry.message.model
-      }
-      if (!metadata.cwd && typeof entry.cwd === 'string') {
-        metadata.cwd = entry.cwd
-      }
-      if (!metadata.version && typeof entry.version === 'string') {
-        metadata.version = entry.version
-      }
-      if (metadata.model && metadata.cwd && metadata.version) break
-    }
-
-    return metadata
+    return this.transcriptDerivation.getTranscriptContextWindow(sessionId, model, launchInfo)
   }
 
   private async buildTranscriptContextEstimate(
@@ -1927,252 +1668,16 @@ export class SessionService {
     transcriptHasMediaInput: boolean,
     launchInfo?: ProviderContextWindowHint | null,
   ): Promise<TranscriptContextEstimate> {
-    const rawMaxTokens = await this.getTranscriptContextWindow(sessionId, latest.model, launchInfo)
-    const promptTokens = latest.inputTokens + latest.cacheReadInputTokens + latest.cacheCreationInputTokens
-    const estimatedTokens = estimatedTokensFromMessages || promptTokens
-    const contextBudget = calculateContextBudget({
-      estimatedTokens,
-      contextWindow: rawMaxTokens,
-      currentUsage: {
-        input_tokens: latest.inputTokens,
-        output_tokens: latest.outputTokens,
-        cache_read_input_tokens: latest.cacheReadInputTokens,
-        cache_creation_input_tokens: latest.cacheCreationInputTokens,
-      },
-      usageTrust: getProviderUsageTrust({
-        isFirstPartyAnthropic: isFirstPartyAnthropicBaseUrl(),
-      }),
-      hasMediaInput: transcriptHasMediaInput,
-    })
-    const totalTokens = contextBudget.usedTokens
-    const percentage = rawMaxTokens > 0 ? Math.round((totalTokens / rawMaxTokens) * 100) : 0
-    const usageCategories: TranscriptContextEstimate['categories'] = [
-      { name: 'Input tokens', tokens: latest.inputTokens, color: '#8f3217' },
-      { name: 'Cache read', tokens: latest.cacheReadInputTokens, color: '#0f5c8f' },
-      { name: 'Cache write', tokens: latest.cacheCreationInputTokens, color: '#7c3aed' },
-      { name: 'Output tokens', tokens: latest.outputTokens, color: '#2f7d32' },
-    ]
-    const contextCategories: TranscriptContextEstimate['categories'] =
-      contextBudget.ignoredUsageReason === 'low_trust_media_usage'
-        ? [{ name: 'Estimated context', tokens: totalTokens, color: '#8f3217' }]
-        : usageCategories
-    const categories: TranscriptContextEstimate['categories'] = [
-      ...contextCategories,
-      { name: 'Free space', tokens: Math.max(0, rawMaxTokens - totalTokens), color: '#a1a1aa', isDeferred: true },
-    ].filter((category) => category.tokens > 0)
-
-    const filledSquares = Math.max(0, Math.min(100, Math.round((totalTokens / Math.max(1, rawMaxTokens)) * 100)))
-    const gridRows = Array.from({ length: 10 }, (_, row) =>
-      Array.from({ length: 10 }, (_, col) => {
-        const index = row * 10 + col
-        const isFilled = index < filledSquares
-        return {
-          color: isFilled ? '#8f3217' : '#a1a1aa',
-          isFilled,
-          categoryName: isFilled ? 'Input context' : 'Free space',
-          tokens: Math.round(rawMaxTokens / 100),
-          percentage: 1,
-          squareFullness: isFilled ? 1 : 0,
-        }
-      }),
-    )
-
-    return {
-      categories,
-      totalTokens,
-      maxTokens: rawMaxTokens,
-      rawMaxTokens,
-      percentage,
-      gridRows,
-      model: latest.model,
-      memoryFiles: [],
-      mcpTools: [],
-      agents: [],
-      apiUsage: {
-        input_tokens: latest.inputTokens,
-        output_tokens: latest.outputTokens,
-        cache_creation_input_tokens: latest.cacheCreationInputTokens,
-        cache_read_input_tokens: latest.cacheReadInputTokens,
-      },
-    }
-  }
-
-  async getTranscriptContextEstimate(sessionId: string): Promise<TranscriptContextEstimate | null> {
-    const found = await this.findSessionFile(sessionId)
-    if (!found) return null
-
-    const entries = await this.readJsonlFile(found.filePath)
-    let latest: {
-      model: string
-      inputTokens: number
-      outputTokens: number
-      cacheReadInputTokens: number
-      cacheCreationInputTokens: number
-    } | null = null
-    let estimatedTokensFromMessages = 0
-    let transcriptHasMediaInput = false
-
-    for (const entry of entries) {
-      if (
-        entry.type === 'user' ||
-        entry.type === 'assistant' ||
-        entry.type === 'attachment'
-      ) {
-        estimatedTokensFromMessages += roughTokenCountEstimationForMessage(entry)
-        if (!transcriptHasMediaInput && hasMediaInput([entry])) {
-          transcriptHasMediaInput = true
-        }
-      }
-
-      const usage = entry.message?.usage
-      const model = entry.message?.model
-      if (!usage || typeof model !== 'string') continue
-
-      const inputTokens = typeof usage.input_tokens === 'number' ? usage.input_tokens : 0
-      const outputTokens = typeof usage.output_tokens === 'number' ? usage.output_tokens : 0
-      const cacheReadInputTokens = typeof usage.cache_read_input_tokens === 'number' ? usage.cache_read_input_tokens : 0
-      const cacheCreationInputTokens = typeof usage.cache_creation_input_tokens === 'number' ? usage.cache_creation_input_tokens : 0
-
-      latest = {
-        model,
-        inputTokens,
-        outputTokens,
-        cacheReadInputTokens,
-        cacheCreationInputTokens,
-      }
-    }
-
-    if (!latest) return null
-
-    return await this.buildTranscriptContextEstimate(
+    return this.transcriptDerivation.buildTranscriptContextEstimate(
       sessionId,
       latest,
       estimatedTokensFromMessages,
       transcriptHasMediaInput,
-      this.resolveRuntimeContextMetadataFromEntries(entries),
+      launchInfo,
     )
   }
 
-  async getTranscriptUsage(sessionId: string): Promise<TranscriptUsageSnapshot | null> {
-    const found = await this.findSessionFile(sessionId)
-    if (!found) return null
 
-    const entries = await this.readJsonlFile(found.filePath)
-    let currentRuntimeHint: ProviderContextWindowHint = {}
-    const models = new Map<string, TranscriptUsageSnapshot['models'][number]>()
-    let totalCostUSD = 0
-    let totalInputTokens = 0
-    let totalOutputTokens = 0
-    let totalCacheReadInputTokens = 0
-    let totalCacheCreationInputTokens = 0
-    let totalWebSearchRequests = 0
-    let hasUnknownModelCost = false
-    let firstUsageAt: number | null = null
-    let lastUsageAt: number | null = null
-
-    for (const entry of entries) {
-      currentRuntimeHint = this.applyRuntimeContextMetadata(currentRuntimeHint, entry)
-      const usage = entry.message?.usage
-      const model = entry.message?.model
-      if (!usage || typeof model !== 'string') continue
-
-      const inputTokens = typeof usage.input_tokens === 'number' ? usage.input_tokens : 0
-      const outputTokens = typeof usage.output_tokens === 'number' ? usage.output_tokens : 0
-      const cacheReadInputTokens = typeof usage.cache_read_input_tokens === 'number' ? usage.cache_read_input_tokens : 0
-      const cacheCreationInputTokens = typeof usage.cache_creation_input_tokens === 'number' ? usage.cache_creation_input_tokens : 0
-      const webSearchRequests = typeof usage.server_tool_use?.web_search_requests === 'number'
-        ? usage.server_tool_use.web_search_requests
-        : 0
-
-      if (
-        inputTokens === 0 &&
-        outputTokens === 0 &&
-        cacheReadInputTokens === 0 &&
-        cacheCreationInputTokens === 0 &&
-        webSearchRequests === 0
-      ) {
-        continue
-      }
-
-      const canonical = getCanonicalName(model)
-      if (!Object.prototype.hasOwnProperty.call(MODEL_COSTS, canonical)) {
-        hasUnknownModelCost = true
-      }
-
-      const costUsage = {
-        input_tokens: inputTokens,
-        output_tokens: outputTokens,
-        cache_read_input_tokens: cacheReadInputTokens,
-        cache_creation_input_tokens: cacheCreationInputTokens,
-        server_tool_use: { web_search_requests: webSearchRequests },
-        speed: usage.speed,
-      } as Parameters<typeof calculateUSDCost>[1]
-      const costUSD = calculateUSDCost(model, costUsage)
-
-      let modelUsage = models.get(model)
-      if (!modelUsage) {
-        modelUsage = {
-          model,
-          displayName: canonical,
-          inputTokens: 0,
-          outputTokens: 0,
-          cacheReadInputTokens: 0,
-          cacheCreationInputTokens: 0,
-          webSearchRequests: 0,
-          costUSD: 0,
-          costDisplay: '$0.0000',
-          contextWindow: await this.getTranscriptContextWindow(sessionId, model, currentRuntimeHint),
-          maxOutputTokens: getModelMaxOutputTokens(model).default,
-        }
-        models.set(model, modelUsage)
-      }
-
-      modelUsage.inputTokens += inputTokens
-      modelUsage.outputTokens += outputTokens
-      modelUsage.cacheReadInputTokens += cacheReadInputTokens
-      modelUsage.cacheCreationInputTokens += cacheCreationInputTokens
-      modelUsage.webSearchRequests += webSearchRequests
-      modelUsage.costUSD += costUSD
-      modelUsage.costDisplay = this.formatCost(modelUsage.costUSD)
-
-      totalCostUSD += costUSD
-      totalInputTokens += inputTokens
-      totalOutputTokens += outputTokens
-      totalCacheReadInputTokens += cacheReadInputTokens
-      totalCacheCreationInputTokens += cacheCreationInputTokens
-      totalWebSearchRequests += webSearchRequests
-
-      if (entry.timestamp) {
-        const time = Date.parse(entry.timestamp)
-        if (!Number.isNaN(time)) {
-          firstUsageAt = firstUsageAt === null ? time : Math.min(firstUsageAt, time)
-          lastUsageAt = lastUsageAt === null ? time : Math.max(lastUsageAt, time)
-        }
-      }
-    }
-
-    if (models.size === 0) return null
-
-    return {
-      source: 'transcript',
-      totalCostUSD,
-      costDisplay: this.formatCost(totalCostUSD),
-      hasUnknownModelCost,
-      totalAPIDuration: 0,
-      totalDuration:
-        firstUsageAt !== null && lastUsageAt !== null
-          ? Math.max(0, Math.round((lastUsageAt - firstUsageAt) / 1000))
-          : 0,
-      totalLinesAdded: 0,
-      totalLinesRemoved: 0,
-      totalInputTokens,
-      totalOutputTokens,
-      totalCacheReadInputTokens,
-      totalCacheCreationInputTokens,
-      totalWebSearchRequests,
-      models: Array.from(models.values()),
-    }
-  }
 
   async getInspectionTranscriptSnapshot(sessionId: string): Promise<SessionInspectionTranscriptSnapshot | null> {
     const found = await this.findSessionFile(sessionId)
