@@ -190,13 +190,15 @@
    - 现状：**未动**（2026-10-08 主管裁决「本轮别去动」）；如需收口，改法与条目 7 同款（改记 `error.name` 或固定串）。
    - 证据来源：代码阅读（行号如上）。
 
-9. **建议单开批：`taskNotificationPersistence` + `persistCliTaskNotification` 上提**（**未实施**；2026-10-08 登记，供还债批 B 系列排期）
-   - 待搬内容（均在 `src/server/ws/handler.ts`）：状态表 `taskNotificationPersistence`（`Map<sessionId, Map<eventKey, Promise<void>>>`）+ 函数 `persistCliTaskNotification(sessionId, cliMsg)`（含事件键去重与写失败回滚）。
-   - **新增依赖边 2 条**（搬入模块需要 import，现已核实均不会成环）：`services/sessionService.js`（调 `appendSessionTaskNotification`）、同目录 `handlerPures.js`（调 `normalizeCliTaskNotification`）。
-   - **需新增一条再导出**：`__persistCliTaskNotificationForTests` 是本文件导出面成员（消费方 `__tests__/task-notification-persistence.test.ts:6`），搬走后 handler 须「同名再导出」以维持导出面逐项不变。
+9. **B1-3 任务通知持久化组外移**（**已实施** ✓；2026-10-08 登记、当日作为 B1-3 落地）
+   - **落地形态**：新模块 `src/server/ws/taskNotificationPersistence.ts`（59 行）：表 `taskNotificationPersistence` + 函数 `persistCliTaskNotification`（**逐字节搬移**，比对口径＝去掉 `export ` 前缀后与 `HEAD` 原文完全一致；原文 962 字符 / 新 969 字符，差值恰为 `export ` 7 字符）+ 三个控制原语：`forgetSessionTaskNotifications`（原 handler `delete(sessionId)` 点）、`resetTaskNotificationPersistenceForTests`（原 `__resetWebSocketHandlerStateForTests` 内 `clear()` 点）、`__persistCliTaskNotificationForTests`（同名再导出给测试用）。
+   - **handler 走线（读写点已 grep 列全后逐个改调）**：定义 `:312`（删）→ 迁出；`normalizeCliTaskNotification` 的 import（`:115`，搬走后 handler 内零使用 → 同时删除该 import 项）；会话销毁 `:1589`（→ `forgetSessionTaskNotifications`）；函数体 `:2521-2552`（删）；调用点 `:2600`（保留原调用，改由新模块 import）；测试复位 `:3198`（→ `resetTaskNotificationPersistenceForTests()`）；再导出 1 条（`export { __persistCliTaskNotificationForTests } from './taskNotificationPersistence.js'`）。
+   - **实测结果**：handler **3251 → 3227（−24）**（新模块 59 行不计入 handler）；**导出面机检 31 → 31、丢失 0、新增 0**（机检在动笔前先跑基线确认含目标符号）；表定义点全仓**唯一**（`grep "new Map<string, Map<string, Promise<void>>>()"` 命中 1 处，在 新模块 `:16`）。
+   - **承重性自证**（破坏必判红）：把去重分支改成 `if (false && existing) return existing` ⇒ **恰好一条用例判红**（`background task notification persistence > normalizes and persists one terminal SDK event for multiple observers`，`Expected: Promise { <pending> } / Received: serializes to the same string`），另 2 条仍绿 ⇒ 证明新模块的去重真在判定路径上、handler 内无残留副本；复原后 `sha256` 逐字节校回 `e1775780…`、3 pass / 0 fail。
+   - **测试**：`task-notification-persistence` + `websocket-handler` + `conversations` + `collab-push` + `conversation-status` 合并跑 **169 pass / 0 fail**（`env -u CLAUDE_COMPUTER_USE_ENABLED`）；三绿门禁 PASS（layers 3636 模块 / file-size / import-semantics）；`tsc --ignoreDeprecations 6.0` **总数 7255 == 基线、零新增**（handler 仍 4 条既有错误、仅行号前移 472→481 等）。
    - **未并入 B1-2 的理由**（主管采纳）：语义属「转录持久化」而非「活动状态」；且它比前两批多一条导出面再导出 + 两条新依赖边，混做会把两件事的验收搅在一起。
-   - 相关不变量：表须保持**模块私有 + 状态唯一**，handler 侧改为经原语/访问器使用（同 B1-1/B1-2 口径）。
-   - 证据来源：代码阅读 + B1-2 普查（`handler.ts` 读写点已列全：定义 `:384`(旧行号)/读 `:2600`/写 `:2603`/会话销毁 `:1661`/测试复位 `:3270`；行号随 B1-2 搬迁已前移）。
+   - **新增依赖边 2 条**（已核实不成环）：`services/sessionService.js`（`appendSessionTaskNotification`）、同目录 `handlerPures.js`（`normalizeCliTaskNotification`）。
+   - **方法论教训（本轮踩到）**：`tsc` **不可与文件改动并发跑** —— 我这次的破坏性实验与后台 tsc 并发，tsc 读到半破坏态文件、多报 1 条（`taskNotificationPersistence.ts(34,26) TS2322 … 'Promise<void> | undefined'`）；安静态重跑即 7255/零新增。凡「零新增」类证据，必须在**代码静止**后测。
 
 10. **【测试卫生真缺陷·已修】协作推送 250ms 合并窗口未随用例复位 ⇒ 跨文件顺序依赖假红**（2026-10-08 登记并修复；**不进 `scripts/known-flaky.json`**——它是**确定性**缺陷，登记进去会误导后人以为「重跑就好」）
    - **现象**：`bun test <文件A> <文件B>` 单进程多文件跑时，若先跑的文件里有用例在 C12 之前 ~250ms 内发过 `session_list` 信号，则 `websocket-handler.test.ts` 的 C12（`merges bursty session_list signals into one epoch broadcast`）必红：**Expected 5 / Received 193~199**。单跑该文件恒绿 ⇒ 典型「顺序依赖假红」（与产品行为无关）。
