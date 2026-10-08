@@ -41,6 +41,27 @@ import {
   notifySupervisorsOfProtocolUpdate,
   setSupervisorNoticeDeps,
 } from '../services/supervisorProtocolNotice.js'
+// B-d 批：L0 提供方缝 + notifier 中断缝 + 轮次事件总线
+import {
+  applyConfigEnvironmentVariables,
+  setCcHeiheiSettingsEnvProviderForTests,
+} from '../../utils/managedEnv.js'
+import {
+  onServantToolResult,
+  resetServantIncidentState,
+  setServantIncidentDeps,
+  setServantIncidentInterruptForTests,
+  UNKNOWN_TOOL_MARKER,
+  UNKNOWN_TOOL_STREAK_LIMIT,
+} from '../services/servantIncidentNotifier.js'
+import {
+  emitServantToolResult,
+  emitServantTurnError,
+  emitServantTurnErrorsCleared,
+  emitServantUnknownToolStreakReset,
+  resetServantTurnIncidentSubscribersForTests,
+  subscribeServantTurnIncidents,
+} from '../services/servantIncidentSignals.js'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -275,5 +296,162 @@ describe('G2 缝④（B-b）：sessionDelivery 投递缝', () => {
       console.warn = originalWarn
     }
     expect(warns.join(String.fromCharCode(10))).toContain('registerSessionDelivery')
+  })
+})
+
+// ─── B-d 批：两处缝 ─────────────────────────────────────────────────────────
+// ⑤ ccHeiheiSettingsEnv 提供方（L0 开口收回调：实现上提 L2）
+// ⑥ servantIncidentNotifier 中断通道（原动态 import conversationService ⇒ 校验接线/未接线两态）
+
+describe('G2 缝⑤（B-d）：ccHeiheiSettingsEnv 提供方缝', () => {
+  const snapshotEnv = () => ({ ...process.env })
+  const restoreEnv = (snap: Record<string, string | undefined>) => {
+    for (const key of Object.keys(process.env)) {
+      if (!(key in snap)) delete process.env[key]
+    }
+    Object.assign(process.env, snap)
+  }
+
+  afterEach(() => {
+    setCcHeiheiSettingsEnvProviderForTests(null)
+    setDiagnosticsLogWriterForTests(null)
+  })
+
+  it('注册后：provider 返回的 env 经真实路径合入 process.env', () => {
+    const snap = snapshotEnv()
+    try {
+      setCcHeiheiSettingsEnvProviderForTests(() => ({
+        CC_HEIHEI_G2_SEAM_PROBE: 'merged',
+      }))
+      applyConfigEnvironmentVariables()
+      // 用自定义键做探针：ANTHROPIC_BASE_URL 会被 filterSettingsEnv 按宿主托管变量剥掉（既有语义）
+      expect(process.env.CC_HEIHEI_G2_SEAM_PROBE).toBe('merged')
+    } finally {
+      restoreEnv(snap)
+    }
+  })
+
+  it('未注册 ⇒ 不合并且不炸进程，但记**一次性**诊断（非静默）', () => {
+    const snap = snapshotEnv()
+    const events: string[] = []
+    setDiagnosticsLogWriterForTests((_level, event) => {
+      events.push(event)
+    })
+    try {
+      applyConfigEnvironmentVariables()
+      applyConfigEnvironmentVariables()
+      expect(events.filter((e) => e === 'cc_heihei_settings_env_provider_unregistered')).toHaveLength(1)
+    } finally {
+      restoreEnv(snap)
+    }
+  })
+})
+
+describe('G2 缝⑥（B-d）：servantIncidentNotifier 中断通道', () => {
+  afterEach(() => {
+    setServantIncidentInterruptForTests(null)
+    setServantIncidentDeps(null)
+    resetServantIncidentState()
+    setDiagnosticsLogWriterForTests(null)
+  })
+
+  /** 连续 UNKNOWN_TOOL_STREAK_LIMIT 次「不存在工具」⇒ 熔断触发（内部会调 interrupt） */
+  const tripCircuitBreaker = async (sessionId: string) => {
+    setServantIncidentDeps({
+      getServant: async () => ({ enabled: true }) as never,
+      listServants: async () => [] as never,
+      deliver: async () => true,
+      recordEvent: () => {},
+    })
+    for (let i = 0; i < UNKNOWN_TOOL_STREAK_LIMIT; i++) {
+      await onServantToolResult({
+        sessionId,
+        resultText: `${UNKNOWN_TOOL_MARKER}: g2-probe-tool`,
+        isError: true,
+      })
+    }
+  }
+
+  it('接线后：熔断触发时调用注入的中断函数（原动态 import 的等价替身）', async () => {
+    const seen: string[] = []
+    setServantIncidentInterruptForTests((sessionId) => {
+      seen.push(sessionId)
+    })
+    await tripCircuitBreaker('g2-interrupt-1')
+    expect(seen).toEqual(['g2-interrupt-1'])
+  })
+
+  it('未接线 ⇒ 不炸进程，但记诊断（非静默）', async () => {
+    const events: string[] = []
+    setDiagnosticsLogWriterForTests((_level, event) => {
+      events.push(event)
+    })
+    await tripCircuitBreaker('g2-interrupt-2')
+    expect(events).toContain('servant_interrupt_delivery_failed')
+  })
+})
+
+describe('G2 缝⑥b（B-d）：员工轮次事件总线', () => {
+  afterEach(() => {
+    resetServantTurnIncidentSubscribersForTests()
+    setDiagnosticsLogWriterForTests(null)
+  })
+
+  it('订阅后：四类发射都送达订阅者', () => {
+    const got: string[] = []
+    subscribeServantTurnIncidents({
+      onTurnError: (input) => {
+        got.push(`err:${input.sessionId}:${input.streak}`)
+      },
+      clearTurnErrors: (sessionId) => {
+        got.push(`clear:${sessionId}`)
+      },
+      resetUnknownToolStreak: (sessionId) => {
+        got.push(`reset:${sessionId}`)
+      },
+      onToolResult: (input) => {
+        got.push(`tool:${input.sessionId}:${input.isError}`)
+      },
+    })
+
+    emitServantTurnError({ sessionId: 'g2-bus', streak: 2, summary: 's' })
+    emitServantTurnErrorsCleared('g2-bus')
+    emitServantUnknownToolStreakReset('g2-bus')
+    emitServantToolResult({ sessionId: 'g2-bus', resultText: 'r', isError: true })
+
+    expect(got).toEqual(['err:g2-bus:2', 'clear:g2-bus', 'reset:g2-bus', 'tool:g2-bus:true'])
+  })
+
+  it('订阅者同步抛 / 异步 reject ⇒ 不冒泡，都记同一条诊断（与旧 .catch 留痕同口径）', async () => {
+    const events: Array<{ event: string; hook?: unknown }> = []
+    setDiagnosticsLogWriterForTests((_level, event, data) => {
+      events.push({ event, hook: (data as { hook?: unknown } | undefined)?.hook })
+    })
+    subscribeServantTurnIncidents({
+      onTurnError: () => {
+        throw new Error('sync boom')
+      },
+      clearTurnErrors: async () => {
+        throw new Error('async boom')
+      },
+      resetUnknownToolStreak: () => {},
+      onToolResult: () => {},
+    })
+
+    expect(() => emitServantTurnError({ sessionId: 'g2-bus-2', streak: 1, summary: '' })).not.toThrow()
+    emitServantTurnErrorsCleared('g2-bus-2')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(events.filter((e) => e.event === 'servant_incident_notify_failed')).toHaveLength(2)
+    expect(events.map((e) => e.hook)).toEqual(
+      expect.arrayContaining(['onServantTurnError', 'clearServantTurnErrors']),
+    )
+  })
+
+  it('0 订阅者 ⇒ 无操作、不抛（总线广播语义，不是「装配坏」）', () => {
+    expect(() => {
+      emitServantTurnError({ sessionId: 'g2-bus-3', streak: 1, summary: '' })
+      emitServantToolResult({ sessionId: 'g2-bus-3', resultText: 'r', isError: false })
+    }).not.toThrow()
   })
 })

@@ -7,7 +7,8 @@ import {
   getOpenAICodexContextWindowForModel,
 } from '../../services/openaiAuth/models.js'
 import { MODEL_CONTEXT_WINDOWS_ENV_KEY } from '../../utils/model/modelContextWindows.js'
-import { getHeiheiOpenAIOAuthFilePath } from './heiheiOpenAIOAuthService.js'
+// G2 B-d 批：路径助手改从 L0 取（原 import 该服务 ⇒ no-circular）
+import { getHeiheiOpenAIOAuthFilePath } from '../../utils/openaiOAuthPath.js'
 import {
   OPENAI_OFFICIAL_PROVIDER_ID,
   type SavedProvider,

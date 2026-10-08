@@ -1,19 +1,12 @@
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { isRemoteManagedSettingsEligible } from '../services/remoteManagedSettings/syncCache.js'
-import {
-  activeProviderNeedsProxy,
-  mergeActiveProviderManagedEnv,
-} from '../server/services/providerRuntimeEnv.js'
-import { ensureStandaloneProviderProxy } from '../server/proxy/standaloneProviderProxy.js'
 import { clearCACertsCache } from './caCerts.js'
 import { getGlobalConfig } from './config.js'
-import { getClaudeConfigHomeDir, isEnvTruthy } from './envUtils.js'
+import { logForDiagnosticsNoPII } from './diagLogs.js'
+import { isEnvTruthy } from './envUtils.js'
 import {
   isProviderManagedEnvVar,
   SAFE_ENV_VARS,
 } from './managedEnvConstants.js'
-import { normalizeLegacyDeepSeekManagedEnv } from './providerManagedEnvCompat.js'
 import { clearMTLSCache } from './mtls.js'
 import { clearProxyCache, configureGlobalAgents } from './proxy.js'
 import { isSettingSourceEnabled } from './settings/constants.js'
@@ -118,28 +111,50 @@ function filterSettingsEnv(
 }
 
 /**
- * Read env vars from ~/.claude/cc-heihei/settings.json (Heihei-specific provider
- * config). This file is written by ProviderService.syncToSettings() and
- * contains ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, model defaults, etc.
- * Returns an empty object if the file doesn't exist or is invalid.
+ * cc-heihei 供应商隔离 env 的**提供方**（注入缝，G2 B-d 批）。
+ *
+ * 为什么是缝：本模块是 L0（utils/），而取这份 env 要用 server 侧的 provider 运行时
+ * 环境与独立代理（L2/L4）⇒ L0 → server 是层级违规（layer-L0-no-server-deps 存量 2 条）。
+ * 实现上提到 L2 `server/services/ccHeiheiSettingsEnv.ts`，装配点 = CLI 启动
+ * `entrypoints/init.ts`（本模块的消费方全在 CLI 进程内：init / onChangeAppState）。
  */
-function getCcHeiheiSettingsEnv(): Record<string, string> {
-  const configDir = getClaudeConfigHomeDir()
-  const serverPort =
-    !isEnvTruthy(process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST) &&
-    activeProviderNeedsProxy(configDir)
-      ? ensureStandaloneProviderProxy()
-      : undefined
-  try {
-    const ccHeiheiSettings = join(configDir, 'cc-heihei', 'settings.json')
-    const raw = readFileSync(ccHeiheiSettings, 'utf-8')
-    const parsed = JSON.parse(raw) as { env?: Record<string, string> }
-    const settingsEnv = normalizeLegacyDeepSeekManagedEnv(parsed.env ?? {}).env
-    return mergeActiveProviderManagedEnv(settingsEnv, configDir, { serverPort })
-  } catch {
-    return mergeActiveProviderManagedEnv({}, configDir, { serverPort })
-  }
+export type CcHeiheiSettingsEnvProvider = () => Record<string, string>
+
+let ccHeiheiSettingsEnvProvider: CcHeiheiSettingsEnvProvider | null = null
+let ccHeiheiSettingsEnvProviderMissingReported = false
+
+/** 装配注入（生产）：`entrypoints/init.ts` 启动序调用。 */
+export function registerCcHeiheiSettingsEnvProvider(
+  provider: CcHeiheiSettingsEnvProvider,
+): void {
+  ccHeiheiSettingsEnvProvider = provider
+  ccHeiheiSettingsEnvProviderMissingReported = false
 }
+
+/** 测试注入（传 null 复位为「未装配」）。 */
+export function setCcHeiheiSettingsEnvProviderForTests(
+  provider: CcHeiheiSettingsEnvProvider | null,
+): void {
+  ccHeiheiSettingsEnvProvider = provider
+  ccHeiheiSettingsEnvProviderMissingReported = false
+}
+
+/**
+ * 未装配 ⇒ 返回空 env（该进程无此能力），但**不静默**：记一次性诊断。
+ * 生产两个入口（init / onChangeAppState）都跑在已注册的 CLI 进程内，故该分支只在
+ * 测试或未接线的宿主里出现。
+ */
+function readCcHeiheiSettingsEnv(): Record<string, string> {
+  if (!ccHeiheiSettingsEnvProvider) {
+    if (!ccHeiheiSettingsEnvProviderMissingReported) {
+      ccHeiheiSettingsEnvProviderMissingReported = true
+      logForDiagnosticsNoPII('warn', 'cc_heihei_settings_env_provider_unregistered')
+    }
+    return {}
+  }
+  return ccHeiheiSettingsEnvProvider()
+}
+
 
 /**
  * Trusted setting sources whose env vars can be applied before the trust dialog.
@@ -203,7 +218,7 @@ export function applySafeConfigEnvironmentVariables(): void {
   // AFTER userSettings so Heihei-specific provider config takes priority over
   // the original Claude Code's settings. This prevents Heihei from polluting
   // ~/.claude/settings.json while still allowing it to override provider vars.
-  Object.assign(process.env, filterSettingsEnv(getCcHeiheiSettingsEnv()))
+  Object.assign(process.env, filterSettingsEnv(readCcHeiheiSettingsEnv()))
 
   // Compute remote-managed-settings eligibility now, with userSettings and
   // flagSettings env applied. Eligibility reads CLAUDE_CODE_USE_BEDROCK,
@@ -248,7 +263,7 @@ export function applyConfigEnvironmentVariables(): void {
 
   // cc-heihei provider isolation: same as in applySafeConfigEnvironmentVariables,
   // apply Heihei-specific env last so it overrides the original settings.
-  Object.assign(process.env, filterSettingsEnv(getCcHeiheiSettingsEnv()))
+  Object.assign(process.env, filterSettingsEnv(readCcHeiheiSettingsEnv()))
 
   // Clear caches so agents are rebuilt with the new env vars
   clearCACertsCache()

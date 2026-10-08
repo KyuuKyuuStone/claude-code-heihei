@@ -25,6 +25,14 @@ import {
   isOpenAIReasoningEffort,
 } from '../../services/openaiAuth/models.js'
 import { sessionService } from './sessionService.js'
+// G2 B-d 批：轮次/工具事件改走总线（原先四处动态 import servantIncidentNotifier ——
+// no-dynamic-import-in-services + 静态环）。
+import {
+  emitServantToolResult,
+  emitServantTurnError,
+  emitServantTurnErrorsCleared,
+  emitServantUnknownToolStreakReset,
+} from './servantIncidentSignals.js'
 import { diagnosticsService } from './diagnosticsService.js'
 import {
   isMaterializedWorktreeLaunch,
@@ -1694,41 +1702,17 @@ export class ConversationService {
       const streak = (this.servantTurnErrorStreak.get(sessionId) ?? 0) + 1
       this.servantTurnErrorStreak.set(sessionId, streak)
       const summary = typeof msg.result === 'string' ? msg.result.slice(0, 300) : ''
-      void import('./servantIncidentNotifier.js')
-        .then(({ onServantTurnError }) => onServantTurnError({ sessionId, streak, summary }))
-        .catch((error) => {
-          // C5（v1.5.0）：通知路径的吞错至少留诊断（此前 .catch(() => {}) 静默，
-          // 通知失效在日志里无迹可查）
-          logForDiagnosticsNoPII('warn', 'servant_incident_notify_failed', {
-            sessionId,
-            hook: 'onServantTurnError',
-            error: error instanceof Error ? error.message : String(error),
-          })
-        })
+      // G2 B-d 批：改走事件总线（原先动态 import notifier；吞错留痕由 bus 的 fanout
+      // 按同一诊断事件名/字段兜底，见 servantIncidentSignals）。
+      emitServantTurnError({ sessionId, streak, summary })
       return
     }
     if (this.servantTurnErrorStreak.has(sessionId)) {
       this.servantTurnErrorStreak.delete(sessionId)
-      void import('./servantIncidentNotifier.js')
-        .then(({ clearServantTurnErrors }) => clearServantTurnErrors(sessionId))
-        .catch((error) => {
-          logForDiagnosticsNoPII('warn', 'servant_incident_notify_failed', {
-            sessionId,
-            hook: 'clearServantTurnErrors',
-            error: error instanceof Error ? error.message : String(error),
-          })
-        })
+      emitServantTurnErrorsCleared(sessionId)
     }
     // 轮次成功也清零「连续调用不存在工具」计数（语义见 servantIncidentNotifier）。
-    void import('./servantIncidentNotifier.js')
-      .then(({ resetUnknownToolStreak }) => resetUnknownToolStreak(sessionId))
-      .catch((error) => {
-        logForDiagnosticsNoPII('warn', 'servant_incident_notify_failed', {
-          sessionId,
-          hook: 'resetUnknownToolStreak',
-          error: error instanceof Error ? error.message : String(error),
-        })
-      })
+    emitServantUnknownToolStreakReset(sessionId)
   }
 
   /**
@@ -1745,15 +1729,7 @@ export class ConversationService {
       if (!block || typeof block !== 'object' || block.type !== 'tool_result') continue
       const resultText = this.toolResultText(block)
       const isError = (block as { is_error?: unknown }).is_error === true
-      void import('./servantIncidentNotifier.js')
-        .then(({ onServantToolResult }) => onServantToolResult({ sessionId, resultText, isError }))
-        .catch((error) => {
-          logForDiagnosticsNoPII('warn', 'servant_incident_notify_failed', {
-            sessionId,
-            hook: 'onServantToolResult',
-            error: error instanceof Error ? error.message : String(error),
-          })
-        })
+      emitServantToolResult({ sessionId, resultText, isError })
     }
   }
 

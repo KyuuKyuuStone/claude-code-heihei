@@ -4,6 +4,11 @@ import * as os from 'os'
 import * as path from 'path'
 
 import { applySafeConfigEnvironmentVariables } from './managedEnv.js'
+// G2 B-d 批：cc-heihei 供应商 env 的实现上提 L2 后走注入缝 ⇒ 本测试按**生产同一形态**
+// （entrypoints/init.ts 的接线）注册，断言口径与旧行为逐字一致。
+import { getCcHeiheiSettingsEnv } from '../server/services/ccHeiheiSettingsEnv.js'
+import { registerCcHeiheiSettingsEnvProvider } from './managedEnv.js'
+registerCcHeiheiSettingsEnvProvider(getCcHeiheiSettingsEnv)
 
 let tmpDir: string
 const originalEnv = {

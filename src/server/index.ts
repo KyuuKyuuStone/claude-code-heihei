@@ -46,6 +46,10 @@ registerServantInfoSource((sessionId) => servantService.getServant(sessionId))
 // 点，由它反向把两侧接起来。
 import { sessionMessenger } from './services/sessionMessenger.js'
 import { registerServantIncidentDeliver } from './services/servantIncidentNotifier.js'
+// G2 B-d 批：notifier 的中断通道原为动态 import conversationService（no-dynamic-import-
+// in-services + 静态环）⇒ 改由本模块（L4 汇聚点）接线，同 registerServantIncidentDeliver。
+import { registerServantIncidentInterrupt } from './services/servantIncidentNotifier.js'
+registerServantIncidentInterrupt((sessionId) => conversationService.sendInterrupt(sessionId))
 registerServantIncidentDeliver((targetSessionId, content, serverHost) =>
   sessionMessenger.deliver(targetSessionId, content, serverHost),
 )

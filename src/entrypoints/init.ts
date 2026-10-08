@@ -36,6 +36,11 @@ import {
   applyConfigEnvironmentVariables,
   applySafeConfigEnvironmentVariables,
 } from '../utils/managedEnv.js'
+// G2 B-d 批：cc-heihei 供应商隔离 env 的实现上提到 L2（L0 → server 属层级违规）
+// ⇒ 本进程（CLI）启动序把它接进 L0 的注入缝。
+import { getCcHeiheiSettingsEnv } from '../server/services/ccHeiheiSettingsEnv.js'
+import { registerCcHeiheiSettingsEnvProvider } from '../utils/managedEnv.js'
+registerCcHeiheiSettingsEnvProvider(getCcHeiheiSettingsEnv)
 import { configureGlobalMTLS } from '../utils/mtls.js'
 import {
   ensureScratchpadDir,

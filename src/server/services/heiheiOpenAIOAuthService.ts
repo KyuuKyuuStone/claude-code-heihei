@@ -10,9 +10,11 @@
  */
 
 import * as fs from 'fs/promises'
-import * as os from 'os'
 import * as path from 'path'
 import { logTokenRefreshFailure } from './oauthRefreshLog.js'
+// G2 B-d 批：路径助手下沉 L0（../../utils/openaiOAuthPath.js）——本文件 import 引用并**按名再导出**（导出面不变）。
+import { getHeiheiOpenAIOAuthFilePath } from '../../utils/openaiOAuthPath.js'
+export { getHeiheiOpenAIOAuthFilePath }
 import { AuthCodeListener } from '../../services/oauth/auth-code-listener.js'
 import {
   buildOpenAIAuthorizeUrl,
@@ -82,12 +84,6 @@ function escapeHtml(s: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;')
-}
-
-export function getHeiheiOpenAIOAuthFilePath(): string {
-  const configDir =
-    process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
-  return path.join(configDir, 'cc-heihei', 'openai-oauth.json')
 }
 
 export class HeiheiOpenAIOAuthService {

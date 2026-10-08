@@ -15,6 +15,7 @@
 import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 import { diagnosticsService } from './diagnosticsService.js'
 import { onSessionEvent, type SessionEvent } from './sessionEvents.js'
+import { subscribeServantTurnIncidents } from './servantIncidentSignals.js'
 import { ProviderService } from './providerService.js'
 import { servantService } from './servantService.js'
 
@@ -71,10 +72,24 @@ let wiredDeliver:
   | ((targetSessionId: string, content: string, serverHost: string) => Promise<boolean>)
   | null = null
 
+/** G2 B-d 批：中断通道实现（装配根接线；未接线时按旧语义留诊断，见 defaultDeps.interrupt）。 */
+let wiredInterrupt: ((sessionId: string) => void) | null = null
+
 export function registerServantIncidentDeliver(
   fn: (targetSessionId: string, content: string, serverHost: string) => Promise<boolean>,
 ): void {
   wiredDeliver = fn
+}
+/** G2 B-d 批：中断通道接线（原为动态 import conversationService）。 */
+export function registerServantIncidentInterrupt(fn: (sessionId: string) => void): void {
+  wiredInterrupt = fn
+}
+
+/** 测试注入（传 null 复位为「未接线」，与 B-a/B-b 的 setXxxForTests 同款）。 */
+export function setServantIncidentInterruptForTests(
+  fn: ((sessionId: string) => void) | null,
+): void {
+  wiredInterrupt = fn
 }
 
 const defaultDeps: ServantIncidentDeps = {
@@ -89,22 +104,22 @@ const defaultDeps: ServantIncidentDeps = {
   getServant: (sessionId) => servantService.getServant(sessionId),
   listServants: (options) => servantService.listServants(options),
   getServerPort: () => ProviderService.getServerPort(),
-  // 动态导入避免与 conversationService 的静态依赖环（本模块正是被它动态导入的）。
+  // G2 B-d 批：原先此处**动态 import** conversationService（no-dynamic-import-in-services +
+  // 静态环），改为装配根接线 `registerServantIncidentInterrupt`（形态同本文件的
+  // registerServantIncidentDeliver）。未接线 ⇒ 记同一诊断事件（不静默、不炸进程），
+  // 与旧实现「投递失败只留痕」的语义逐条一致。
   // 走 sendInterrupt（= interruptSessionRuntime 内部第一步调用的同一 SDK 优雅中断通道），
   // 而不走 interruptSessionRuntime：后者依赖 activeUserTurns，对「文件信箱/HTTP 注入式
   // 回合」可能为空，会直接跳过中断并返回 stopped=false（见根因调查报告 §2.3）。
   interrupt: (sessionId) => {
-    void import('./conversationService.js')
-      .then(({ conversationService }) => {
-        conversationService.sendInterrupt(sessionId)
+    if (!wiredInterrupt) {
+      logForDiagnosticsNoPII('warn', 'servant_interrupt_delivery_failed', {
+        sessionId,
+        error: 'not wired — index.ts must call registerServantIncidentInterrupt',
       })
-      .catch((error) => {
-        // 低12（v1.5.0）：通知路径 catch-all 至少留诊断——中断通道失效此前完全静默
-        logForDiagnosticsNoPII('warn', 'servant_interrupt_delivery_failed', {
-          sessionId,
-          error: error instanceof Error ? error.message : String(error),
-        })
-      })
+      return
+    }
+    wiredInterrupt(sessionId)
   },
   recordEvent: (input) => {
     void diagnosticsService.recordEvent(input).catch((error) => {
@@ -213,6 +228,15 @@ export function unsubscribeServantCrashObserver(): void {
 }
 
 subscribeServantCrashObserver()
+
+// G2 B-d 批：轮次/工具事件改为总线订阅（原先由 conversationService 动态 import 本模块；
+// 现在反过来——本模块顶层订阅，conversationService 只发射）。
+subscribeServantTurnIncidents({
+  onTurnError: onServantTurnError,
+  clearTurnErrors: clearServantTurnErrors,
+  resetUnknownToolStreak: resetUnknownToolStreak,
+  onToolResult: onServantToolResult,
+})
 
 /* ── 员工轮次报错自动续跑（有界）─────────────────────────────────────────────
  * 线上模型员工的 API 抖动会让轮次以报错结束、任务停摆——实战验证"注入一条
