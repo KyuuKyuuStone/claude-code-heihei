@@ -132,6 +132,28 @@ import {
   settleSessionChatActivity,
   trackCliBackgroundTaskLifecycle,
 } from './sessionActivity.js'
+import {
+  clearSessionStopRequested,
+  cleanupStreamState,
+  cliParentToolUseId,
+  consumeToolParentUseId,
+  deleteSessionSlashCommands,
+  getSlashCommands,
+  getStreamState,
+  isDuplicateOfLastApiError,
+  isPermissionMode,
+  isSessionStopRequested,
+  normalizeAskUserQuestionToolResult,
+  rememberToolParentUseId,
+  requestSessionStop,
+  resetCurrentStreamAttempt,
+  resetSessionStopRequestedForTests,
+  translateCliUsage,
+  updateSessionSlashCommands,
+} from './cliMessageTranslation.js'
+// 原属本文件导出面的 3 个名字：按名再导出（本地绑定即上面的 import）。
+export { getSlashCommands, updateSessionSlashCommands }
+export type { SessionSlashCommand } from './cliMessageTranslation.js'
 // 类型与组合函数的定义点陆续迁往该模块，但本模块导出面须逐项不变 ⇒ 原样再导出。
 export type { SessionChatActivityState } from './sessionActivity.js'
 export { getSessionChatActivityState } from './sessionActivity.js'
@@ -194,17 +216,6 @@ function buildSdkWebSocketUrl(
 }
 
 /**
- * Cache slash commands from CLI init messages, keyed by sessionId.
- */
-export type SessionSlashCommand = {
-  name: string
-  description: string
-  argumentHint?: string
-}
-
-const sessionSlashCommands = new Map<string, SessionSlashCommand[]>()
-
-/**
  * Timers for delayed session cleanup after client disconnect.
  * If a client reconnects before the timer fires, the timer is cancelled.
  */
@@ -217,12 +228,6 @@ const sessionCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>()
  * The remover is also cleared on reconnect/cleanup.
  */
 const sessionDisconnectWatchers = new Map<string, () => void>()
-
-/**
- * Track sessions where user requested stop — suppress the CLI_ERROR that
- * follows an interrupt so the frontend doesn't show "处理过程中发生错误".
- */
-const sessionStopRequested = new Set<string>()
 
 /**
  * Track user message count and title state per session for auto-title generation.
@@ -256,18 +261,6 @@ export function markSessionChatQueued(sessionId: string): void {
 export function clearLegacySessionChatState(sessionId: string): void {
   clearSessionChatActivity(sessionId)
 }
-const validPermissionModes = new Set<PermissionMode>([
-  'default',
-  'acceptEdits',
-  'plan',
-  'bypassPermissions',
-  'dontAsk',
-  'auto',
-])
-
-function isPermissionMode(value: unknown): value is PermissionMode {
-  return typeof value === 'string' && validPermissionModes.has(value as PermissionMode)
-}
 
 const runtimeTransitionPromises = new Map<string, Promise<void>>()
 const sessionStartupPromises = new Map<string, Promise<void>>()
@@ -296,29 +289,6 @@ async function sendRepositoryStartupStatus(
 
   if (shouldCreateWorktreeForSessionLaunch(launchInfo)) {
     sendMessage(ws, { type: 'status', state: 'thinking', verb: 'Creating worktree' })
-  }
-}
-
-export function getSlashCommands(sessionId: string): SessionSlashCommand[] {
-  return sessionSlashCommands.get(sessionId) || []
-}
-
-function usageNumber(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0
-}
-
-function translateCliUsage(usage: unknown): TokenUsage {
-  const record = usage && typeof usage === 'object'
-    ? usage as Record<string, unknown>
-    : {}
-  const cacheReadTokens = usageNumber(record.cache_read_input_tokens ?? record.cache_read_tokens)
-  const cacheCreationTokens = usageNumber(record.cache_creation_input_tokens ?? record.cache_creation_tokens)
-
-  return {
-    input_tokens: usageNumber(record.input_tokens),
-    output_tokens: usageNumber(record.output_tokens),
-    ...(cacheReadTokens > 0 ? { cache_read_tokens: cacheReadTokens } : {}),
-    ...(cacheCreationTokens > 0 ? { cache_creation_tokens: cacheCreationTokens } : {}),
   }
 }
 
@@ -375,7 +345,7 @@ export const handleWebSocket = {
       toolRequestIds,
       computerUseRequestIds,
       turnActive:
-        hasPendingOrActiveUserTurn(sessionId) && !sessionStopRequested.has(sessionId),
+        hasPendingOrActiveUserTurn(sessionId) && !isSessionStopRequested(sessionId),
     })
   },
 
@@ -560,7 +530,7 @@ async function handleUserMessage(
   const { sessionId } = ws.data
 
   // Clear any stale stop flag from a previous turn
-  sessionStopRequested.delete(sessionId)
+  clearSessionStopRequested(sessionId)
   beginSessionChatActivity(sessionId)
   clearPrewarmState(sessionId)
 
@@ -816,7 +786,7 @@ async function handleDesktopClearCommand(
     : undefined
   conversationService.stopSession(sessionId)
   conversationService.clearOutputCallbacks(sessionId)
-  sessionSlashCommands.delete(sessionId)
+  deleteSessionSlashCommands(sessionId)
   sessionTitleState.delete(sessionId)
   cleanupStreamState(sessionId)
 
@@ -1264,7 +1234,7 @@ export function interruptSessionRuntime(sessionId: string): { stopped: boolean }
   const stoppedTurnOwner = getSessionSnapshot(sessionId)?.turnOwner ?? null
   console.log(`[WS] Stop generation requested for session: ${sessionId}`)
 
-  sessionStopRequested.add(sessionId)
+  requestSessionStop(sessionId)
   markSessionChatInterrupted(sessionId)
 
   const stopped = Boolean(
@@ -1277,7 +1247,7 @@ export function interruptSessionRuntime(sessionId: string): { stopped: boolean }
     // Force-kill if still running after 3 seconds
     setTimeout(() => {
       if (
-        sessionStopRequested.has(sessionId) &&
+        isSessionStopRequested(sessionId) &&
         stoppedTurnOwner !== null &&
         getSessionSnapshot(sessionId)?.turnOwner === stoppedTurnOwner &&
         conversationService.hasSession(sessionId)
@@ -1505,93 +1475,14 @@ function discardActiveTitleTurn(sessionId: string, count: number | null): void {
   }
 }
 
-// ============================================================================
-// CLI message translation
-// ============================================================================
-
-/**
- * Per-session streaming state to avoid cross-session interference.
- * Each session tracks its own dedup flag, active block types, and tool blocks.
- */
-type SessionStreamState = {
-  hasReceivedStreamEvents: boolean
-  activeBlockTypes: Map<number, 'text' | 'tool_use' | 'thinking'>
-  activeToolBlocks: Map<number, { toolName: string; toolUseId: string; inputJson: string; parentToolUseId?: string }>
-  pendingLocalCommand?: { name: string; args: string }
-  /** Tool blocks whose input JSON failed to parse in content_block_stop.
-   *  The assistant message carries the complete input — defer to that. */
-  pendingToolBlocks: Map<string, { toolName: string; toolUseId: string; parentToolUseId?: string }>
-  toolParentUseIds: Map<string, string>
-  lastApiError?: {
-    message: string
-    code: string
-  }
-}
-
-const sessionStreamStates = new Map<string, SessionStreamState>()
-
-function getStreamState(sessionId: string): SessionStreamState {
-  let state = sessionStreamStates.get(sessionId)
-  if (!state) {
-    state = {
-      hasReceivedStreamEvents: false,
-      activeBlockTypes: new Map(),
-      activeToolBlocks: new Map(),
-      pendingLocalCommand: undefined,
-      pendingToolBlocks: new Map(),
-      toolParentUseIds: new Map(),
-      lastApiError: undefined,
-    }
-    sessionStreamStates.set(sessionId, state)
-  }
-  return state
-}
-
-function resetCurrentStreamAttempt(state: SessionStreamState): void {
-  state.hasReceivedStreamEvents = false
-  state.activeBlockTypes.clear()
-  state.activeToolBlocks.clear()
-  state.pendingToolBlocks.clear()
-}
-
-function cliParentToolUseId(cliMsg: any): string | undefined {
-  return typeof cliMsg.parent_tool_use_id === 'string' && cliMsg.parent_tool_use_id.length > 0
-    ? cliMsg.parent_tool_use_id
-    : undefined
-}
-
-function rememberToolParentUseId(
-  streamState: SessionStreamState,
-  toolUseId: string | undefined,
-  parentToolUseId: string | undefined,
-): void {
-  if (!toolUseId || !parentToolUseId) return
-  streamState.toolParentUseIds.set(toolUseId, parentToolUseId)
-}
-
-function consumeToolParentUseId(
-  streamState: SessionStreamState,
-  toolUseId: string | undefined,
-): string | undefined {
-  if (!toolUseId) return undefined
-  const parentToolUseId = streamState.toolParentUseIds.get(toolUseId)
-  streamState.toolParentUseIds.delete(toolUseId)
-  return parentToolUseId
-}
-
-/** Clean up stream state when session disconnects */
-function cleanupStreamState(sessionId: string) {
-  sessionStreamStates.delete(sessionId)
-}
-
 function cleanupSessionRuntimeState(sessionId: string) {
   cancelSessionDisconnectWatcher(sessionId)
   cleanupStreamState(sessionId)
-  sessionSlashCommands.delete(sessionId)
+  deleteSessionSlashCommands(sessionId)
   sessionTitleState.delete(sessionId)
   runtimeOverrides.delete(sessionId)
   clearSession(sessionId)
-  sessionStopRequested.delete(sessionId)
+  clearSessionStopRequested(sessionId)
   clearActiveBackgroundTasks(sessionId)
   clearSessionChatActivity(sessionId)
   deleteDeferredRuntimeRestart(sessionId)
@@ -1667,28 +1558,6 @@ function cacheSessionInitMetadata(sessionId: string, cliMsg: any) {
   }
 }
 
-function normalizeAskUserQuestionToolResult(content: unknown, toolUseResult: unknown): unknown {
-  const result = readObject(toolUseResult)
-  const answers = readObject(result?.answers)
-  if (!result || !answers || !Array.isArray(result.questions)) return content
-  return {
-    questions: result.questions,
-    answers,
-  }
-}
-
-function isDuplicateOfLastApiError(
-  lastApiError: SessionStreamState['lastApiError'],
-  resultMessage: string,
-): boolean {
-  if (!lastApiError?.message) return false
-  if (resultMessage === lastApiError.message) return true
-  return (
-    resultMessage.includes(lastApiError.message) &&
-    /CLI (?:process exited unexpectedly|exited during startup)/i.test(resultMessage)
-  )
-}
-
 function bindPrewarmMetadataCapture(sessionId: string) {
   for (const msg of conversationService.getRecentSdkMessages(sessionId)) {
     cacheSessionInitMetadata(sessionId, msg)
@@ -1750,7 +1619,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
         // stream being interrupted (e.g. "Stream ended without receiving
         // any events"). The result message handler also checks this flag,
         // but the assistant error arrives first and would leak to the UI.
-        if (sessionStopRequested.has(sessionId)) {
+        if (isSessionStopRequested(sessionId)) {
           return []
         }
         const message = extractAssistantText(cliMsg) || cliMsg.error || 'Unknown API error'
@@ -2061,8 +1930,8 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
       if (cliMsg.is_error) {
         // If the user requested stop, this "error" is just the interrupt
         // result — don't show it as an error in the chat UI.
-        if (sessionStopRequested.has(sessionId)) {
-          sessionStopRequested.delete(sessionId)
+        if (isSessionStopRequested(sessionId)) {
+          clearSessionStopRequested(sessionId)
           return [{ type: 'message_complete', usage }]
         }
 
@@ -2087,7 +1956,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
       }
 
       // Clear stop flag on successful completion too
-      sessionStopRequested.delete(sessionId)
+      clearSessionStopRequested(sessionId)
       streamState.lastApiError = undefined
       return [{ type: 'message_complete', usage }]
     }
@@ -2116,7 +1985,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
           { type: 'system_notification', subtype: 'init', message: `Model: ${cliMsg.model || 'unknown'}`, data: { model: cliMsg.model } },
         ]
         // Send slash commands to frontend
-        const cmds = sessionSlashCommands.get(sessionId)
+        const cmds = getSlashCommands(sessionId)
         if (cmds && cmds.length > 0) {
           messages.push({
             type: 'system_notification',
@@ -3006,55 +2875,6 @@ export function resetCollabPushBroadcastForTests(): void {
   pendingListEpoch = null
 }
 
-export function updateSessionSlashCommands(
-  sessionId: string,
-  commands: unknown[],
-  options: { notifyClient?: boolean } = {},
-): SessionSlashCommand[] {
-  const normalized = commands
-    .map(normalizeSessionSlashCommand)
-    .filter((command): command is SessionSlashCommand => command !== null)
-
-  sessionSlashCommands.set(sessionId, normalized)
-
-  if (options.notifyClient !== false) {
-    sendToSession(sessionId, {
-      type: 'system_notification',
-      subtype: 'slash_commands',
-      data: normalized,
-    })
-  }
-
-  return normalized
-}
-
-function normalizeSessionSlashCommand(command: unknown): SessionSlashCommand | null {
-  if (typeof command === 'string') {
-    return command.trim() ? { name: command, description: '' } : null
-  }
-  if (!command || typeof command !== 'object') return null
-
-  const record = command as {
-    name?: unknown
-    command?: unknown
-    description?: unknown
-    argumentHint?: unknown
-  }
-  const name =
-    typeof record.name === 'string'
-      ? record.name
-      : typeof record.command === 'string'
-        ? record.command
-        : ''
-  if (!name.trim()) return null
-
-  return {
-    name,
-    description: typeof record.description === 'string' ? record.description : '',
-    ...(typeof record.argumentHint === 'string' ? { argumentHint: record.argumentHint } : {}),
-  }
-}
-
 export function closeSessionConnection(sessionId: string, reason = 'session closed'): boolean {
   const cleanupTimer = sessionCleanupTimers.get(sessionId)
   if (cleanupTimer) {
@@ -3088,7 +2908,7 @@ export function __resetWebSocketHandlerStateForTests(): void {
   prewarmIdleTimers.clear()
   resetRegistryForTests()
   resetActiveBackgroundTasksForTests()
-  sessionStopRequested.clear()
+  resetSessionStopRequestedForTests()
   resetSessionChatActivityForTests()
   // 协作推送 250ms 合并窗口（pendingListEpoch + listMergeTimer）同属模块级共享状态：
   // 漏复位则上个用例残留的未超时窗口会吞掉下个用例自己的信号、广播出「别人的」epoch
