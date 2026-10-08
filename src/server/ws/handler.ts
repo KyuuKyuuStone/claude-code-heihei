@@ -124,15 +124,19 @@ import {
 // 故此处按名接回，消费方 import 面不变。
 import {
   beginSessionChatActivity,
+  clearActiveBackgroundTasks,
   clearSessionChatActivity,
   failSessionChatActivity,
   getSessionChatTerminalState,
+  hasActiveBackgroundTasks,
   isSessionChatInterrupted,
   isSessionChatLegacyQueued,
   markLegacySessionChatQueued,
   markSessionChatInterrupted,
+  resetActiveBackgroundTasksForTests,
   resetSessionChatActivityForTests,
   settleSessionChatActivity,
+  trackCliBackgroundTaskLifecycle,
   type SessionChatActivityState,
 } from './sessionActivity.js'
 // 类型定义点随批①迁往该模块，但本模块导出面须逐项不变 ⇒ 原样再导出（纯移动纪律）。
@@ -195,71 +199,15 @@ const sessionTitleState = new Map<string, {
 }>()
 
 const runtimeOverrides = new Map<string, RuntimeOverride>()
-const activeBackgroundTaskIds = new Map<string, Set<string>>()
 // ── (C) 类批①：deferredRuntimeRestarts / deferredPermissionModes 两个 Map 已搬到
 // ./deferredRuntimeState.ts（定义点唯一），此处经同名 import 使用其单操作原语。
-
-// ── (B1-1) 会话活动状态三表与写入原语已上提到 ./sessionActivity.ts：
-// getSessionChatActivityState / markSessionChatQueued / clearLegacySessionChatState
-// 三个导出留在本文件（消费方 import 面逐项不变），改为调该模块的访问器与原语。
-
-type CliBackgroundTaskLifecycle = {
-  taskId: string
-  running: boolean
-}
-
-function getCliBackgroundTaskLifecycle(cliMsg: any): CliBackgroundTaskLifecycle | null {
-  if (cliMsg?.type !== 'system') return null
-  const taskId = typeof cliMsg.task_id === 'string' ? cliMsg.task_id.trim() : ''
-  if (!taskId) return null
-
-  if (cliMsg.subtype === 'task_started') {
-    return { taskId, running: true }
-  }
-
-  if (cliMsg.subtype === 'task_notification' && cliMsg.status === 'running') {
-    return { taskId, running: true }
-  }
-
-  if (
-    cliMsg.subtype === 'task_notification' &&
-    (cliMsg.status === 'completed' ||
-      cliMsg.status === 'failed' ||
-      cliMsg.status === 'stopped' ||
-      cliMsg.status === 'killed')
-  ) {
-    return { taskId, running: false }
-  }
-
-  return null
-}
-
-function trackCliBackgroundTaskLifecycle(
-  sessionId: string,
-  cliMsg: any,
-): CliBackgroundTaskLifecycle | null {
-  const lifecycle = getCliBackgroundTaskLifecycle(cliMsg)
-  if (!lifecycle) return null
-
-  if (lifecycle.running) {
-    let taskIds = activeBackgroundTaskIds.get(sessionId)
-    if (!taskIds) {
-      taskIds = new Set()
-      activeBackgroundTaskIds.set(sessionId, taskIds)
-    }
-    taskIds.add(lifecycle.taskId)
-    return lifecycle
-  }
-
-  const taskIds = activeBackgroundTaskIds.get(sessionId)
-  taskIds?.delete(lifecycle.taskId)
-  if (taskIds?.size === 0) activeBackgroundTaskIds.delete(sessionId)
-  return lifecycle
-}
-
-function hasActiveBackgroundTasks(sessionId: string): boolean {
-  return (activeBackgroundTaskIds.get(sessionId)?.size ?? 0) > 0
-}
+//
+// ── (B1-1/B1-2) 会话活动三表 + 写入原语 + 后台任务子域（活跃集 activeBackgroundTaskIds
+// 与生命周期解析）已上提到 ./sessionActivity.ts。getSessionChatActivityState /
+// markSessionChatQueued / clearLegacySessionChatState 三个导出留在本文件（消费方
+// import 面逐项不变）；getSessionChatActivityState 留此的另一个原因：它要读
+// computerUseApprovalService，而本模块 import sessionActivity ⇒ 若搬过去会组成新的
+// no-circular（该服务已 import 本模块）。
 
 export function getSessionChatActivityState(sessionId: string): SessionChatActivityState {
   // An explicit stop wins over permission queues that the CLI has not emitted
@@ -1651,7 +1599,7 @@ function cleanupSessionRuntimeState(sessionId: string) {
   runtimeOverrides.delete(sessionId)
   clearSession(sessionId)
   sessionStopRequested.delete(sessionId)
-  activeBackgroundTaskIds.delete(sessionId)
+  clearActiveBackgroundTasks(sessionId)
   clearSessionChatActivity(sessionId)
   deleteDeferredRuntimeRestart(sessionId)
   deleteDeferredPermissionMode(sessionId)
@@ -3274,7 +3222,7 @@ export function __resetWebSocketHandlerStateForTests(): void {
   prewarmedSessions.clear()
   prewarmIdleTimers.clear()
   resetRegistryForTests()
-  activeBackgroundTaskIds.clear()
+  resetActiveBackgroundTasksForTests()
   sessionStopRequested.clear()
   resetSessionChatActivityForTests()
 }
