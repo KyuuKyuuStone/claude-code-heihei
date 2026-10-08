@@ -5,6 +5,11 @@
       "test": "src/server/__tests__/computer-use-api.test.ts",
       "reason": "钩子层超时，失败签名 (unnamed) [5002ms]：单跑 ×2 全绿、序列跑 ×5 = 4 绿 1 红——启动钩子在测试序列负载下的偶发超时，非断言失败",
       "note": "已加固（c0747a5 为 beforeAll/beforeEach 加显式 20s 超时，断言零改动），加固后是否仍偶发待观察"
+    },
+    {
+      "test": "should restart a prewarm that began before runtime config arrived",
+      "reason": "并发批跑偶发 ECONNRESET（失败原文：`The socket connection was closed unexpectedly` / code ECONNRESET，抛在 conversations.test.ts:3459 的 fetch(`${baseUrl}/api/sessions`)；同批其余用例不受影响）。隔离证据：单跑 conversations.test.ts ×1 = 108 pass / 0 fail；同一 8 文件批复跑 = 0 fail；B-a 批（d7160f1 前后）与 B-b 批（7561ed9 前后）两次独立批次各出现 1 次、重跑即变绿 ⇒ 间歇且重跑可变，非确定性缺陷。归属：真定位归『潜伏偶发专项批』（排队中）。",
+      "note": "已登记（2026-10-08，G2 B-c 批）——仅标注噪声、不吞真回归：preflight 命中后仍会单文件复跑，复跑红依旧判 FAIL。"
     }
   ]
 }
