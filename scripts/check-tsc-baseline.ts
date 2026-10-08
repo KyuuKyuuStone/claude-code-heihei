@@ -138,7 +138,7 @@ function mapToRecord(m: Map<string, number>): Record<string, number> {
   return rec;
 }
 
-export function runTsc(tsconfigPath: string = TSCONFIG, tscPath: string = TSC): { exitCode: number; stdout: string } {
+export function runTsc(tsconfigPath: string = TSCONFIG, tscPath: string = TSC): { exitCode: number; stdout: string; stderr: string } {
   // 必须用系统 node 跑 tsc：本脚本经 bun 执行，process.execPath 是 bun.exe（JavaScriptCore，不认 V8 堆旗标）
   const r = spawnSync("node", [tscPath, "-p", tsconfigPath, "--noEmit", "--pretty", "false"], {
     cwd: REPO_ROOT,
@@ -146,7 +146,22 @@ export function runTsc(tsconfigPath: string = TSCONFIG, tscPath: string = TSC): 
     maxBuffer: 512 * 1024 * 1024,
     env: { ...process.env, NODE_OPTIONS: `--max-old-space-size=${TSC_HEAP_MB}` },
   });
-  return { exitCode: r.status ?? -1, stdout: (r.stdout ?? "") + (r.stderr ?? "") };
+  return { exitCode: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+}
+
+// 无位置 error 行（config 级错误，如 `error TS18003: No inputs were found…`）：
+// 不含 file(line,col) 前缀 ⇒ parseTscOutput 解析不到，恰是「exit≠0 但 0 条诊断」真空形态的来源；
+// 本函数仅用于 FAIL 时的证据 dump（观测），不参与判定。
+export function parsePositionlessErrors(text: string): string[] {
+  const out: string[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trimEnd();
+    if (!line) continue;
+    if (/^(.+?)\(\d+,\d+\): error TS\d+: /.test(line)) continue; // 有位置的行不重复收
+    const m = /error TS\d+: .+$/.exec(line);
+    if (m) out.push(m[0]);
+  }
+  return out;
 }
 
 function gitShowBaseline(ref: string): BaselineFile | null {
@@ -188,16 +203,30 @@ function main(): void {
   }
 
   const t0 = Date.now();
-  const { exitCode, stdout } = runTsc();
-  const diags = parseTscOutput(stdout);
+  const { exitCode, stdout, stderr } = runTsc();
+  const rawOutput = stdout + stderr; // 解析口径与既往一致（诊断行在 stdout；node 崩溃文本在 stderr）
+  const diags = parseTscOutput(rawOutput);
   const current = buildSignatures(diags);
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
 
   const baseline = readBaseline();
 
-  // 真空自毁 + sanity 下限
+  // 真空自毁 + sanity 下限（FAIL 时必须留证据：无位置 error 行 + stdout 前 40 行 + stderr 尾 20 行）
   const sanity = sanityCheck(diags.length, exitCode, baseline ? baseline.total : null);
-  if (!sanity.ok) fail(sanity.reason);
+  if (!sanity.ok) {
+    const dump: string[] = [];
+    const posless = parsePositionlessErrors(rawOutput);
+    if (posless.length) {
+      dump.push(`无位置的 error 行 ${posless.length} 条（config 级候选，诊断解析不收）：`);
+      for (const l of posless.slice(0, 10)) dump.push(`  ${l}`);
+      if (posless.length > 10) dump.push(`  …另有 ${posless.length - 10} 条未列出`);
+    }
+    dump.push("—— tsc stdout 前 40 行：");
+    for (const l of stdout.split(/\r?\n/).filter((x) => x.trim()).slice(0, 40)) dump.push(`  | ${l}`);
+    dump.push("—— tsc stderr 尾 20 行：");
+    for (const l of stderr.split(/\r?\n/).filter((x) => x.trim()).slice(-20)) dump.push(`  | ${l}`);
+    fail(sanity.reason, dump);
+  }
 
   if (update) {
     if (baseline && diags.length < baseline.total * SANITY_RATIO)

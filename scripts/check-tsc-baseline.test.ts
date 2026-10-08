@@ -8,9 +8,25 @@ import {
   compareSignatures,
   normalizeFilePath,
   normalizeMessage,
+  parsePositionlessErrors,
   parseTscOutput,
   sanityCheck,
 } from "./check-tsc-baseline";
+
+describe("G9 parsePositionlessErrors（观测：config 级错误证据）", () => {
+  test("无位置 config 错误行被拾取（真空形态来源）", () => {
+    const hits = parsePositionlessErrors("error TS18003: No inputs were found in config file.");
+    expect(hits).toEqual(["error TS18003: No inputs were found in config file."]);
+  });
+  test("带位置的行不重复收", () => {
+    const hits = parsePositionlessErrors("src/a.ts(1,1): error TS2322: Type 'x' is wrong.");
+    expect(hits).toEqual([]);
+  });
+  test("普通伴随文本行不拾取", () => {
+    const hits = parsePositionlessErrors("Visit https://aka.ms/ts6 for migration information.");
+    expect(hits).toEqual([]);
+  });
+});
 
 describe("G9 normalizeFilePath（主目录折叠，跨机器稳定）", () => {
   test("本机主目录前缀折叠为 ~/（bun-types 缓存类绝对路径）", () => {
