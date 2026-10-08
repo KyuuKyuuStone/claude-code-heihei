@@ -176,6 +176,13 @@
    - 影响：既有数据丢失面（**不是本批引入**）；触发条件窄（目标行不在末尾且其后存量 > 64KB）。
    - 方向：v1.7.4 候选——needle 不在窗口末尾时**回退慢路径**（慢路径已有 `MAX_TOMBSTONE_REWRITE_BYTES` 上限保护）。
    - 证据来源：独立审查 def979f9 + 后端读码（2026-10-04）。
+7. **`rosterDigest` 用动态 import 取 servantService ⇒ `lint:layers` 真红（B2 遗留）**（**已修**，2026-10-08；单开一条＝本项，与 B1-1 结构拆分同批顺手做掉）
+   - 症状：`lint:layers` 在 HEAD 上稳定红 1 条——`no-dynamic-import-in-services: src/server/services/rosterDigest.ts → src/server/services/servantService.ts`；`--no-ignore-known` 全量 19 条违规里**唯一未登记**的那条（另 18 条为既有 known，含两条 servantIncidentNotifier）。
+   - 根因：`bc55ac0`（B2 花名册摘要）用**动态 import** 取 `servantService` 以绕开 `conversationService → rosterDigest → servantService` 静态环——环绕开了，却踩了服务层「禁动态 import」的门禁规则。
+   - 修法（`4f89606`）：改**注入缝**——`rosterDigest` 不再 import 任何业务模块，由装配根 `src/server/index.ts:52-56` 的 `registerRosterDigestDeps({ listServants: () => servantService.listServants() })` 注入，形态与既有 `registerServantInfoSource` / `registerServantIncidentDeliver` 同款；未装配 ⇒ 不注入（单测直调等价于无摘要）。
+   - 降级加固（`3d36d43` + `9328a65`）：`listServants()` 读失败**不得冒泡**——摘要挂在**每条注入消息**通路上，读失败会阻塞**所有投递**（严重故障面）⇒ catch 后返回**原文、不加摘要**（对齐 `servantInfoSource` 的「加强项不得阻塞」口径）；并按 `diagLogs` 的无 PII 契约**只记 `error.name`**（事件名 `roster_digest_list_failed`，warn 级），**不记可能带路径的 `error.message`**。
+   - 实测：`lint:layers` 由 1 error → ✔ 无违规；`--no-ignore-known` 违规 **19 → 18（净减 1、零新增）**⇒ 无其他环；用例⑥（注入器抛含路径的错 ⇒ 原样送达 + 有痕迹 + data 不含路径）；判别力自证两轮＝摘掉 try/catch 仅⑥ 判红、改回 error.message 仅⑥ 判红。
+   - 同风险既有用法（**本轮未动**）：`api/computer-use.ts`、`api/servants.ts` 的 `data.error` 仍落 `error.message`——与 diagLogs 的 PII 契约同风险，登记为候选。
 
 ### 能工作的
 - **v1.5.0 用户实测**：用户从 v1.2.7 升级后确认无 bug。`release-notes/v1.5.0.md` 与 README 定位一致：花名册高危修复、Windows 专属、移除外部 IM 适配器、bun 打包链；本地模型仍可用但已冻结，不参与协作会话。
