@@ -182,7 +182,13 @@
    - 修法（`4f89606`）：改**注入缝**——`rosterDigest` 不再 import 任何业务模块，由装配根 `src/server/index.ts:52-56` 的 `registerRosterDigestDeps({ listServants: () => servantService.listServants() })` 注入，形态与既有 `registerServantInfoSource` / `registerServantIncidentDeliver` 同款；未装配 ⇒ 不注入（单测直调等价于无摘要）。
    - 降级加固（`3d36d43` + `9328a65`）：`listServants()` 读失败**不得冒泡**——摘要挂在**每条注入消息**通路上，读失败会阻塞**所有投递**（严重故障面）⇒ catch 后返回**原文、不加摘要**（对齐 `servantInfoSource` 的「加强项不得阻塞」口径）；并按 `diagLogs` 的无 PII 契约**只记 `error.name`**（事件名 `roster_digest_list_failed`，warn 级），**不记可能带路径的 `error.message`**。
    - 实测：`lint:layers` 由 1 error → ✔ 无违规；`--no-ignore-known` 违规 **19 → 18（净减 1、零新增）**⇒ 无其他环；用例⑥（注入器抛含路径的错 ⇒ 原样送达 + 有痕迹 + data 不含路径）；判别力自证两轮＝摘掉 try/catch 仅⑥ 判红、改回 error.message 仅⑥ 判红。
-   - 同风险既有用法（**本轮未动**）：`api/computer-use.ts`、`api/servants.ts` 的 `data.error` 仍落 `error.message`——与 diagLogs 的 PII 契约同风险，登记为候选。
+   - 同风险既有用法见条目 8。
+
+8. **候选：`data.error` 落 `error.message` 的同类 PII 风险**（**候选，未动**；2026-10-08 登记）
+   - 位置：`src/server/api/computer-use.ts:243` 与 `:258`（事件 `computer_use_runtime_files_failed` / `computer_use_permission_parse_failed`）、`src/server/api/servants.ts:221` 与 `:244`（事件 `collab_report_redirected` / `collab_report_target_ambiguous`）。
+   - 风险：这些 `data.error` 直接落 `error.message`，而 fs 类错误的 message 可能带路径 ⇒ 与 `diagLogs` 的「MUST NOT 含 PII（含路径）」契约同风险（条目 7 同款缺陷的遗漏面）。
+   - 现状：**未动**（2026-10-08 主管裁决「本轮别去动」）；如需收口，改法与条目 7 同款（改记 `error.name` 或固定串）。
+   - 证据来源：代码阅读（行号如上）。
 
 ### 能工作的
 - **v1.5.0 用户实测**：用户从 v1.2.7 升级后确认无 bug。`release-notes/v1.5.0.md` 与 README 定位一致：花名册高危修复、Windows 专属、移除外部 IM 适配器、bun 打包链；本地模型仍可用但已冻结，不参与协作会话。
