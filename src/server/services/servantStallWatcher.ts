@@ -20,8 +20,8 @@ import { conversationService } from './conversationService.js'
 import { isSessionStartedByDelivery } from './sessionRegistry.js'
 import { countUnconsumedReceipts, isSessionTurnInProgress } from './dispatchReceiptService.js'
 import { servantService } from './servantService.js'
-import { sessionMessenger } from './sessionMessenger.js'
 import { ProviderService } from './providerService.js'
+import { requireSessionDelivery } from './sessionDelivery.js'
 
 const WATCH_INTERVAL_MS = 60_000
 /** 运行中但无活动超过该阈值 = 假死 */
@@ -74,8 +74,11 @@ export type ServantStallWatcherDeps = {
 
 const defaultDeps: ServantStallWatcherDeps = {
   listServants: (options) => servantService.listServants(options),
-  deliver: (targetSessionId, content, serverHost) =>
-    sessionMessenger.deliver(targetSessionId, content, serverHost),
+  // G2 B-b：投递经缝注入（原为静态 import sessionMessenger.deliver ⇒ layer-L2-no-upward）。
+  // 缺注册 ⇒ requireSessionDelivery() 抛错（fail-fast）。
+  // async：保持 `=> Promise<boolean>` 契约（同步抛会让「契约上不抛」的调用方踩坑）
+  deliver: async (targetSessionId, content, serverHost) =>
+    requireSessionDelivery()(targetSessionId, content, serverHost),
   getServerPort: () => ProviderService.getServerPort(),
   recordEvent: (input) => {
     void diagnosticsService.recordEvent(input).catch(() => {})

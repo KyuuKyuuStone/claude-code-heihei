@@ -24,7 +24,7 @@ import { diagnosticsService } from './diagnosticsService.js'
 import { forgetReceipt, recordDelivery } from './dispatchReceiptService.js'
 import { servantService, type ServantInfo } from './servantService.js'
 import { sessionService } from './sessionService.js'
-import { sessionMessenger } from './sessionMessenger.js'
+import { requireSessionDelivery } from './sessionDelivery.js'
 import { collabTaskService } from './collabTaskService.js'
 import {
   appendReportFooter,
@@ -145,7 +145,9 @@ export class DispatchMailboxService {
   /** 全部依赖可注入（测试用）；缺省使用真实协作服务 */
   constructor(deps: Partial<DispatchMailboxService['deps']> = {}) {
     this.deps = {
-      deliver: deps.deliver ?? ((target, content, host) => sessionMessenger.deliver(target, content, host)),
+      // G2 B-b：投递经缝注入（原为静态 import sessionMessenger.deliver ⇒ layer-L2-no-upward）。
+      // 缺注册 ⇒ requireSessionDelivery() 抛错（fail-fast）。
+      deliver: deps.deliver ?? (async (target, content, host) => requireSessionDelivery()(target, content, host)),
       listServants: deps.listServants ?? ((options) => servantService.listServants(options)),
       getServant: deps.getServant ?? ((sessionId) => servantService.getServant(sessionId)),
       getSessionWorkDir:

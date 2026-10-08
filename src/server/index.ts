@@ -49,6 +49,13 @@ import { registerServantIncidentDeliver } from './services/servantIncidentNotifi
 registerServantIncidentDeliver((targetSessionId, content, serverHost) =>
   sessionMessenger.deliver(targetSessionId, content, serverHost),
 )
+// G2 B-b 批：dispatchMailboxService / servantStallWatcher / supervisorProtocolNotice
+// 三家（L2）原先各自静态 import sessionMessenger（L3）取 deliver ⇒ 3 条
+// layer-L2-no-upward。三者要的是同一能力 ⇒ 共用一条投递缝，由本模块（L4 汇聚点）注册。
+import { registerSessionDelivery } from './services/sessionDelivery.js'
+registerSessionDelivery((targetSessionId, content, serverHost) =>
+  sessionMessenger.deliver(targetSessionId, content, serverHost),
+)
 // v1.7.4 B1-2 断环：rosterDigest 的花名册读取改为注入缝（原在服务内动态 import
 // servantService，触发 no-dynamic-import-in-services，且为绕开
 // conversationService → rosterDigest → servantService 静态环）。本模块是 L4 汇聚点。

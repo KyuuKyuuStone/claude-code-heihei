@@ -29,48 +29,6 @@
   },
   {
     "type": "dependency",
-    "from": "src/server/services/dispatchMailboxService.ts",
-    "to": "src/server/services/sessionMessenger.ts",
-    "unresolvedTo": "./sessionMessenger.js",
-    "dependencyTypes": [
-      "local",
-      "import"
-    ],
-    "rule": {
-      "severity": "error",
-      "name": "layer-L2-no-upward"
-    }
-  },
-  {
-    "type": "dependency",
-    "from": "src/server/services/servantStallWatcher.ts",
-    "to": "src/server/services/sessionMessenger.ts",
-    "unresolvedTo": "./sessionMessenger.js",
-    "dependencyTypes": [
-      "local",
-      "import"
-    ],
-    "rule": {
-      "severity": "error",
-      "name": "layer-L2-no-upward"
-    }
-  },
-  {
-    "type": "dependency",
-    "from": "src/server/services/supervisorProtocolNotice.ts",
-    "to": "src/server/services/sessionMessenger.ts",
-    "unresolvedTo": "./sessionMessenger.js",
-    "dependencyTypes": [
-      "local",
-      "import"
-    ],
-    "rule": {
-      "severity": "error",
-      "name": "layer-L2-no-upward"
-    }
-  },
-  {
-    "type": "dependency",
     "from": "src/server/api/computer-use.ts",
     "to": "src/server/api/computer-use-python.ts",
     "unresolvedTo": "./computer-use-python.js",
