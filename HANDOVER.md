@@ -80,7 +80,7 @@
 **当前缺口与债务（不美化）**：
 
 - `sessionService.ts` 未拆（豁免 `cap 3846`，续签 **1.7.3**，附条件「1.7.3 须含红灯区批次」）；`handler.ts` 豁免 `cap 3372`，同样续至 1.7.3。
-- **服务端（root）从来没有有效类型关卡**（root tsconfig 因 TS6 无效；类型关卡目前只覆盖 desktop 子项目）。
+- ~~**服务端（root）从来没有有效类型关卡**（root tsconfig 因 TS6 无效；类型关卡目前只覆盖 desktop 子项目）。~~ → **2026-10-08 收口（G9 类型关卡落地）**：① `tsconfig.json` 去 `baseUrl`——TS6 下带它 = 仅 1 条 TS5101、**0 文件被检的真空检查**（exit 2）；去后全量 tsc 与 `--ignoreDeprecations 6.0` 对照组**签名多重集逐项持平（5558 签名 / 7255 条，0 新增 0 消失 0 计数差）**，depcruise 3649 模块不变，`paths` 不受影响；② 闸门 `bun run lint:types`（`scripts/check-tsc-baseline.ts`）：签名 = `文件::错误码::归一化message`（数字占位、**行号不入签名**），只紧不松四规则（子集 PASS / 新增或计数超 FAIL / `--update` 同提交下调 / CI 基线相对 origin/main 防倒转）+ 真空自毁（0 诊断 exit≠0 判红）+ sanity 下限（总数 < 基线 50% 判红，拦「1 ≤ 7255」式假绿）+ 自带 node 堆旗标 `--max-old-space-size=12288`（默认堆全量 OOM exit 134）；③ 基线 `scripts/tsc-baseline.json`：**total=7255，存量=长期债务，本批只立闸门不清算**（逾期销账 = 7255 长期挂账，不设还款期）；④ 判别力双段自证：单测段 `scripts/check-tsc-baseline.test.ts` **14 pass**（新增红/计数+1 红/收敛不拦/真空红/TS5101 形态红/骤降红/全清红）+ 管道段种子补丁 `scripts/g9-seed-error.patch`（注入必红且差异清单精确指认、`git apply -R` 复原必绿、apply 失败判红）；⑤ CI 接入 `layer-lint` job 两步（主步带 `--baseline-ref origin/main` + 种子演练步）；**pre-commit 不接**（全量 tsc 分钟级，file-size <2s 才配进钩子）。
 - ~~会话列表/索引族红灯批、30 处瞬时 toast 分类、第 4 处长驻点（`desktop/src/main.tsx:62` 根崩溃屏）等仍待办。~~ → **2026-10-08 收口**：红灯批＝**v1.7.3 完成**（5 缺陷 4 修 1 挂档）；30 处瞬时 toast 分类＝v1.7.1 落地 **26 处已全覆盖**（「30」为原始估算，另 4 处经复核为**排除项、非待办**——**无「4 处待补」**，见条目 12 勘误）；第 4 处长驻点（`main.tsx` 根崩溃屏）＝**按设计稿排除、非缺口**（见条目 12 勘误）。
 - **「320 秒超时」专项排查进行中**：已定位为 `turn-checkpoints` 结构性 `O(m·n)` 循环的候选成因，**O(n²) 尚未证实、修法未落地**（据主管口径，未在代码/提交中核到物证）。
 - v1.7.2 未验证项：渲染层视觉未真机走查、720px 短版降级未做、转录缓存「同尺寸重写 + mtime 精度」风险、`startedByDelivery` 不持久化、无客户端 15 分钟档未做 e2e。
