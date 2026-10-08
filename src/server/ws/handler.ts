@@ -3205,6 +3205,10 @@ export function __resetWebSocketHandlerStateForTests(): void {
   resetActiveBackgroundTasksForTests()
   sessionStopRequested.clear()
   resetSessionChatActivityForTests()
+  // 协作推送 250ms 合并窗口（pendingListEpoch + listMergeTimer）同属模块级共享状态：
+  // 漏复位则上个用例残留的未超时窗口会吞掉下个用例自己的信号、广播出「别人的」epoch
+  // （实测原序：conversations 后跑 websocket-handler 的 C12，Expected 5 收到 199）。
+  resetCollabPushBroadcastForTests()
 }
 
 export function __markPrewarmPendingForTests(sessionId: string): void {
