@@ -80,9 +80,11 @@ export async function appendRosterDigestIfSupervisor(
   try {
     entries = await depsProvider.listServants()
   } catch (error) {
+    // 只记 error.name：diagLogs 契约要求 MUST NOT 含 PII（含路径），而 fs 类错误的
+    // message 可能带路径；事件名 + sessionId 已足够定位，宁保守。
     logForDiagnosticsNoPII('warn', 'roster_digest_list_failed', {
       sessionId,
-      error: error instanceof Error ? error.message : String(error),
+      error: error instanceof Error ? error.name : typeof error,
     })
     return content
   }

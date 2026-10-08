@@ -72,7 +72,7 @@ describe('rosterDigest（B2）', () => {
     })
     setRosterDigestDepsForTests({
       listServants: async () => {
-        throw new Error('roster read boom')
+        throw new Error('ENOENT: open C:\\Users\\alice\\.claude\\servants.json')
       },
     })
 
@@ -81,10 +81,13 @@ describe('rosterDigest（B2）', () => {
     // 降级：一字不改、不含摘要、页脚仍是最后非空行（投递不被阻塞）
     expect(out).toBe(original)
     expect(out).not.toContain(ROSTER_DIGEST_MARK)
-    // 留痕：warn 级 + 明确事件名 + 可诊断的错误信息
+    // 留痕：warn 级 + 明确事件名
     const hit = logs.find((l) => l.event === 'roster_digest_list_failed')
     expect(hit).toBeTruthy()
     expect(hit?.level).toBe('warn')
-    expect(hit?.data.error).toBe('roster read boom')
+    // 只记 error.name：message（此处含路径）绝不落地——diagLogs 契约禁 PII
+    expect(hit?.data.error).toBe('Error')
+    expect(JSON.stringify(hit?.data ?? {})).not.toContain('ENOENT')
+    expect(JSON.stringify(hit?.data ?? {})).not.toContain('alice')
   })
 })
