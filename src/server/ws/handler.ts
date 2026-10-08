@@ -135,6 +135,8 @@ import {
   settleSessionChatActivity,
   type SessionChatActivityState,
 } from './sessionActivity.js'
+// 类型定义点随批①迁往该模块，但本模块导出面须逐项不变 ⇒ 原样再导出（纯移动纪律）。
+export type { SessionChatActivityState } from './sessionActivity.js'
 
 const settingsService = new SettingsService()
 const providerService = new ProviderService()
