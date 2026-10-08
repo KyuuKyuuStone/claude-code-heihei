@@ -29,7 +29,6 @@ import {
   markTurnSent,
   resetRegistryForTests,
   settleTurnIfOwner,
-  setSessionClientAttached,
   clearSessionStartedByDelivery,
   type TurnHandle,
 } from '../services/sessionRegistry.js'
@@ -52,7 +51,6 @@ import {
 import { GROK_DEFAULT_MAIN_MODEL } from '../../services/grokAuth/models.js'
 import { diagnosticsService } from '../services/diagnosticsService.js'
 import { COLLAB_SERVANT_PERMISSION_MODE_LOCKED_MESSAGE } from '../../collaboration/collabToolContract.js'
-import { addTurnChangeListener } from '../services/dispatchReceiptService.js'
 import {
   buildConversationTitleInput,
   deriveTitle,
@@ -148,6 +146,40 @@ import {
   resetTaskNotificationPersistenceForTests,
 } from './taskNotificationPersistence.js'
 export { __persistCliTaskNotificationForTests } from './taskNotificationPersistence.js'
+
+// v1.7.4 结构专项（T0 · WebSocket 传输枢纽族上提）：三张连接表 + 发送原语迁往
+// ./sessionTransport.ts（叶子模块，绝不反向 import 本文件）。本文件改为经原语
+// 读写；原属本文件导出面的 4 个名字按名再导出以维持导出面逐项不变。
+import {
+  addActiveClient,
+  broadcastGlobalEvent,
+  ensureTurnChangeBroadcastSubscribed,
+  forgetClientOutputCallback,
+  GLOBAL_EVENTS_SESSION_ID,
+  getActiveSessionIds,
+  getSessionClients,
+  hasActiveClients,
+  registerClientOutputCallback,
+  removeActiveClient,
+  removeClientOutputCallback,
+  resetSessionTransportForTests,
+  sendError,
+  sendMessage,
+  sendToSession,
+  subscribeGlobalEvents,
+  takeSessionClients,
+  unsubscribeGlobalEvents,
+  type WebSocketData,
+} from './sessionTransport.js'
+// 这 5 个名字原属本文件导出面 ⇒ 按名再导出（本地绑定即上面的 import）。
+export {
+  broadcastGlobalEvent,
+  ensureTurnChangeBroadcastSubscribed,
+  GLOBAL_EVENTS_SESSION_ID,
+  getActiveSessionIds,
+  sendToSession,
+}
+export type { WebSocketData }
 
 const settingsService = new SettingsService()
 const providerService = new ProviderService()
@@ -290,35 +322,7 @@ function translateCliUsage(usage: unknown): TokenUsage {
   }
 }
 
-export type WebSocketData = {
-  sessionId: string
-  connectedAt: number
-  channel: 'client' | 'sdk'
-  sdkToken: string | null
-  serverPort: number
-  serverHost: string
-}
-
-// Active WebSocket clients, grouped by session. Multiple desktop windows can
-// legitimately watch the same running session at the same time.
-const activeSessions = new Map<string, Set<ServerWebSocket<WebSocketData>>>()
-
-/**
- * 全局事件通道（保留会话 ID `_events`）：不绑定任何真实会话，只向订阅方
- * 推送跨会话事件（当前仅 servant_turn_changed，来源 dispatchReceiptService
- * 的回合翻转，与花名册 turnInProgress 字段同源）。用于前端状态灯免轮询即时
- * 更新（转圈残留根治·方案B）。
- */
-export const GLOBAL_EVENTS_SESSION_ID = '_events'
-const globalEventClients = new Set<ServerWebSocket<WebSocketData>>()
-
-const clientOutputCallbacks = new Map<
-  ServerWebSocket<WebSocketData>,
-  {
-    sessionId: string
-    callback: (cliMsg: any) => void
-  }
->()
+// ── 三张连接表与发送原语已搬到 ./sessionTransport.ts（T0 批），见文件顶部 import ──
 
 export const handleWebSocket = {
   open(ws: ServerWebSocket<WebSocketData>) {
@@ -340,7 +344,7 @@ export const handleWebSocket = {
 
     // 全局事件通道：不绑定会话，仅登记进独立集合后推送跨会话事件。
     if (sessionId === GLOBAL_EVENTS_SESSION_ID) {
-      globalEventClients.add(ws)
+      subscribeGlobalEvents(ws)
       sendMessage(ws, { type: 'connected', sessionId })
       return
     }
@@ -502,7 +506,7 @@ export const handleWebSocket = {
     }
 
     if (sessionId === GLOBAL_EVENTS_SESSION_ID) {
-      globalEventClients.delete(ws)
+      unsubscribeGlobalEvents(ws)
       console.log(`[WS] Global events client disconnected (${code}: ${reason})`)
       return
     }
@@ -1417,7 +1421,7 @@ function sendSessionTitleUpdated(
   title: string,
 ): void {
   const payload: ServerMessage = { type: 'session_title_updated', sessionId, title }
-  const clients = activeSessions.get(sessionId)
+  const clients = getSessionClients(sessionId)
   if (!clients?.size) {
     sendMessage(fallbackWs, payload)
     return
@@ -2299,14 +2303,6 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
 // 调用（:2285 / :2292），改由同名 import 直接承接，**调用点文本一行未改**；
 // 其余 5 项组外调用点为 0，不留死委托，未导入。
 
-function sendMessage(ws: ServerWebSocket<WebSocketData>, message: ServerMessage) {
-  ws.send(JSON.stringify(message))
-}
-
-function sendError(ws: ServerWebSocket<WebSocketData>, message: string, code: string) {
-  sendMessage(ws, { type: 'error', message, code })
-}
-
 /**
  * Idle disconnect cleanup delay. A session waiting on a pending permission
  * keeps the long 30-minute window so a transient renderer disconnect does not
@@ -2485,55 +2481,13 @@ function replayPendingComputerUsePermissionRequests(
 // ── v1.7 结构拆分（ws/handler.ts 第②批 · local-command 解析族）已搬到
 // ./localCommandParsing.ts（同批）：原 :2679-2932 的 15 个绑定整体迁出，见文件顶部 import。
 
-function addActiveClient(
-  sessionId: string,
-  ws: ServerWebSocket<WebSocketData>,
-): void {
-  let clients = activeSessions.get(sessionId)
-  if (!clients) {
-    clients = new Set()
-    activeSessions.set(sessionId, clients)
-  }
-  clients.add(ws)
-  // P0-b（裁决十九·选 a）：handler 是 clientAttached 的唯一写入方
-  setSessionClientAttached(sessionId, true)
-  // 中途接入只延长（重置到 15min 档）；幂等，重复 add 无害
-  conversationService.onClientAttached(sessionId)
-}
-
-function removeActiveClient(
-  sessionId: string,
-  ws: ServerWebSocket<WebSocketData>,
-): boolean {
-  const clients = activeSessions.get(sessionId)
-  if (!clients?.has(ws)) return false
-  clients.delete(ws)
-  if (clients.size === 0) {
-    activeSessions.delete(sessionId)
-    // P0-b：仅更新在线状态；**断开不降档、不重置**既有计时（裁决十九）
-    setSessionClientAttached(sessionId, false)
-  }
-  return true
-}
-
-function hasActiveClients(sessionId: string): boolean {
-  return (activeSessions.get(sessionId)?.size ?? 0) > 0
-}
-
-function removeClientOutputCallback(ws: ServerWebSocket<WebSocketData>): void {
-  const entry = clientOutputCallbacks.get(ws)
-  if (!entry) return
-  conversationService.removeOutputCallback(entry.sessionId, entry.callback)
-  clientOutputCallbacks.delete(ws)
-}
-
 function bindAllClientSessionOutputs(
   sessionId: string,
   options?: {
     shouldForward?: (cliMsg: any) => boolean
   },
 ): void {
-  const clients = activeSessions.get(sessionId)
+  const clients = getSessionClients(sessionId)
   if (!clients) return
   for (const ws of clients) {
     bindClientSessionOutput(sessionId, ws, options)
@@ -2577,7 +2531,7 @@ function bindClientSessionOutput(
     if (persistence) {
       void persistence
         .then(() => {
-          if (activeSessions.get(sessionId)?.has(ws)) forward()
+          if (getSessionClients(sessionId)?.has(ws)) forward()
         })
         .catch((error) => {
           console.warn(
@@ -2591,7 +2545,7 @@ function bindClientSessionOutput(
     forward()
   }
 
-  clientOutputCallbacks.set(ws, { sessionId, callback })
+  registerClientOutputCallback(ws, sessionId, callback)
   conversationService.onOutput(sessionId, callback)
 }
 
@@ -2603,7 +2557,7 @@ function bindClientSessionOutput(
  * 的客户端没有任何输出绑定，只能断开重连才能看到执行过程。
  */
 export function rebindClientOutputForSession(sessionId: string): void {
-  const clients = activeSessions.get(sessionId)
+  const clients = getSessionClients(sessionId)
   if (!clients) return
   for (const ws of clients) {
     bindClientSessionOutput(sessionId, ws)
@@ -2923,47 +2877,9 @@ async function waitForRuntimeTransitionBeforeUserTurn(
   return { ok: true, waited }
 }
 
-/**
- * Send a message to a specific session's WebSocket (for use by services)
- */
-export function sendToSession(sessionId: string, message: ServerMessage): boolean {
-  const clients = activeSessions.get(sessionId)
-  if (!clients || clients.size === 0) return false
-  for (const ws of clients) {
-    sendMessage(ws, message)
-  }
-  return true
-}
+// ── sendToSession / broadcastGlobalEvent / 回合翻转广播 / getActiveSessionIds
+//    已搬到 ./sessionTransport.ts（T0 批）──
 
-/** 向所有全局事件通道（_events）订阅方广播一条跨会话事件 */
-export function broadcastGlobalEvent(message: ServerMessage): number {
-  for (const ws of globalEventClients) {
-    sendMessage(ws, message)
-  }
-  return globalEventClients.size
-}
-
-// 回合翻转 → 全局事件广播。状态源与花名册 turnInProgress 完全同源
-// （dispatchReceiptService.turnActiveBroadcast 观察流），前端收到即可局部
-// 更新，免等轮询。
-function broadcastTurnChangeListener(sessionId: string, turnInProgress: boolean): void {
-  broadcastGlobalEvent({
-    type: 'system_notification',
-    subtype: 'servant_turn_changed',
-    data: { sessionId, turnInProgress },
-  })
-}
-
-/**
- * R4b 收口（v1.3.1）：同 ensureRebindOnRunningSubscribed——被
- * resetDispatchReceipts（清 addTurnChangeListener 的 Set）清掉后可重调恢复。
- * Set 直接存函数引用，同一稳定引用天然去重幂等。
- */
-export function ensureTurnChangeBroadcastSubscribed(): void {
-  addTurnChangeListener(broadcastTurnChangeListener)
-}
-
-ensureTurnChangeBroadcastSubscribed()
 
 // ── v1.5.0 A6/C12：协作推送（花名册变化 + 会话列表失效）─────────────────────
 // 信号来自下层（collaboration/collabPushSignals 零依赖缝），出口仍是
@@ -3149,28 +3065,21 @@ export function closeSessionConnection(sessionId: string, reason = 'session clos
   conversationService.clearOutputCallbacks(sessionId)
   cleanupSessionRuntimeState(sessionId)
 
-  const clients = activeSessions.get(sessionId)
+  const clients = takeSessionClients(sessionId)
   if (!clients || clients.size === 0) return false
 
-  activeSessions.delete(sessionId)
   for (const ws of clients) {
-    clientOutputCallbacks.delete(ws)
+    forgetClientOutputCallback(ws)
     ws.close(1000, reason)
   }
   return true
-}
-
-export function getActiveSessionIds(): string[] {
-  return Array.from(activeSessions.keys())
 }
 
 export function __resetWebSocketHandlerStateForTests(): void {
   for (const timer of sessionCleanupTimers.values()) clearTimeout(timer)
   for (const timer of prewarmIdleTimers.values()) clearTimeout(timer)
   for (const remove of sessionDisconnectWatchers.values()) remove()
-  activeSessions.clear()
-  globalEventClients.clear()
-  clientOutputCallbacks.clear()
+  resetSessionTransportForTests()
   resetTaskNotificationPersistenceForTests()
   sessionCleanupTimers.clear()
   sessionDisconnectWatchers.clear()
