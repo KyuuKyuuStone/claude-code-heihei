@@ -12,8 +12,43 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
-import { sendToSession, getActiveSessionIds } from '../ws/sessionTransport.js'
-import type { ServerMessage, TeamMemberStatus } from '../ws/events.js'
+import type { TeamMemberStatus } from '../../types/teamMember.js'
+import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
+
+// ─── 广播缝（G2：清掉 L2 → L4 上行 import）──────────────────────────────────
+
+/**
+ * 广播消息**窄类型**（本地定义，刻意不 import `ws/events`）：只有下列 3 个变体
+ * 会被广播（:69/:96/:107/:112/:124 调用点实测）。传输侧适配器（装配根）负责满足
+ * `ServerMessage` 并集——结构可赋值即可。
+ */
+export type TeamBroadcastMessage =
+  | { type: 'team_created'; teamName: string }
+  | { type: 'team_deleted'; teamName: string }
+  | { type: 'team_update'; teamName: string; members: TeamMemberStatus[] }
+
+let broadcastFn: ((message: TeamBroadcastMessage) => void) | null = null
+let warnedMissingBroadcast = false
+
+/**
+ * 装配根注入（生产）：`server/index.ts` 启动序调用（`teamWatcher.start()` 之前），
+ * 形态同 `registerRosterDigestDeps`。适配器 = 原 `broadcast` 内联体逐字搬：
+ * `getActiveSessionIds()` 循环 + `sendToSession`。
+ */
+export function registerTeamWatcherBroadcast(
+  fn: (message: TeamBroadcastMessage) => void,
+): void {
+  broadcastFn = fn
+  warnedMissingBroadcast = false
+}
+
+/** 测试注入（传 null 复位为「未装配」）。 */
+export function setTeamWatcherBroadcastForTests(
+  fn: ((message: TeamBroadcastMessage) => void) | null,
+): void {
+  broadcastFn = fn
+  warnedMissingBroadcast = false
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -324,11 +359,17 @@ export class TeamWatcher {
 
   // ── Broadcasting ───────────────────────────────────────────────────────
 
-  private broadcast(message: ServerMessage): void {
-    const sessionIds = getActiveSessionIds()
-    for (const id of sessionIds) {
-      sendToSession(id, message)
+  private broadcast(message: TeamBroadcastMessage): void {
+    if (!broadcastFn) {
+      // 未装配（装配坏 / 单测）⇒ 丢弃 + **一次性**诊断：watcher 是后台轮询器，
+      // 不该因装配缺陷炸进程；但也不能完全静默（该日志是唯一可诊断痕迹）。
+      if (!warnedMissingBroadcast) {
+        warnedMissingBroadcast = true
+        logForDiagnosticsNoPII('warn', 'team_watcher_broadcast_unregistered')
+      }
+      return
     }
+    broadcastFn(message)
   }
 }
 

@@ -11,6 +11,13 @@ import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 import { handlePluginsApi } from '../api/plugins.js'
 import { conversationService } from '../services/conversationService.js'
 import { __resetWebSocketHandlerStateForTests, getSlashCommands } from '../ws/handler.js'
+// G2 批：sessionComponentReloadService 对 ws 的静态 import 已改注入缝 ⇒ 本测试按
+// **生产同一形态**（server/index.ts 的适配器）接线，断言口径与旧行为逐字一致。
+import { registerSessionComponentReloadDeps } from '../services/sessionComponentReloadService.js'
+import { updateSessionSlashCommands } from '../ws/cliMessageTranslation.js'
+registerSessionComponentReloadDeps({
+  syncSlashCommands: (sessionId, commands) => updateSessionSlashCommands(sessionId, commands),
+})
 
 let tmpDir: string
 let originalConfigDir: string | undefined

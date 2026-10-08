@@ -64,6 +64,21 @@ registerSessionActivityDeps({
   pendingComputerUseApprovals: (sessionId) =>
     computerUseApprovalService.getPendingRequests(sessionId).length,
 })
+// G2 批：三处 L2 → L4 上行 import 改注入缝（本模块是 L4 汇聚点，反向接线）。
+// ① computerUseApprovalService 的权限请求投递（窄类型结构可赋值给 ServerMessage）。
+import { registerComputerUseApprovalTransport } from './services/computerUseApprovalService.js'
+import { sendToSession, getActiveSessionIds } from './ws/sessionTransport.js'
+registerComputerUseApprovalTransport({
+  sendPermissionRequest: (sessionId, payload) => sendToSession(sessionId, payload),
+})
+// ② teamWatcher 的广播（适配器见下方 teamWatcher.start() 之前，逐字搬原内联体）
+import { registerTeamWatcherBroadcast } from './services/teamWatcher.js'
+// ③ sessionComponentReloadService 的斜杠命令同步（返回值本服务只取 .length）
+import { registerSessionComponentReloadDeps } from './services/sessionComponentReloadService.js'
+import { updateSessionSlashCommands } from './ws/cliMessageTranslation.js'
+registerSessionComponentReloadDeps({
+  syncSlashCommands: (sessionId, commands) => updateSessionSlashCommands(sessionId, commands),
+})
 import { dispatchMailboxService } from './services/dispatchMailboxService.js'
 // v1.6.0 任务台账：订阅 sessionRegistry 的回合事件，把「员工回合开始消费」
 // 落成任务状态 accepted → in_progress。L1 → 本模块（L4 汇聚点）单向订阅，
@@ -516,6 +531,13 @@ export function startServer(port = PORT, host = HOST) {
   beginBackgroundIndexStartup()
 
   // Start watching ~/.claude/teams/ for real-time WebSocket push
+  // G2 批：广播能力经注入缝接线（teamWatcher 是 L2，不得 import ws/*）。
+  // 适配器 = 原 `TeamWatcher.broadcast` 内联体逐字搬（getActiveSessionIds + 循环 sendToSession）。
+  registerTeamWatcherBroadcast((message) => {
+    for (const id of getActiveSessionIds()) {
+      sendToSession(id, message)
+    }
+  })
   teamWatcher.start()
 
   // Start the cron scheduler to execute scheduled tasks

@@ -4,6 +4,11 @@
  * 定义客户端与服务器之间 WebSocket 通信的消息类型。
  */
 
+// 2026-10-08 G2 批：TeamMemberStatus 定义点下沉 L0（src/types/teamMember.ts），
+// 本模块 import type 引用（L4 → L0 合法方向）并在下方**按名再导出**
+// （导出面逐项不变：team-watcher.test.ts 等既有 import 路径不受影响）。
+import type { TeamMemberStatus } from '../../types/teamMember.js'
+
 // ============================================================================
 // Client → Server
 // ============================================================================
@@ -130,12 +135,10 @@ export type ChatState = 'idle' | 'thinking' | 'compacting' | 'tool_executing' | 
 // 避免新 CLI + 旧 server 组合下丢消息。
 export type StreamingFallbackCause = 'watchdog' | 'stream_error' | '404_stream_creation' | 'stream_retry' | 'unknown'
 
-export type TeamMemberStatus = {
-  agentId: string
-  role: string
-  status: 'running' | 'idle' | 'completed' | 'error'
-  currentTask?: string
-}
+// 2026-10-08 G2 批：TeamMemberStatus 下沉 L0（src/types/teamMember.ts），
+// 供 L2 服务 teamWatcher 与 L4（本模块）共同引用。定义点外移后仍**按名再导出**
+// （导出面逐项不变：team-watcher.test.ts 等既有 import 路径不受影响）。
+export type { TeamMemberStatus } from '../../types/teamMember.js'
 
 export type ComputerUseGrantFlags = {
   clipboardRead: boolean

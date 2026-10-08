@@ -19,7 +19,15 @@ import {
 } from '../ws/disconnectGraceConfig.js'
 import { conversationService } from '../services/conversationService.js'
 import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
+import { registerComputerUseApprovalTransport } from '../services/computerUseApprovalService.js'
+import { sendToSession } from '../ws/sessionTransport.js'
 import { sessionService } from '../services/sessionService.js'
+
+// G2 批：computerUseApprovalService 对 ws 的静态 import 已改注入缝 ⇒ 本测试按
+// **生产同一形态**（server/index.ts 的适配器）接线，语义与旧行为逐字一致。
+registerComputerUseApprovalTransport({
+  sendPermissionRequest: (sessionId, payload) => sendToSession(sessionId, payload),
+})
 // R4a/R4b（v1.3.1 整批复核）：rebind 触发时序测试 + 两处顶层订阅的 ensure 活性
 import {
   ensureCollabPushBroadcastSubscribed,

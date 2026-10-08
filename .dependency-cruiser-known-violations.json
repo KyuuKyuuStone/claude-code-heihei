@@ -29,20 +29,6 @@
   },
   {
     "type": "dependency",
-    "from": "src/server/services/computerUseApprovalService.ts",
-    "to": "src/server/ws/sessionTransport.ts",
-    "unresolvedTo": "../ws/sessionTransport.js",
-    "dependencyTypes": [
-      "local",
-      "import"
-    ],
-    "rule": {
-      "severity": "error",
-      "name": "layer-L2-no-upward"
-    }
-  },
-  {
-    "type": "dependency",
     "from": "src/server/services/dispatchMailboxService.ts",
     "to": "src/server/services/sessionMessenger.ts",
     "unresolvedTo": "./sessionMessenger.js",
@@ -71,37 +57,9 @@
   },
   {
     "type": "dependency",
-    "from": "src/server/services/sessionComponentReloadService.ts",
-    "to": "src/server/ws/cliMessageTranslation.ts",
-    "unresolvedTo": "../ws/cliMessageTranslation.js",
-    "dependencyTypes": [
-      "local",
-      "import"
-    ],
-    "rule": {
-      "severity": "error",
-      "name": "layer-L2-no-upward"
-    }
-  },
-  {
-    "type": "dependency",
     "from": "src/server/services/supervisorProtocolNotice.ts",
     "to": "src/server/services/sessionMessenger.ts",
     "unresolvedTo": "./sessionMessenger.js",
-    "dependencyTypes": [
-      "local",
-      "import"
-    ],
-    "rule": {
-      "severity": "error",
-      "name": "layer-L2-no-upward"
-    }
-  },
-  {
-    "type": "dependency",
-    "from": "src/server/services/teamWatcher.ts",
-    "to": "src/server/ws/sessionTransport.ts",
-    "unresolvedTo": "../ws/sessionTransport.js",
     "dependencyTypes": [
       "local",
       "import"

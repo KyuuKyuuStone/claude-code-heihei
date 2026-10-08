@@ -12,11 +12,12 @@
  * 消费方（api/conversations.ts、conversation-status.test.ts）仍从 handler 导入同名
  * 导出（handler 再导出本模块的实现），导入面逐项不变。
  *
- * ⚠ 本模块**不得** import `services/computerUseApprovalService.js`：handler 已
- * import 本模块，而该服务又 import `ws/handler`（既有 known 环）⇒ 会组成新的
- * `no-circular`（2026-10-08 实测：handler → sessionActivity →
- * computerUseApprovalService → handler）。待批 computer-use 请求数改经注入缝
- * `registerSessionActivityDeps` 由装配根注入。
+ * ⚠ 本模块对「computer-use 待批请求数」的读取经注入缝 `registerSessionActivityDeps`
+ * 由装配根注入，**不**直接 import `services/computerUseApprovalService.js`。
+ * 【2026-10-08 勘误】原头注称「该服务 import `ws/handler`（既有 known 环）⇒ 会闭合
+ * 新环」与实测不符：它当时只 import `ws/sessionTransport` + vendor types。同日的
+ * G2 批已把该服务对 ws 的依赖**整体清零**（改注入缝 `registerComputerUseApprovalTransport`）
+ * ⇒ 保留本注入缝的理由是「维持 handler 单向依赖、本模块不反向拉领域服务」，而非断环。
  */
 
 import { conversationService } from '../services/conversationService.js'
@@ -188,8 +189,8 @@ let depsProvider: SessionActivityDeps | null = null
  * 装配根注入（生产）：server/index.ts 启动序调用，与
  * registerServantInfoSource / registerRosterDigestDeps 同款形态。
  *
- * 断环理由见文件头：computerUseApprovalService 已 import `ws/handler`，本模块若
- * 直接 import 它会闭合出新的 `no-circular`（2026-10-08 实测判红）。
+ * 保留注入缝的理由见文件头勘误（原判「该服务 import ws/handler 成环」与实测不符；
+ * G2 批后该服务已零 ws 依赖）。
  */
 export function registerSessionActivityDeps(provider: SessionActivityDeps): void {
   depsProvider = provider
