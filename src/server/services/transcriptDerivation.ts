@@ -5,13 +5,13 @@
  * 3 个 public 方法 + 只被本族使用的 3 个私有 helper。与 sessionService **同层（L2）**。
  *
  * 依赖方向**单向**：本模块 ← sessionService（本模块**不** import sessionService，
- * 含 `import type` 也不允许）。族外的 4 项能力经 `TranscriptDerivationHost` 注入，
+ * 含 `import type` 也不允许）。族外的 5 项能力经 `TranscriptDerivationHost` 注入，
  * 真源仍是 sessionService（`findSessionFile` 依赖其索引模式状态；
  * `readJsonlFile` 是其既有**测试接缝**字段，测试会替换以计数读取，故必须注入而非直引）。
  * 其余纯函数/常量按原样从同一来源 import（sessionService 里它们本就只是模块级导入）。
  */
 
-import type { RawEntry } from './session/transcriptAgents.js'
+import type { ContentBlock, RawEntry } from './session/transcriptAgents.js'
 import type { SessionFileMatch } from './localIndex/sessionIndex.js'
 import {
   MODEL_CONTEXT_WINDOW_DEFAULT,
@@ -30,8 +30,24 @@ import { calculateUSDCost, MODEL_COSTS } from '../../utils/modelCost.js'
 import { roughTokenCountEstimationForMessage } from '../../services/tokenEstimation.js'
 import type { PersistedWorktreeSession } from './localIndex/types.js'
 import type { PreparedSessionWorkspace } from './repositoryLaunchService.js'
-import { streamJsonlFile } from './session/jsonlStorage.js'
+import {
+  appendSubagentToolMessages,
+  streamJsonlFile,
+  subagentTranscriptPath,
+} from './session/jsonlStorage.js'
 import { normalizeDriveRootPathForPlatform } from './windowsDrivePath.js'
+import { ApiError } from '../middleware/errorHandler.js'
+import { createReadStream } from 'node:fs'
+import * as fs from 'node:fs/promises'
+import { createInterface } from 'node:readline'
+import { entriesToMessages, normalizeMessageUsage } from './session/messageConversion.js'
+import { isVisibleTranscriptMessageEntry } from './session/transcriptEntries.js'
+import {
+  extractAgentIdFromResultText,
+  extractAgentToolUseId,
+  extractTextFromContent,
+} from './session/transcriptAgents.js'
+import { sessionSummaryIndexStore, type SessionUsageTotals } from './sessionSummaryIndexStore.js'
 import { ProviderService } from './providerService.js'
 import { formatCost } from './session/sessionUtils.js'
 import {
@@ -156,6 +172,42 @@ export type SessionInspectionTranscriptSnapshot = {
   metadata: TranscriptMetadataSnapshot
   usage: TranscriptUsageSnapshot | null
   contextEstimate: TranscriptContextEstimate | null
+}
+
+export type MessageUsage = {
+  input_tokens?: number
+  output_tokens?: number
+  cache_read_input_tokens?: number
+  cache_creation_input_tokens?: number
+}
+
+export type MessageEntry = {
+  id: string
+  type: 'user' | 'assistant' | 'system' | 'tool_use' | 'tool_result'
+  content: unknown
+  toolUseResult?: unknown
+  timestamp: string
+  model?: string
+  usage?: MessageUsage
+  parentUuid?: string
+  parentToolUseId?: string
+  isSidechain?: boolean
+}
+
+type UsageAccumulator = {
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+}
+
+function safeJsonLength(value: unknown): number {
+  if (value === undefined) return 0
+  try {
+    return JSON.stringify(value)?.length ?? 0
+  } catch {
+    return 0
+  }
 }
 
 /**
@@ -915,6 +967,311 @@ export class TranscriptDerivation {
       usage,
       contextEstimate,
     }
+  }
+
+
+  async getSessionMessages(sessionId: string): Promise<MessageEntry[]> {
+    const found = await this.host.findSessionFile(sessionId)
+    if (!found) {
+      throw ApiError.notFound(`Session not found: ${sessionId}`)
+    }
+
+    const entries = await this.host.readJsonlFile(found.filePath)
+    return await appendSubagentToolMessages(
+      found.projectDir,
+      sessionId,
+      entriesToMessages(entries),
+    )
+  }
+
+  /**
+   * 窗口化会话历史（v1.5.0 · 大会话首开）：只解析窗口内的条目。
+   *
+   * 旧路径（getSessionMessages）把整份 jsonl 读进内存再逐行 JSON.parse——127MB
+   * 会长会话首开时内存与 CPU 双高。本方法流式扫文件，**只对窗口内的原始行做
+   * parse**，其余行仅计数（total）；峰值内存 ≈ 窗口行文本。
+   *
+   * 游标：`before` 是**条目序号**（0-based，非空行计）——jsonl 只追加，历史条目
+   * 的序号天然稳定，前端向上翻页不会错位。返回窗口 [max(0,before-limit), before)，
+   * 响应带 nextBefore（= 窗口起始序号）供继续向上翻页。
+   *
+   * total 是**非空行数**（含极少数坏行）——与全量模式的"parse 成功条数"可能有
+   * 微小差异，仅用于"还有多少/是否还有更早"的展示，不参与定位。
+   *
+   * 子代理消息注入与全量模式同款（只依据窗口内出现的 agent 链接），行为自洽。
+   */
+  async getSessionMessagesWindow(
+    sessionId: string,
+    options: { limit: number; before?: number },
+  ): Promise<{
+    messages: MessageEntry[]
+    total: number
+    hasMore: boolean
+    nextBefore: number
+    /**
+     * 会话级 token 用量合计（v1.5.0 窗口模式配套）：窗口只映射一页历史，
+     * 前端据此累加的用量会偏小，所以由服务端按**全文件**口径给出。
+     * null = 全文件里一条带 usage 的消息都没有。
+     * 口径与前端 chatStore.summarizeTokenUsageFromHistory 逐项一致。
+     */
+    usageTotals: SessionUsageTotals | null
+  }> {
+    const found = await this.host.findSessionFile(sessionId)
+    if (!found) {
+      throw ApiError.notFound(`Session not found: ${sessionId}`)
+    }
+    const limit = Math.max(1, Math.floor(options.limit))
+    const beforeRaw = options.before
+    const before =
+      beforeRaw !== undefined && Number.isFinite(beforeRaw)
+        ? Math.max(0, Math.floor(beforeRaw))
+        : undefined
+
+    // 用量合计随 mtime+size 缓存：文件没变就直接用上次结果，不重扫（低2 同款：
+    // 命中只更新内存 LRU 序）。未缓存（undefined）才要求本次扫描顺带累加。
+    const stat = await fs.stat(found.filePath)
+    await sessionSummaryIndexStore.ensureLoaded()
+    const cachedUsage = sessionSummaryIndexStore.getUsageTotals(
+      found.filePath,
+      stat.mtimeMs,
+      stat.size,
+    )
+
+    const window = await this.readJsonlFileWindow(found.filePath, {
+      limit,
+      ...(before !== undefined ? { before } : {}),
+      ...(cachedUsage === undefined ? { collectUsage: true } : {}),
+    })
+    const usageTotals = cachedUsage === undefined ? (window.usageTotals ?? null) : cachedUsage
+    if (cachedUsage === undefined) {
+      sessionSummaryIndexStore.setUsageTotals(
+        found.filePath,
+        stat.mtimeMs,
+        stat.size,
+        usageTotals,
+      )
+    }
+
+    const messages = await appendSubagentToolMessages(
+      found.projectDir,
+      sessionId,
+      entriesToMessages(window.entries),
+    )
+    return {
+      messages,
+      total: window.total,
+      hasMore: window.startIndex > 0,
+      nextBefore: window.startIndex,
+      usageTotals,
+    }
+  }
+
+  /**
+   * 流式读取 jsonl 的窗口：单遍扫描，只保留窗口内原始行的文本（不 parse 其余行）。
+   * 窗口：无 before → 最后 limit 条；有 before → [before-limit, before)。
+   *
+   * 多收 OVERSCAN 行再 parse 后截尾：坏行（parse 失败）也会占一个行序号，若严格
+   * 只收 limit 行，窗口内可用条目会少于 limit（实测 fixture 下一个坏行就少 1 条）。
+   * 多收几行把坏行"吸收"掉，返回的首条序号即游标（可能 > 窗口起点，但保证
+   * 不丢不重——下一次 before 用它继续向上翻）。
+   *
+   * collectUsage（v1.5.0）：同一遍扫描顺带累加全文件的 token 用量合计，
+   * **不额外扫第二遍**（见 accumulateUsageFromLine 的廉价过滤）。
+   */
+  private async readJsonlFileWindow(
+    filePath: string,
+    options: { limit: number; before?: number; collectUsage?: boolean },
+  ): Promise<{
+    entries: RawEntry[]
+    total: number
+    startIndex: number
+    usageTotals?: SessionUsageTotals | null
+  }> {
+    const OVERSCAN_LINES = 8
+    const stream = createReadStream(filePath, { encoding: 'utf8' })
+    const lines = createInterface({ input: stream, crlfDelay: Infinity })
+    const before = options.before
+    const collectLimit = options.limit + OVERSCAN_LINES
+    const buffered: Array<{ index: number; text: string }> = []
+    const usageAcc: UsageAccumulator = {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+    }
+    let total = 0
+    try {
+      for await (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        if (options.collectUsage) this.accumulateUsageFromLine(trimmed, usageAcc)
+        const index = total
+        total += 1
+        if (before === undefined) {
+          buffered.push({ index, text: trimmed })
+          if (buffered.length > collectLimit) buffered.shift()
+          continue
+        }
+        const lowerBound = before - collectLimit
+        if (index >= lowerBound && index < before) {
+          buffered.push({ index, text: trimmed })
+        }
+        // 越过窗口上界仍继续计数（total 要准；只数行、不 parse，成本很低）
+      }
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    } finally {
+      lines.close()
+      stream.destroy()
+    }
+
+    const parsed: Array<{ index: number; entry: RawEntry }> = []
+    for (const { index, text } of buffered) {
+      try {
+        parsed.push({ index, entry: JSON.parse(text) as RawEntry })
+      } catch {
+        // skip malformed lines（与全量路径同款容错）
+      }
+    }
+    const windowed = parsed.slice(-options.limit)
+    const startIndex = windowed.length > 0 ? windowed[0]!.index : total
+    return {
+      entries: windowed.map((item) => item.entry),
+      total,
+      startIndex,
+      ...(options.collectUsage ? { usageTotals: this.buildUsageTotals(usageAcc) } : {}),
+    }
+  }
+
+  /**
+   * 顺带累加一行的 token 用量（v1.5.0 窗口模式配套）。
+   *
+   * 廉价过滤：只对**含 usage 字样的行**做 JSON.parse。会话里占体积的是
+   * tool_result / 附件类的超长行，它们不带 usage——子串检查一行 O(len) 的
+   * 字符串扫描就能挡掉，避免为用量付出一次全量 parse 的代价。
+   * 坏行/半行与窗口路径同款容错（跳过）。
+   */
+  private accumulateUsageFromLine(line: string, acc: UsageAccumulator): void {
+    if (!line.includes('"usage"')) return
+    let entry: RawEntry
+    try {
+      entry = JSON.parse(line) as RawEntry
+    } catch {
+      return
+    }
+    const usage = normalizeMessageUsage(entry.message?.usage)
+    if (!usage) return
+    acc.inputTokens += usage.input_tokens ?? 0
+    acc.outputTokens += usage.output_tokens ?? 0
+    acc.cacheReadTokens += usage.cache_read_input_tokens ?? 0
+    acc.cacheCreationTokens += usage.cache_creation_input_tokens ?? 0
+  }
+
+  /**
+   * 汇总成对外的 usageTotals。**与前端 chatStore.summarizeTokenUsageFromHistory
+   * 逐项一致**：四项全 0 → null；cache 两项仅在 > 0 时出现（输出名去掉 input）。
+   */
+  private buildUsageTotals(acc: UsageAccumulator): SessionUsageTotals | null {
+    if (
+      acc.inputTokens === 0 &&
+      acc.outputTokens === 0 &&
+      acc.cacheReadTokens === 0 &&
+      acc.cacheCreationTokens === 0
+    ) {
+      return null
+    }
+    return {
+      input_tokens: acc.inputTokens,
+      output_tokens: acc.outputTokens,
+      ...(acc.cacheReadTokens > 0 ? { cache_read_tokens: acc.cacheReadTokens } : {}),
+      ...(acc.cacheCreationTokens > 0
+        ? { cache_creation_tokens: acc.cacheCreationTokens }
+        : {}),
+    }
+  }
+
+  async getSubagentTranscriptMessages(
+    sessionId: string,
+    agentId: string,
+  ): Promise<MessageEntry[]> {
+    const found = await this.host.findSessionFile(sessionId)
+    if (!found) {
+      throw ApiError.notFound(`Session not found: ${sessionId}`)
+    }
+
+    const entries = await this.host.readJsonlFile(
+      subagentTranscriptPath(found.projectDir, sessionId, agentId),
+    )
+    return entriesToMessages(entries)
+  }
+
+  async getSessionMessagesSignature(sessionId: string): Promise<string | null> {
+    const found = await this.host.findSessionFile(sessionId)
+    if (!found) return null
+
+    let count = 0
+    let last = ''
+    const agentToolUseIds = new Set<string>()
+    const resultLinks = new Map<string, string>()
+    await streamJsonlFile(found.filePath, (entry) => {
+      const agentToolUseId = extractAgentToolUseId(entry)
+      if (agentToolUseId) {
+        agentToolUseIds.add(agentToolUseId)
+      }
+      if (entry.message?.role === 'user' && Array.isArray(entry.message.content)) {
+        for (const block of entry.message.content as ContentBlock[]) {
+          if (
+            block.type !== 'tool_result' ||
+            typeof block.tool_use_id !== 'string' ||
+            !agentToolUseIds.has(block.tool_use_id)
+          ) {
+            continue
+          }
+          const agentId = extractAgentIdFromResultText(
+            extractTextFromContent(block.content),
+          )
+          if (agentId) {
+            resultLinks.set(block.tool_use_id, agentId)
+          }
+        }
+      }
+      if (!isVisibleTranscriptMessageEntry(entry)) return
+      count += 1
+      const contentLength = safeJsonLength(entry.content) + safeJsonLength(entry.message?.content)
+      last = [
+        entry.uuid ?? entry.messageId ?? '',
+        entry.type ?? '',
+        entry.timestamp ?? '',
+        entry.parentUuid ?? '',
+        entry.parent_tool_use_id ?? '',
+        contentLength,
+      ].join(':')
+    })
+
+    const subagentSignatures = await Promise.all(
+      [...resultLinks.entries()].map(async ([parentToolUseId, agentId]) => {
+        let childCount = 0
+        let childLast = ''
+        await streamJsonlFile(subagentTranscriptPath(found.projectDir, sessionId, agentId), (entry) => {
+          if (!isVisibleTranscriptMessageEntry(entry)) return
+          childCount += 1
+          const contentLength = safeJsonLength(entry.content) + safeJsonLength(entry.message?.content)
+          childLast = [
+            parentToolUseId,
+            agentId,
+            entry.uuid ?? entry.messageId ?? '',
+            entry.type ?? '',
+            entry.timestamp ?? '',
+            entry.parentUuid ?? '',
+            entry.parent_tool_use_id ?? '',
+            contentLength,
+          ].join(':')
+        })
+        return `${parentToolUseId}:${agentId}:${childCount}:${childLast}`
+      }),
+    )
+
+    return `${count}:${last}:${subagentSignatures.join('|')}`
   }
 
 }
