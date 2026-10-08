@@ -127,20 +127,17 @@ import {
   clearActiveBackgroundTasks,
   clearSessionChatActivity,
   failSessionChatActivity,
-  getSessionChatTerminalState,
   hasActiveBackgroundTasks,
-  isSessionChatInterrupted,
-  isSessionChatLegacyQueued,
   markLegacySessionChatQueued,
   markSessionChatInterrupted,
   resetActiveBackgroundTasksForTests,
   resetSessionChatActivityForTests,
   settleSessionChatActivity,
   trackCliBackgroundTaskLifecycle,
-  type SessionChatActivityState,
 } from './sessionActivity.js'
-// 类型定义点随批①迁往该模块，但本模块导出面须逐项不变 ⇒ 原样再导出（纯移动纪律）。
+// 类型与组合函数的定义点陆续迁往该模块，但本模块导出面须逐项不变 ⇒ 原样再导出。
 export type { SessionChatActivityState } from './sessionActivity.js'
+export { getSessionChatActivityState } from './sessionActivity.js'
 
 const settingsService = new SettingsService()
 const providerService = new ProviderService()
@@ -203,27 +200,10 @@ const runtimeOverrides = new Map<string, RuntimeOverride>()
 // ./deferredRuntimeState.ts（定义点唯一），此处经同名 import 使用其单操作原语。
 //
 // ── (B1-1/B1-2) 会话活动三表 + 写入原语 + 后台任务子域（活跃集 activeBackgroundTaskIds
-// 与生命周期解析）已上提到 ./sessionActivity.ts。getSessionChatActivityState /
-// markSessionChatQueued / clearLegacySessionChatState 三个导出留在本文件（消费方
-// import 面逐项不变）；getSessionChatActivityState 留此的另一个原因：它要读
-// computerUseApprovalService，而本模块 import sessionActivity ⇒ 若搬过去会组成新的
-// no-circular（该服务已 import 本模块）。
-
-export function getSessionChatActivityState(sessionId: string): SessionChatActivityState {
-  // An explicit stop wins over permission queues that the CLI has not emitted
-  // cancellation events for yet. Otherwise a stopped session would remain stuck
-  // in waiting until that asynchronous cleanup arrived.
-  if (isSessionChatInterrupted(sessionId)) return 'idle'
-  if (
-    conversationService.getPendingPermissionRequests(sessionId).length > 0 ||
-    computerUseApprovalService.getPendingRequests(sessionId).length > 0
-  ) {
-    return 'waiting'
-  }
-  if (hasActiveTurn(sessionId) || hasActiveBackgroundTasks(sessionId)) return 'running'
-  return getSessionChatTerminalState(sessionId)
-    ?? (isSessionChatLegacyQueued(sessionId) ? 'running' : 'idle')
-}
+// 与生命周期解析）+ 组合函数 getSessionChatActivityState 已全部上提到
+// ./sessionActivity.ts。markSessionChatQueued / clearLegacySessionChatState 两个导出
+// 留在本文件，getSessionChatActivityState 经同名再导出（见上方 import 段），消费方
+// import 面逐项不变。
 
 /** Compatibility fallback for the legacy REST enqueue endpoint. */
 export function markSessionChatQueued(sessionId: string): void {

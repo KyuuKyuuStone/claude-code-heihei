@@ -54,6 +54,16 @@ registerServantIncidentDeliver((targetSessionId, content, serverHost) =>
 // conversationService → rosterDigest → servantService 静态环）。本模块是 L4 汇聚点。
 import { registerRosterDigestDeps } from './services/rosterDigest.js'
 registerRosterDigestDeps({ listServants: () => servantService.listServants() })
+// v1.7.4 B1-2 批③断环：getSessionChatActivityState 上提到 ws/sessionActivity.ts，
+// 它对 computer-use 待批请求数的读取经注入缝由本模块（L4 汇聚点）反向接线——
+// computerUseApprovalService 已 import ws/handler，若该模块直接 import 它会闭合出
+// 新的 no-circular。
+import { computerUseApprovalService } from './services/computerUseApprovalService.js'
+import { registerSessionActivityDeps } from './ws/sessionActivity.js'
+registerSessionActivityDeps({
+  pendingComputerUseApprovals: (sessionId) =>
+    computerUseApprovalService.getPendingRequests(sessionId).length,
+})
 import { dispatchMailboxService } from './services/dispatchMailboxService.js'
 // v1.6.0 任务台账：订阅 sessionRegistry 的回合事件，把「员工回合开始消费」
 // 落成任务状态 accepted → in_progress。L1 → 本模块（L4 汇聚点）单向订阅，

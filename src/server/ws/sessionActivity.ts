@@ -2,21 +2,25 @@
  * 会话活动状态（v1.7.4 结构专项：从 ws/handler.ts 上提「会话活动域」）
  *
  * 批①（B1-1）＝活动状态三表与写入原语；批②（B1-2）＝后台任务子域（活跃集 +
- * 生命周期解析）。两批的表都只留在本模块内 —— handler 通过写入原语改状态、
- * 通过只读访问器读状态，不再直接触碰表。
+ * 生命周期解析）；批③（B1-2 续）＝组合函数 `getSessionChatActivityState`。三批的
+ * 表都只留在本模块内 —— handler 通过写入原语改状态、通过只读访问器读状态，
+ * 不再直接触碰表。
  *
- * 活动状态刻意复用权威的 WebSocket 轮次/权限状态（仍在 handler 本地，因为
- * `getSessionChatActivityState` 组合它们）：只有「失败终态」与「遗留 REST 队列
- * 回退」需要自己的记忆，成功完成直接回到 idle。
+ * 活动状态刻意复用权威的 WebSocket 轮次/权限状态：只有「失败终态」与「遗留
+ * REST 队列回退」需要自己的记忆，成功完成直接回到 idle。
  *
  * 消费方（api/conversations.ts、conversation-status.test.ts）仍从 handler 导入同名
- * 导出，导入面逐项不变。
+ * 导出（handler 再导出本模块的实现），导入面逐项不变。
  *
  * ⚠ 本模块**不得** import `services/computerUseApprovalService.js`：handler 已
  * import 本模块，而该服务又 import `ws/handler`（既有 known 环）⇒ 会组成新的
- * `no-circular`（2026-10-08 实测）。`getSessionChatActivityState` 留在 handler 正是
- * 为此（它要读该服务的待批请求）。
+ * `no-circular`（2026-10-08 实测：handler → sessionActivity →
+ * computerUseApprovalService → handler）。待批 computer-use 请求数改经注入缝
+ * `registerSessionActivityDeps` 由装配根注入。
  */
+
+import { conversationService } from '../services/conversationService.js'
+import { hasActiveTurn } from '../services/sessionRegistry.js'
 
 export type SessionChatActivityState =
   | 'waiting'
@@ -169,4 +173,47 @@ export function clearActiveBackgroundTasks(sessionId: string): void {
 /** 测试复位：清空全部后台任务活跃集。 */
 export function resetActiveBackgroundTasksForTests(): void {
   activeBackgroundTaskIds.clear()
+}
+
+// ── 注入缝（批③）：断 sessionActivity → computerUseApprovalService 这条会成环的边 ──
+
+export type SessionActivityDeps = {
+  /** 该会话待批的 computer-use 权限请求数 */
+  pendingComputerUseApprovals: (sessionId: string) => number
+}
+
+let depsProvider: SessionActivityDeps | null = null
+
+/**
+ * 装配根注入（生产）：server/index.ts 启动序调用，与
+ * registerServantInfoSource / registerRosterDigestDeps 同款形态。
+ *
+ * 断环理由见文件头：computerUseApprovalService 已 import `ws/handler`，本模块若
+ * 直接 import 它会闭合出新的 `no-circular`（2026-10-08 实测判红）。
+ */
+export function registerSessionActivityDeps(provider: SessionActivityDeps): void {
+  depsProvider = provider
+}
+
+/** 测试注入/复位（传 null 复位）。 */
+export function setSessionActivityDepsForTests(provider: SessionActivityDeps | null): void {
+  depsProvider = provider
+}
+
+// ── 组合函数（批③）：把三张表与外部轮次/权限状态拼成对外活动态 ──────────────
+
+export function getSessionChatActivityState(sessionId: string): SessionChatActivityState {
+  // An explicit stop wins over permission queues that the CLI has not emitted
+  // cancellation events for yet. Otherwise a stopped session would remain stuck
+  // in waiting until that asynchronous cleanup arrived.
+  if (isSessionChatInterrupted(sessionId)) return 'idle'
+  if (
+    conversationService.getPendingPermissionRequests(sessionId).length > 0 ||
+    (depsProvider?.pendingComputerUseApprovals(sessionId) ?? 0) > 0
+  ) {
+    return 'waiting'
+  }
+  if (hasActiveTurn(sessionId) || hasActiveBackgroundTasks(sessionId)) return 'running'
+  return getSessionChatTerminalState(sessionId)
+    ?? (isSessionChatLegacyQueued(sessionId) ? 'running' : 'idle')
 }

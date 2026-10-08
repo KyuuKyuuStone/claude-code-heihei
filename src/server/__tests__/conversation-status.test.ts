@@ -12,7 +12,15 @@ import {
   translateCliMessage,
   type WebSocketData,
 } from '../ws/handler.js'
+import { setSessionActivityDepsForTests } from '../ws/sessionActivity.js'
 import type { ServerWebSocket } from 'bun'
+
+// 与生产装配根同款接线：computer-use 待批请求数经注入缝供给——sessionActivity
+// 不得直接 import computerUseApprovalService（该服务已 import ws/handler，会成环）。
+setSessionActivityDepsForTests({
+  pendingComputerUseApprovals: (sessionId) =>
+    computerUseApprovalService.getPendingRequests(sessionId).length,
+})
 
 async function getStatus(sessionId: string): Promise<string> {
   const url = new URL(`http://127.0.0.1/api/sessions/${sessionId}/chat/status`)
