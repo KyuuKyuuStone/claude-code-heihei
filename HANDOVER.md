@@ -81,7 +81,7 @@
 
 - `sessionService.ts` 未拆（豁免 `cap 3846`，续签 **1.7.3**，附条件「1.7.3 须含红灯区批次」）；`handler.ts` 豁免 `cap 3372`，同样续至 1.7.3。
 - **服务端（root）从来没有有效类型关卡**（root tsconfig 因 TS6 无效；类型关卡目前只覆盖 desktop 子项目）。
-- 会话列表/索引族红灯批、30 处瞬时 toast 分类、第 4 处长驻点（`desktop/src/main.tsx:62` 根崩溃屏）等仍待办。
+- ~~会话列表/索引族红灯批、30 处瞬时 toast 分类、第 4 处长驻点（`desktop/src/main.tsx:62` 根崩溃屏）等仍待办。~~ → **2026-10-08 收口**：红灯批＝**v1.7.3 完成**（5 缺陷 4 修 1 挂档）；30 处瞬时 toast 分类＝v1.7.1 落地 **26 处已全覆盖**（「30」为原始估算，另 4 处经复核为**排除项、非待办**——**无「4 处待补」**，见条目 12 勘误）；第 4 处长驻点（`main.tsx` 根崩溃屏）＝**按设计稿排除、非缺口**（见条目 12 勘误）。
 - **「320 秒超时」专项排查进行中**：已定位为 `turn-checkpoints` 结构性 `O(m·n)` 循环的候选成因，**O(n²) 尚未证实、修法未落地**（据主管口径，未在代码/提交中核到物证）。
 - v1.7.2 未验证项：渲染层视觉未真机走查、720px 短版降级未做、转录缓存「同尺寸重写 + mtime 精度」风险、`startedByDelivery` 不持久化、无客户端 15 分钟档未做 e2e。
 
@@ -240,6 +240,16 @@
    - **handler 导出面必须逐批保住**（非测试外部消费方实测 11 个绑定 + 1 类型）：`api/conversations.ts` ← `clearLegacySessionChatState, getSessionChatActivityState, markSessionChatQueued`；`api/sessions.ts` ← `closeSessionConnection, getSlashCommands, interruptSessionRuntime`；`index.ts` ← `handleWebSocket, WebSocketData`；`computerUseApprovalService` ← `sendToSession`；`sessionComponentReloadService` ← `updateSessionSlashCommands`；`teamWatcher` ← `sendToSession, getActiveSessionIds`。**口径不变：机器机检「HEAD 导出面 vs 工作区导出面」差集为空（当前 31 项）。**
    - **总判断：可达 ≤2500 ✓，但绝非一批之功**。需净减 ≥728。最小可行组合实测推演：T0(143) + D1′(≈490，含下沉小件) = 633 ⇒ 2595 **仍不达标**；再叠 D8(75) → 2520 **仍差一点**；再叠 D10(36) → **2484 ✓（余量仅 16，不建议就此收手）**。稳妥组合：T0 + D1′ + D4(+D3) + D8 + D10 ≈ 929 ⇒ **≈2299**（余量 201）。彻底组合再叠 D2(135) + D6(120) ⇒ **≈2044**。**建议批序：T0 → D1′ → (D3+D4) → D8 → D10 → D2 → D6 → 视余量收口；D5/D7 走注入缝，D11 最后，D9 不动。**
    - **未确定项**：① 跨度口径含块间空行，**净估误差 ±10–15%**，实际以每批落地后 `wc -l` 实测为准；② `sendMessage`/`getActiveSessionIds`/`getSlashCommands`/`clearLegacySessionChatState` 等小符号的**当前定义点未逐一确认**（T0 批开工前须 grep 确认是 handler 本地还是已外部化）；③ D3/D4 交织的具体最小拆分点需在开工前做一次跨域引用复查；④ 本清单未覆盖 handler 头部 151 行 import/常量段里可下沉的实例（`settingsService`/`providerService` 等）。
+
+12. **G11 勘误（2026-10-08）：根崩溃屏非缺口；toast 无「4 处待补」**（只读核账纠错，**代码零改动**；主管同日裁决 A+D 结案）
+   - **背景**：还债批 G11 开工项据《框架改造目标对账_2026-10-08.md》把「`main.tsx` 未套 `describeApiFailure`（grep 0 命中）＝未做」与「toast 26/30、剩余约 4 处待补」列为缺口。全量普查后**两条前提均与代码不符**，故登记本勘误更正对账/交接口径。
+   - **勘误①（根崩溃屏）——按设计稿排除、非缺口**：`main.tsx` 的兜底**套不了也无需套**。① `main.tsx:56-77` 自有兜底在生产是**死路径**：`desktop/index.html:196` 内联脚本已在**模块加载前**注册 `window.__CC_HEIHEI_SHOW_STARTUP_ERROR__`，`main.tsx:59` 命中即 delegate ⇒ 自有兜底**永不执行**（仅测试删 hook 才走到）。② **真·生产根崩溃屏 = `desktop/index.html:196` 的 `renderStartupError`**（监听 `error`/`unhandledrejection` + 8s watchdog），该处**在模块之前、只能内联双语，无法访问 `describeApiFailure`/i18n**。③ bootstrap 错误（动态 import 失败、root 缺失）**非 `ApiError`**，kind 恒 `undefined` ⇒ 套用**近零作用**（仅 `KNOWN_SERVER_MESSAGES` 分支，而该处不可能命中）。④ 设计稿 `设计_v1.7.1_错误技术详情折叠.md` §5 **已显式排除**该处（「React 挂载前的根崩溃屏，无 i18n 上下文，属另一套」），且 v1.7.1 的「双语静态标题 + `<pre>` 原始串」已获设计师裁决**「接受」**。⇒ **非缺口，不改代码**（此处白屏已由 index.html watchdog + ErrorBoundary + 死兜底三层覆盖）。
+   - **勘误②（toast）——26 处已全覆盖，无待补**：v1.7.1 的「**30**」是**原始估算**（《架构决策_v1.7结构拆分边界.md》:612/640 要求产「30 处 toast 清单」，估算值）；`5819f20` 以 **addToast 实锚**重勘 = **26 真 toast + 4 非 toast**（`TraceSession:145`、`FilePreview:116` 为 `setState` 内联，`EmptySession:354` 已走 `resolveCreateSessionErrorMessage`）。⇒ 「30−26=4 处待补」是**对估算值的误读**——那 4 处是**排除项、非待办**。**现行全量普查（70 处 addToast）确认无「未接映射表」的 API 错误 toast**：27 处走 `describeApiFailure` + 1 处 `resolveCreateSessionErrorMessage` + 余为 i18n 键/成功提示/结果计数。
+
+13. **G11 收尾两笔债务（2026-10-08 登记，本批不改）**
+   - **债① `Market.tsx:75` 卸载错误直出原始串**（**真缺口**，待设计师出稿后单开一小批）：位置 `desktop/src/pages/Market.tsx:75`（`addToast({ type: 'error', message: error.message })`）。与**同页安装态 `:50`**（走市场自有分类 `market.installError.*`）及 **skills 页姊妹路径 `SkillDetail.tsx:111`**（同调 `marketApi.uninstall`，**已走 `describeApiFailure`**）**不一致**。修法＝需**卸载专用 6 键 × 5 语言 + 设计师定文案**（现有 `market.installError.*` 六键文案均为「**安装**失败：…」，`zh.ts:2284-2289`，直接复用到卸载会出错文案）；市场为**自有分类** `MarketInstallErrorKind`（`marketStore.ts:15/26`），非 `describeApiFailure` 的三类口径。证据：代码阅读 + 全量 toast 普查。
+   - **债② `PluginDetail.tsx:138` 的 kind 已在 store 丢失**（登记待议）：位置 `desktop/src/components/plugins/PluginDetail.tsx:138`（`addToast({ type: 'error', message: error })`，`error` 取自 `skillStore.error`）。`skillStore.ts:61,87` 只存 `err instanceof Error ? err.message : String(err)` ⇒ **kind 在 store 丢失**，机械套 `describeApiFailure(undefined, …)` 仅 `KNOWN_SERVER_MESSAGES` 分支可能生效（而 skill 详情失败不会产生跨项目 409）⇒ **用户可见改善≈0**。真修需 **store 保留 kind**（形状变更）⇒ 登记待议。证据：代码阅读 + 全量 toast 普查。
+   - （另有 2 处 borderline 未列修，如实记：`PluginDetail.tsx:80` 的 `reloadWarning` 原文嵌入「已应用但重载失败」警告＝**有意暴露原因**；`:156/:183` 的 `Unable to locate agent/MCP server` 为**开发向英文、非 API 错误**。）
 
 ### 能工作的
 - **v1.5.0 用户实测**：用户从 v1.2.7 升级后确认无 bug。`release-notes/v1.5.0.md` 与 README 定位一致：花名册高危修复、Windows 专属、移除外部 IM 适配器、bun 打包链；本地模型仍可用但已冻结，不参与协作会话。
