@@ -28,11 +28,17 @@ import { getCanonicalName } from '../../utils/model/model.js'
 import { isFirstPartyAnthropicBaseUrl } from '../../utils/model/providers.js'
 import { calculateUSDCost, MODEL_COSTS } from '../../utils/modelCost.js'
 import { roughTokenCountEstimationForMessage } from '../../services/tokenEstimation.js'
+import type { PersistedWorktreeSession } from './localIndex/types.js'
+import type { PreparedSessionWorkspace } from './repositoryLaunchService.js'
+import { streamJsonlFile } from './session/jsonlStorage.js'
+import { normalizeDriveRootPathForPlatform } from './windowsDrivePath.js'
 import { ProviderService } from './providerService.js'
 import { formatCost } from './session/sessionUtils.js'
 import {
   applyRuntimeContextMetadata,
+  desanitizePath,
   resolveRuntimeContextMetadataFromEntries,
+  VALID_SESSION_PERMISSION_MODES,
 } from './session/sessionEntryMetadata.js'
 
 
@@ -131,6 +137,27 @@ function providerModelLooksRelated(
   ))
 }
 
+export type SessionLaunchInfo = {
+  filePath: string
+  projectDir: string
+  workDir: string
+  repository?: PreparedSessionWorkspace['repository']
+  worktreeSession?: PersistedWorktreeSession | null
+  transcriptMessageCount: number
+  customTitle: string | null
+  permissionMode?: string
+  runtimeProviderId?: string | null
+  runtimeModelId?: string
+  effortLevel?: string
+}
+
+export type SessionInspectionTranscriptSnapshot = {
+  launchInfo: SessionLaunchInfo
+  metadata: TranscriptMetadataSnapshot
+  usage: TranscriptUsageSnapshot | null
+  contextEstimate: TranscriptContextEstimate | null
+}
+
 /**
  * launch 提示的最小结构面（= sessionEntryMetadata 里 `ProviderContextWindowHint` 的同形定义）。
  * 那边**刻意不导出**该类型（见 sessionService 的对应注释），本模块若 import 会把它的既存
@@ -153,6 +180,9 @@ export type TranscriptDerivationHost = {
   readJsonlFile: (filePath: string) => Promise<RawEntry[]>
   /** 定位会话转录文件；依赖 sessionService 的索引模式实例状态 ⇒ 以函数注入 */
   findSessionFile: (sessionId: string) => Promise<SessionFileMatch | null>
+  /** 会话 effort 档位白名单；该常量在 sessionService 另有族外使用点（:658/:2942/:3086）
+   *  ⇒ 不随本族搬（以免重复定义），经宿主注入。 */
+  sessionEffortLevels: ReadonlySet<string>
   /** 族外方法（P2-a 加固过），本族仅 1 处调用 */
   getSessionLaunchInfo: (sessionId: string) => Promise<TranscriptDerivationLaunchHint | null>
 }
@@ -312,8 +342,7 @@ export class TranscriptDerivation {
     return contextWindow
   }
 
-  /** 族②（getInspectionTranscriptSnapshot）经 sessionService 的同名委托调用 ⇒ 非 private */
-  async getTranscriptContextWindow(
+  private async getTranscriptContextWindow(
     sessionId: string,
     model: string,
     launchInfo?: TranscriptDerivationLaunchHint | null,
@@ -364,8 +393,7 @@ export class TranscriptDerivation {
     return metadata
   }
 
-  /** 族②（getInspectionTranscriptSnapshot）经 sessionService 的同名委托调用 ⇒ 非 private */
-  async buildTranscriptContextEstimate(
+  private async buildTranscriptContextEstimate(
     sessionId: string,
     latest: {
       model: string
@@ -624,4 +652,269 @@ export class TranscriptDerivation {
       models: Array.from(models.values()),
     }
   }
+
+  async getInspectionTranscriptSnapshot(sessionId: string): Promise<SessionInspectionTranscriptSnapshot | null> {
+    const found = await this.host.findSessionFile(sessionId)
+    if (!found) return null
+
+    let latestWorkDir: string | null = null
+    let latestCwd: string | null = null
+    let repository: PreparedSessionWorkspace['repository'] | undefined
+    let worktreeSession: PersistedWorktreeSession | null | undefined
+    let permissionMode: string | undefined
+    let runtimeProviderId: string | null | undefined
+    let runtimeModelId: string | undefined
+    let effortLevel: string | undefined
+    let customTitle: string | null = null
+    let transcriptMessageCount = 0
+    const metadata: TranscriptMetadataSnapshot = {}
+
+    const models = new Map<string, TranscriptUsageSnapshot['models'][number]>()
+    let totalCostUSD = 0
+    let totalInputTokens = 0
+    let totalOutputTokens = 0
+    let totalCacheReadInputTokens = 0
+    let totalCacheCreationInputTokens = 0
+    let totalWebSearchRequests = 0
+    let hasUnknownModelCost = false
+    let firstUsageAt: number | null = null
+    let lastUsageAt: number | null = null
+
+    let latestContextUsage: {
+      model: string
+      inputTokens: number
+      outputTokens: number
+      cacheReadInputTokens: number
+      cacheCreationInputTokens: number
+    } | null = null
+    let estimatedTokensFromMessages = 0
+    let transcriptHasMediaInput = false
+
+    await streamJsonlFile(found.filePath, (entry) => {
+      if (typeof entry.message?.model === 'string') {
+        metadata.model = entry.message.model
+      }
+      if (typeof entry.cwd === 'string') {
+        metadata.cwd = entry.cwd
+        latestCwd = normalizeDriveRootPathForPlatform(entry.cwd)
+      }
+      if (typeof entry.version === 'string') {
+        metadata.version = entry.version
+      }
+
+      if (entry.type === 'session-meta') {
+        const record = entry as Record<string, unknown>
+        if (typeof record.workDir === 'string') {
+          latestWorkDir = normalizeDriveRootPathForPlatform(record.workDir)
+        }
+        if (
+          typeof entry.permissionMode === 'string' &&
+          VALID_SESSION_PERMISSION_MODES.has(entry.permissionMode)
+        ) {
+          permissionMode = entry.permissionMode
+        }
+        if (record.runtimeProviderId === null || typeof record.runtimeProviderId === 'string') {
+          runtimeProviderId = record.runtimeProviderId as string | null
+        }
+        if (typeof record.runtimeModelId === 'string') {
+          runtimeModelId = record.runtimeModelId
+        }
+        if (
+          typeof record.effortLevel === 'string' &&
+          this.host.sessionEffortLevels.has(record.effortLevel)
+        ) {
+          effortLevel = record.effortLevel
+        }
+      }
+
+      const candidateRepository = (entry as Record<string, unknown>)?.repository
+      if (candidateRepository && typeof candidateRepository === 'object') {
+        repository = candidateRepository as PreparedSessionWorkspace['repository']
+      }
+
+      if (entry.type === 'worktree-state') {
+        if (entry.worktreeSession === null) {
+          worktreeSession = null
+        } else if (
+          entry.worktreeSession &&
+          typeof entry.worktreeSession === 'object' &&
+          typeof entry.worktreeSession.worktreePath === 'string' &&
+          typeof entry.worktreeSession.worktreeName === 'string'
+        ) {
+          worktreeSession = entry.worktreeSession
+        }
+      }
+
+      if (entry.type === 'custom-title' && typeof entry.customTitle === 'string') {
+        customTitle = entry.customTitle
+      }
+
+      if (
+        !entry.isMeta &&
+        !!entry.message?.role &&
+        (entry.type === 'user' || entry.type === 'assistant' || entry.type === 'system')
+      ) {
+        transcriptMessageCount += 1
+      }
+
+      if (
+        entry.type === 'user' ||
+        entry.type === 'assistant' ||
+        entry.type === 'attachment'
+      ) {
+        estimatedTokensFromMessages += roughTokenCountEstimationForMessage(entry)
+        if (!transcriptHasMediaInput && hasMediaInput([entry])) {
+          transcriptHasMediaInput = true
+        }
+      }
+
+      const usage = entry.message?.usage
+      const model = entry.message?.model
+      if (!usage || typeof model !== 'string') return
+
+      const inputTokens = typeof usage.input_tokens === 'number' ? usage.input_tokens : 0
+      const outputTokens = typeof usage.output_tokens === 'number' ? usage.output_tokens : 0
+      const cacheReadInputTokens = typeof usage.cache_read_input_tokens === 'number' ? usage.cache_read_input_tokens : 0
+      const cacheCreationInputTokens = typeof usage.cache_creation_input_tokens === 'number' ? usage.cache_creation_input_tokens : 0
+      const webSearchRequests = typeof usage.server_tool_use?.web_search_requests === 'number'
+        ? usage.server_tool_use.web_search_requests
+        : 0
+
+      latestContextUsage = {
+        model,
+        inputTokens,
+        outputTokens,
+        cacheReadInputTokens,
+        cacheCreationInputTokens,
+      }
+
+      if (
+        inputTokens === 0 &&
+        outputTokens === 0 &&
+        cacheReadInputTokens === 0 &&
+        cacheCreationInputTokens === 0 &&
+        webSearchRequests === 0
+      ) {
+        return
+      }
+
+      const canonical = getCanonicalName(model)
+      if (!Object.prototype.hasOwnProperty.call(MODEL_COSTS, canonical)) {
+        hasUnknownModelCost = true
+      }
+
+      const costUsage = {
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        cache_read_input_tokens: cacheReadInputTokens,
+        cache_creation_input_tokens: cacheCreationInputTokens,
+        server_tool_use: { web_search_requests: webSearchRequests },
+        speed: usage.speed,
+      } as Parameters<typeof calculateUSDCost>[1]
+      const costUSD = calculateUSDCost(model, costUsage)
+
+      let modelUsage = models.get(model)
+      if (!modelUsage) {
+        modelUsage = {
+          model,
+          displayName: canonical,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadInputTokens: 0,
+          cacheCreationInputTokens: 0,
+          webSearchRequests: 0,
+          costUSD: 0,
+          costDisplay: '$0.0000',
+          contextWindow: 0,
+          maxOutputTokens: getModelMaxOutputTokens(model).default,
+        }
+        models.set(model, modelUsage)
+      }
+
+      modelUsage.inputTokens += inputTokens
+      modelUsage.outputTokens += outputTokens
+      modelUsage.cacheReadInputTokens += cacheReadInputTokens
+      modelUsage.cacheCreationInputTokens += cacheCreationInputTokens
+      modelUsage.webSearchRequests += webSearchRequests
+      modelUsage.costUSD += costUSD
+      modelUsage.costDisplay = formatCost(modelUsage.costUSD)
+
+      totalCostUSD += costUSD
+      totalInputTokens += inputTokens
+      totalOutputTokens += outputTokens
+      totalCacheReadInputTokens += cacheReadInputTokens
+      totalCacheCreationInputTokens += cacheCreationInputTokens
+      totalWebSearchRequests += webSearchRequests
+
+      if (entry.timestamp) {
+        const time = Date.parse(entry.timestamp)
+        if (!Number.isNaN(time)) {
+          firstUsageAt = firstUsageAt === null ? time : Math.min(firstUsageAt, time)
+          lastUsageAt = lastUsageAt === null ? time : Math.max(lastUsageAt, time)
+        }
+      }
+    })
+
+    const workDir = latestWorkDir || latestCwd || desanitizePath(found.projectDir) || process.cwd()
+    const launchInfo: SessionLaunchInfo = {
+      filePath: found.filePath,
+      projectDir: found.projectDir,
+      workDir,
+      repository,
+      worktreeSession,
+      transcriptMessageCount,
+      customTitle,
+      permissionMode,
+      ...(runtimeProviderId !== undefined ? { runtimeProviderId } : {}),
+      ...(runtimeModelId ? { runtimeModelId } : {}),
+      ...(effortLevel ? { effortLevel } : {}),
+    }
+
+    for (const modelUsage of models.values()) {
+      modelUsage.contextWindow = await this.getTranscriptContextWindow(
+        sessionId,
+        modelUsage.model,
+        launchInfo,
+      )
+    }
+
+    const usage = models.size === 0
+      ? null
+      : {
+          source: 'transcript' as const,
+          totalCostUSD,
+          costDisplay: formatCost(totalCostUSD),
+          hasUnknownModelCost,
+          totalAPIDuration: 0,
+          totalDuration:
+            firstUsageAt !== null && lastUsageAt !== null
+              ? Math.max(0, Math.round((lastUsageAt - firstUsageAt) / 1000))
+              : 0,
+          totalLinesAdded: 0,
+          totalLinesRemoved: 0,
+          totalInputTokens,
+          totalOutputTokens,
+          totalCacheReadInputTokens,
+          totalCacheCreationInputTokens,
+          totalWebSearchRequests,
+          models: Array.from(models.values()),
+        }
+    const contextEstimate = latestContextUsage
+      ? await this.buildTranscriptContextEstimate(
+          sessionId,
+          latestContextUsage,
+          estimatedTokensFromMessages,
+          transcriptHasMediaInput,
+          launchInfo,
+        )
+      : null
+
+    return {
+      launchInfo,
+      metadata,
+      usage,
+      contextEstimate,
+    }
+  }
+
 }
