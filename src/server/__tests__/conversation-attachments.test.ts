@@ -96,7 +96,8 @@ describe('ConversationService attachment materialization', () => {
     }
     const textBlocks = payload.message.content.filter((block) => block.type === 'text')
     const imageBlocks = payload.message.content.filter((block) => block.type === 'image')
-    expect(textBlocks[0]?.text).toBe('这张图说了什么？')
+    // v1.7.4 不变量：正文是**最后一个** text 块（元数据等排在它之前，见 attachments.ts 注释）
+    expect(textBlocks[textBlocks.length - 1]?.text).toBe('这张图说了什么？')
     expect(textBlocks.some((block) => block.text?.includes('@"'))).toBe(false)
     expect(imageBlocks).toHaveLength(1)
     expect(imageBlocks[0]?.source?.media_type).toBe('image/png')
@@ -175,7 +176,8 @@ describe('ConversationService attachment materialization', () => {
     }
     const textBlocks = payload.message.content.filter((block) => block.type === 'text')
     const imageBlocks = payload.message.content.filter((block) => block.type === 'image')
-    expect(textBlocks[0]?.text).toBe('看这个截图')
+    // v1.7.4 不变量：正文是**最后一个** text 块（元数据等排在它之前）
+    expect(textBlocks[textBlocks.length - 1]?.text).toBe('看这个截图')
     expect(textBlocks.some((block) => block.text?.includes('@"'))).toBe(false)
     expect(textBlocks.some((block) => block.text?.includes(`source: ${imagePath}`))).toBe(true)
     expect(imageBlocks).toHaveLength(1)

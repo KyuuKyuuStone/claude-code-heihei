@@ -48,28 +48,35 @@ export async function buildUserContent(
 ): Promise<UserContentBlock[]> {
   const materialized = await materializeAttachments(sessionId, attachments)
   const trimmed = content.trim()
-  const text = materialized.pathPrefix
-    ? `${materialized.pathPrefix}${trimmed || 'Please analyze the attached files.'}`.trim()
+
+  // ── 不变量（v1.7.4）：**用户正文块永远是最后一个 text 块** ──────────────────────
+  // CLI 取**最后一个 text 块**当命令串（`src/utils/processUserInput/processUserInput.ts:338-341`），
+  // 斜杠门只看它的行首（同文件 :533-535）。因此任何"给模型看的附加物"
+  // （花名册系统段、附件路径引用、图片块、图片元数据）都必须排在正文**之前**；
+  // 一旦排到正文之后（或拼进正文字符串），主管会话里所有走服务端→CLI 的斜杠命令
+  // （/compact /goal /init…）都会被当普通文本送模型。
+  // 例外只有一种：正文为空且带图片时由正文块承载「占位说明」（仍是 text ✓ 见下）。
+  const prefixBlocks: UserContentBlock[] = materialized.pathPrefix
+    ? [{ type: 'text', text: materialized.pathPrefix.trim() }]
+    : []
+
+  const bodyText = materialized.pathPrefix
+    ? trimmed || 'Please analyze the attached files.'
     : trimmed
 
-  const bodyBlocks: UserContentBlock[] = text
-    ? [{ type: 'text', text }]
+  const bodyBlocks: UserContentBlock[] = bodyText
+    ? [{ type: 'text', text: bodyText }]
     : materialized.imageBlocks.length > 0
       ? [{ type: 'text', text: 'Please analyze the attached image.' }]
       : []
 
-  // v1.7.4 修缺陷：给模型的系统段（花名册摘要）**独立成块且在最前**。
-  // CLI 取**最后一个 text 块**当命令串（`src/utils/processUserInput/processUserInput.ts:338-341`），
-  // 因此用户正文那个块必须保持原样、且自成一块 —— 把系统段拼进正文字符串会改掉行首，
-  // 主管会话里所有走服务端→CLI 的斜杠命令（/compact /goal /init…）都会被当普通文本送模型。
-  const blocks: UserContentBlock[] = leadingSystemText
-    ? [{ type: 'text', text: leadingSystemText }, ...bodyBlocks]
-    : bodyBlocks
-
-  blocks.push(...materialized.imageBlocks)
-  for (const metadataText of materialized.imageMetadataTexts) {
-    blocks.push({ type: 'text', text: metadataText })
-  }
+  const blocks: UserContentBlock[] = [
+    ...(leadingSystemText ? [{ type: 'text' as const, text: leadingSystemText }] : []),
+    ...prefixBlocks,
+    ...materialized.imageBlocks,
+    ...materialized.imageMetadataTexts.map((text) => ({ type: 'text' as const, text })),
+    ...bodyBlocks,
+  ]
 
   return blocks.length > 0 ? blocks : [{ type: 'text', text: '' }]
 }
