@@ -16,6 +16,7 @@ import * as fsp from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { logError } from '../../../utils/log.js'
+import { logForDiagnosticsNoPII } from '../../../utils/diagLogs.js'
 import {
   createImageMetadataText,
   maybeResizeAndDownsampleImageBuffer,
@@ -78,7 +79,31 @@ export async function buildUserContent(
     ...bodyBlocks,
   ]
 
-  return blocks.length > 0 ? blocks : [{ type: 'text', text: '' }]
+  const assembled = blocks.length > 0 ? blocks : [{ type: 'text', text: '' }]
+  assertUserBodyBlockLast(assembled)
+  return assembled
+}
+
+/**
+ * 开发期不变量守卫（v1.7.4）：`buildUserContent` 的**末块必须是 text**。
+ *
+ * 为什么单独立一道网：这条不变量刚造成过一个**已发布缺陷**（花名册摘要前置
+ * 拼进正文 ⇒ 主管会话所有走服务端→CLI 的斜杠命令被当普通文本送模型）。
+ * 测试守卫只覆盖**已知**调用路径，挡不住将来**新增调用方**在组装顺序上绕过
+ * 不变量。开发期一道低成本网兜住，比再发一版便宜。
+ *
+ * 纪律：**仅非生产环境**执行；命中即 `logForDiagnosticsNoPII` **告警**，
+ * **不抛错、不改行为**（返回值与告警前完全一致）⇒ 生产热路径零成本。
+ * 只记计数与类型，不含正文（no-PII）。
+ */
+export function assertUserBodyBlockLast(blocks: UserContentBlock[]): void {
+  if (process.env.NODE_ENV === 'production') return
+  const last = blocks[blocks.length - 1]
+  if (last && last.type === 'text') return
+  logForDiagnosticsNoPII('warn', 'user_body_block_not_last', {
+    blockCount: blocks.length,
+    lastBlockType: typeof last?.type === 'string' ? last.type : 'undefined',
+  })
 }
 
 export async function materializeAttachments(

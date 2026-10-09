@@ -11,7 +11,12 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { buildUserContent } from '../services/conversation/attachments.js'
+import {
+  buildUserContent,
+  assertUserBodyBlockLast,
+  type UserContentBlock,
+} from '../services/conversation/attachments.js'
+import { setDiagnosticsLogWriterForTests } from '../../utils/diagLogs.js'
 
 const PNG_1x1 =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=='
@@ -119,5 +124,79 @@ describe('buildUserContent 不变量：用户正文块永远是最后一个 text
       const blocks = await buildUserContent(c.body, 's1', c.attachments, c.system)
       expectBodyLast(blocks, c.body)
     }
+  })
+})
+
+/**
+ * 开发期守卫 `assertUserBodyBlockLast`（v1.7.4）：
+ * 仅非生产环境断言「末块是 text」，违规**告警不抛错**。这些用例是守卫本身的
+ * 判红点——去掉守卫、或让它抛错/在生产也跑，本组必红。
+ */
+describe('assertUserBodyBlockLast 开发期守卫', () => {
+  type DiagCall = { level: string; event: string; data: Record<string, unknown> }
+  const diagCalls: DiagCall[] = []
+  let savedNodeEnv: string | undefined
+
+  beforeEach(() => {
+    diagCalls.length = 0
+    savedNodeEnv = process.env.NODE_ENV
+    delete process.env.NODE_ENV
+    setDiagnosticsLogWriterForTests((level, event, data) => {
+      diagCalls.push({ level, event, data })
+    })
+  })
+  afterEach(() => {
+    setDiagnosticsLogWriterForTests(null)
+    if (savedNodeEnv === undefined) delete process.env.NODE_ENV
+    else process.env.NODE_ENV = savedNodeEnv
+  })
+
+  test('① 合规（末块 text）⇒ 静默', () => {
+    assertUserBodyBlockLast([{ type: 'text', text: '正文' }])
+    assertUserBodyBlockLast([
+      { type: 'text', text: '<system-reminder>【在册】</system-reminder>' },
+      { type: 'image', source: {} },
+      { type: 'text', text: '/compact' },
+    ])
+    expect(diagCalls).toHaveLength(0)
+  })
+
+  test('② 违规（末块非 text）⇒ 告警一次、事件/数据正确、且不抛错', () => {
+    expect(() => assertUserBodyBlockLast([{ type: 'text', text: '正文' }, { type: 'image', source: {} }]))
+      .not.toThrow()
+    expect(diagCalls).toHaveLength(1)
+    expect(diagCalls[0]?.level).toBe('warn')
+    expect(diagCalls[0]?.event).toBe('user_body_block_not_last')
+    expect(diagCalls[0]?.data.blockCount).toBe(2)
+    expect(diagCalls[0]?.data.lastBlockType).toBe('image')
+  })
+
+  test('③ 违规（空数组）⇒ 也告警（末块 undefined 同样破坏不变量）', () => {
+    assertUserBodyBlockLast([])
+    expect(diagCalls).toHaveLength(1)
+    expect(diagCalls[0]?.data.blockCount).toBe(0)
+    expect(diagCalls[0]?.data.lastBlockType).toBe('undefined')
+  })
+
+  test('④ 生产环境 ⇒ 即便违规也静默（热路径零成本）', () => {
+    process.env.NODE_ENV = 'production'
+    assertUserBodyBlockLast([{ type: 'image', source: {} }])
+    expect(diagCalls).toHaveLength(0)
+  })
+
+  test('⑤ 集成：buildUserContent 正常路径不触发守卫告警', async () => {
+    const blocks = await buildUserContent('/compact', 's1', [
+      { type: 'file', path: '/tmp/a.log', name: 'a.log' },
+      { type: 'image', name: 'p.png', mimeType: 'image/png', data: PNG_1x1 },
+    ])
+    expect(cliSlashGate(blocks as Block[])).toBe('/compact')
+    expect(diagCalls.some((c) => c.event === 'user_body_block_not_last')).toBe(false)
+  })
+
+  test('⑥ 守卫不改行为：返回值与入参同一引用（零拷贝、零副作用）', () => {
+    const input: UserContentBlock[] = [{ type: 'text', text: '正文' }]
+    const before = JSON.stringify(input)
+    assertUserBodyBlockLast(input)
+    expect(JSON.stringify(input)).toBe(before)
   })
 })
