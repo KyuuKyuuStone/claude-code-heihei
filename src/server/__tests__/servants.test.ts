@@ -747,8 +747,9 @@ describe('Servants API', () => {
   function stubNoticeDelivery() {
     const deliverMock = mock(async (_t: string, _c: string, _h: string) => true)
     setRosterChangeNoticeDeps({
+      // 主管桩与临时会话**同项目**（workDir=tmpDir），否则裁决②的项目隔离会拦下
       listServants: (async () => [
-        { sessionId: 'sup-fake', supervisor: true, enabled: true, running: true },
+        { sessionId: 'sup-fake', supervisor: true, enabled: true, running: true, workDir: tmpDir },
       ]) as never,
       deliver: deliverMock as never,
       getServerPort: () => 53100,

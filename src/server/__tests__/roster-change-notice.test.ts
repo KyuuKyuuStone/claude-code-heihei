@@ -18,18 +18,27 @@ afterEach(() => {
   mock.restore()
 })
 
+const PROJ = 'C:\\proj\\a'
+
 function makeDeps(overrides: Record<string, unknown> = {}) {
   const events: Array<Record<string, unknown>> = []
   return {
     events,
     deps: {
       getServerPort: () => 53100,
+      // 默认：被变更会话的 workDir 可解析（项目 = PROJ）
+      getSessionWorkDir: async () => PROJ,
       recordEvent: (input: Record<string, unknown>) => {
         events.push(input)
       },
       ...overrides,
     },
   }
+}
+
+/** 主管桩：默认同项目（PROJ）且正在运行 */
+function sup(sessionId: string, over: Record<string, unknown> = {}) {
+  return { sessionId, supervisor: true, enabled: true, running: true, workDir: PROJ, ...over }
 }
 
 describe('detectRosterChange（跃迁判定 = 幂等闸门）', () => {
@@ -101,26 +110,63 @@ describe('notifySupervisorsOfRosterChange', () => {
   test('投递给同项目正在运行的主管；地址用真实端口', async () => {
     const deliverMock = mock(async (_t: string, _c: string, _h: string) => true)
     const listMock = mock(async () => [
-      { sessionId: 'sup-1', supervisor: true, enabled: true, running: true },
-      { sessionId: 'emp-1', supervisor: false, enabled: true, running: true },
+      sup('sup-1'),
+      { sessionId: 'emp-1', supervisor: false, enabled: true, running: true, workDir: PROJ },
+      sup('sup-other', { workDir: 'C:\\proj\\b' }), // 别的项目 ⇒ 不打扰
     ])
     const { deps } = makeDeps({ listServants: listMock as never, deliver: deliverMock as never })
     setRosterChangeNoticeDeps(deps as never)
 
     await notifySupervisorsOfRosterChange({ sessionId: 'emp-1', kind: 'removed', role: '前端' })
 
-    // 项目隔离经 forSessionId 透传（花名册按 workDir 过滤）
-    expect(listMock).toHaveBeenCalledWith({ includeAll: true, forSessionId: 'emp-1' })
+    // 裁决②：不再借 listServants({forSessionId})（workDir 未知时会退化为不过滤），
+    // 改为自解析 workDir + sameProject 显式过滤
+    expect(listMock).toHaveBeenCalledWith({ includeAll: true })
     expect(deliverMock).toHaveBeenCalledTimes(1)
     expect(deliverMock.mock.calls[0][0]).toBe('sup-1')
     expect(deliverMock.mock.calls[0][1]).toContain('已被移除')
     expect(deliverMock.mock.calls[0][2]).toBe('127.0.0.1:53100')
   })
 
+  test('裁决②：workDir 解析不到 ⇒ 不通知（宁少通知不错通知），记 no-workdir 诊断', async () => {
+    const deliverMock = mock(async () => true)
+    const listMock = mock(async () => [sup('sup-1')])
+    const { deps, events } = makeDeps({
+      getSessionWorkDir: async () => null,
+      listServants: listMock as never,
+      deliver: deliverMock as never,
+    })
+    setRosterChangeNoticeDeps(deps as never)
+
+    await notifySupervisorsOfRosterChange({ sessionId: 'emp-1', kind: 'removed' })
+
+    expect(deliverMock).not.toHaveBeenCalled()
+    expect(listMock).not.toHaveBeenCalled() // 解析不到就直接收手，不读花名册
+    const skipped = events.filter((e) => e.type === 'roster_change_notice_skipped')
+    expect(skipped).toHaveLength(1)
+    expect((skipped[0]!.details as { reason?: string }).reason).toBe('no-workdir')
+  })
+
+  test('裁决②：显式传入 workDir 时不再二次解析（DELETE 复用已查值）', async () => {
+    const deliverMock = mock(async () => true)
+    const workDirMock = mock(async () => null)
+    const { deps } = makeDeps({
+      getSessionWorkDir: workDirMock as never,
+      listServants: async () => [sup('sup-1')] as never,
+      deliver: deliverMock as never,
+    })
+    setRosterChangeNoticeDeps(deps as never)
+
+    await notifySupervisorsOfRosterChange({ sessionId: 'emp-1', kind: 'removed', workDir: PROJ })
+
+    expect(workDirMock).not.toHaveBeenCalled()
+    expect(deliverMock).toHaveBeenCalledTimes(1)
+  })
+
   test('未运行的主管不被拉起，只记跳过诊断', async () => {
     const deliverMock = mock(async () => true)
     const { deps, events } = makeDeps({
-      listServants: async () => [{ sessionId: 'sup-idle', supervisor: true, enabled: true, running: false }] as never,
+      listServants: async () => [sup('sup-idle', { running: false })] as never,
       deliver: deliverMock as never,
     })
     setRosterChangeNoticeDeps(deps as never)
@@ -136,7 +182,7 @@ describe('notifySupervisorsOfRosterChange', () => {
   test('被变更的会话自身不会被通知（它可能仍是主管）', async () => {
     const deliverMock = mock(async () => true)
     const { deps } = makeDeps({
-      listServants: async () => [{ sessionId: 'self', supervisor: true, enabled: true, running: true }] as never,
+      listServants: async () => [sup('self')] as never,
       deliver: deliverMock as never,
     })
     setRosterChangeNoticeDeps(deps as never)
@@ -155,7 +201,7 @@ describe('notifySupervisorsOfRosterChange', () => {
 
   test('投递抛错 / 花名册读失败 ⇒ 都不冒泡（通知是体验项）', async () => {
     const { deps: throwingDeliver } = makeDeps({
-      listServants: async () => [{ sessionId: 'sup-1', supervisor: true, enabled: true, running: true }] as never,
+      listServants: async () => [sup('sup-1')] as never,
       deliver: (async () => {
         throw new Error('boom')
       }) as never,

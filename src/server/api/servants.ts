@@ -99,10 +99,11 @@ export async function handleServantsApi(
           })
       }
 
-      // 员工首次登记（enabled 从 false/未登记 变为 true）：
+      // 员工首次登记 / 重新启用（enabled 从 false/未登记 变为 true）：
       // 1) 注入上岗消息——会话从此有内容、会落盘，关闭不再消失，
       //    员工一启动就明确自己的角色与职责；
-      // 2) 通知同项目的主管——有新员工加入了。
+      // 2) 留痕 servant_registered（**仅诊断，不投递**，见 recordServantRegistered 注释
+      //    ——v1.2.3 用户规则「系统通知不进对话流」，新增员工**不**通知主管会话）。
       // 失败不阻塞登记本身（身份已落盘）。
       if (entry.enabled && !previous?.enabled) {
         void sessionMessenger
@@ -117,7 +118,7 @@ export async function handleServantsApi(
               error,
             )
           })
-        void notifySupervisorOfNewWorker(entry)
+        void recordServantRegistered(entry)
       }
 
       // v1.7.5：取消员工身份 / 卸任主管 / 角色变更 ⇒ 通知同项目在册主管，
@@ -178,6 +179,8 @@ export async function handleServantsApi(
         kind: 'removed',
         role: removed.role,
         description: removed.description,
+        // 复用上面刚查到的 workDir（裁决②：解析不到 ⇒ 不通知；此处避免重复 IO）
+        workDir,
       })
       void dispatchMailboxService.sync()
       return Response.json({ ok: true })
@@ -770,16 +773,23 @@ function buildWorkerOrientation(
 }
 
 /**
- * 员工登记的记录（v1.2.3 用户规则：系统通知不进对话流）。
+ * 员工登记留痕：写一条 `servant_registered` 诊断。
  *
- * 原先这里会向主管注入一条「新员工已加入本项目」。用户拍板：对话流只放"需要人响应/
- * 决策"的消息（员工汇报），这类登记属于维护可查的系统事件 → 降为诊断事件。
+ * v1.2.3 用户规则：**系统通知不进对话流**。原先这里会向主管注入一条
+ * 「新员工已加入本项目」；用户拍板——对话流只放"需要人响应/决策"的消息
+ * （员工汇报），这类登记属于维护可查的系统事件 ⇒ 降为诊断事件。
  * 关键字段（sessionId / role / description / workDir）全部落到诊断里，
  * 排查"为什么花名册里看不到某员工"时照样能看（含项目隔离导致的情况）。
+ *
+ * v1.7.5 更名（原名 `notifySupervisorOfNewWorker` **名不符实**：注释声称
+ * "通知同项目的主管"，实现只写诊断、主管收不到任何消息）⇒ 按实际职责改为
+ * `recordServantRegistered`。**本函数只写诊断，不投递**。
  */
-async function notifySupervisorOfNewWorker(
-  entry: { sessionId: string; role?: string; description?: string },
-): Promise<void> {
+async function recordServantRegistered(entry: {
+  sessionId: string
+  role?: string
+  description?: string
+}): Promise<void> {
   const roleText = entry.role
     ? `${entry.role}（${entry.description || '未填写特性'}）`
     : '未命名角色'

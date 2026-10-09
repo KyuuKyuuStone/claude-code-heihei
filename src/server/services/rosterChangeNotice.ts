@@ -22,9 +22,11 @@
  */
 
 import { servantService } from './servantService.js'
+import { sessionService } from './sessionService.js'
 import { ProviderService } from './providerService.js'
 import { diagnosticsService } from './diagnosticsService.js'
 import { requireSessionDelivery } from './sessionDelivery.js'
+import { sameProject } from '../../collaboration/projectPath.js'
 
 export type RosterChangeKind = 'removed' | 'disabled' | 'demoted' | 'role_changed'
 
@@ -38,10 +40,13 @@ export type RosterSnapshot = {
 /**
  * 纯函数：判定「旧 → 新」是否构成需要通知主管的跃迁。
  *
- * 优先级：**取消员工身份 > 降级为主管之外 > 角色变更**。返回 null ＝ 无需通知
+ * 优先级：**取消员工身份 > 卸任主管 > 角色变更**。返回 null ＝ 无需通知
  * （首次登记、重新启用、无实质变化都不属于本条覆盖的「删除/取消/降级/改角色」）。
  *
- * 注意「新增员工」不在此列（另有上岗消息与 `servant_registered` 留痕）。
+ * 注意「新增员工」**不在此列**：`servants.ts` 的 v1.2.3 用户规则明确
+ * 「系统通知不进对话流」——原先向主管注入的"新员工已加入本项目"正是被用户
+ * 拍板降为诊断事件的（见 `recordServantRegistered` 注释）。2026-10-09 主管
+ * 曾提出"对称地也通知新增"，与上述用户裁决冲突 ⇒ **已停手待裁决**，未接线。
  */
 export function detectRosterChange(
   previous: RosterSnapshot | null | undefined,
@@ -64,6 +69,12 @@ export type RosterChangeNoticeInput = {
   description?: string
   /** 角色变更时的旧角色，仅用于文案 */
   previousRole?: string
+  /**
+   * 被变更会话的工作目录。省略时由 `deps.getSessionWorkDir` 解析；
+   * **解析不到 ⇒ 不通知**（记诊断）——"宁可少通知，不许错通知"
+   * （主管 2026-10-09 裁决②：跨项目打扰的代价高于漏一条通知）。
+   */
+  workDir?: string | null
 }
 
 /**
@@ -72,6 +83,8 @@ export type RosterChangeNoticeInput = {
  */
 export type RosterChangeNoticeDeps = {
   listServants: typeof servantService.listServants
+  /** 解析被变更会话的工作目录（项目隔离依据）；解析不到 ⇒ 不通知 */
+  getSessionWorkDir: (sessionId: string) => Promise<string | null>
   deliver: (targetSessionId: string, content: string, serverHost: string) => Promise<boolean>
   /** 本机服务端口：拼真实投递地址（裁决二十②）。 */
   getServerPort: () => number
@@ -86,6 +99,7 @@ export type RosterChangeNoticeDeps = {
 
 const defaultDeps: RosterChangeNoticeDeps = {
   listServants: (options) => servantService.listServants(options),
+  getSessionWorkDir: (sessionId) => sessionService.getSessionWorkDir(sessionId),
   // G2 B-b：投递经缝注入（缺注册 ⇒ requireSessionDelivery() 抛错，fail-fast）。
   deliver: async (targetSessionId, content, serverHost) =>
     requireSessionDelivery()(targetSessionId, content, serverHost),
@@ -125,19 +139,45 @@ export function buildRosterChangeNotice(input: RosterChangeNoticeInput): string 
 /**
  * 向**同项目、正在运行**的主管投递一条花名册变更通知。
  *
- * 同项目：经 `listServants({ forSessionId })` 过滤（花名册本身按 workDir 项目隔离）。
- * 失败路径一律吞掉并记诊断——通知是体验项，绝不能影响花名册变更本身。
+ * 同项目：自己解析被变更会话的 workDir 并 `sameProject` 过滤（**解析不到就不通知**，
+ * 见裁决②）。失败路径一律吞掉并记诊断——通知是体验项，绝不能影响花名册变更本身。
  */
 export async function notifySupervisorsOfRosterChange(
   input: RosterChangeNoticeInput,
 ): Promise<void> {
+  // ── 项目隔离（裁决②：取保守，解析不到就不通知）────────────────────────────
+  // 不用 listServants({forSessionId})：该过滤在 workDir 未知时**退化为不过滤**，
+  // 会把通知打到别的项目的主管。这里自己解析 workDir 并显式 sameProject 过滤；
+  // 解析不到 ⇒ 记诊断后返回（宁可少通知，不许错通知）。
+  let workDir = input.workDir ?? null
+  if (!workDir) {
+    try {
+      workDir = await noticeDeps.getSessionWorkDir(input.sessionId)
+    } catch {
+      workDir = null
+    }
+  }
+  if (!workDir) {
+    noticeDeps.recordEvent({
+      type: 'roster_change_notice_skipped',
+      severity: 'info',
+      summary: '无法解析被变更会话的工作目录，跳过花名册变更通知（宁少通知不错通知）',
+      sessionId: input.sessionId,
+      details: { sessionId: input.sessionId, reason: 'no-workdir', change: input.kind },
+    })
+    return
+  }
+
   let supervisors: Awaited<ReturnType<RosterChangeNoticeDeps['listServants']>> = []
   try {
-    const all = await noticeDeps.listServants({
-      includeAll: true,
-      forSessionId: input.sessionId,
-    })
-    supervisors = all.filter((s) => s.supervisor && s.sessionId !== input.sessionId)
+    const all = await noticeDeps.listServants({ includeAll: true })
+    supervisors = all.filter(
+      (s) =>
+        s.supervisor &&
+        s.sessionId !== input.sessionId &&
+        !!s.workDir &&
+        sameProject(s.workDir, workDir),
+    )
   } catch (error) {
     console.warn(
       `[RosterChangeNotice] Failed to list servants: ${
