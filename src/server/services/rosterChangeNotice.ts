@@ -28,7 +28,7 @@ import { diagnosticsService } from './diagnosticsService.js'
 import { requireSessionDelivery } from './sessionDelivery.js'
 import { sameProject } from '../../collaboration/projectPath.js'
 
-export type RosterChangeKind = 'removed' | 'disabled' | 'demoted' | 'role_changed'
+export type RosterChangeKind = 'added' | 'removed' | 'disabled' | 'demoted' | 'role_changed'
 
 /** 花名册跃迁输入（只取判定所需字段，便于纯函数测试） */
 export type RosterSnapshot = {
@@ -40,24 +40,27 @@ export type RosterSnapshot = {
 /**
  * 纯函数：判定「旧 → 新」是否构成需要通知主管的跃迁。
  *
- * 优先级：**取消员工身份 > 卸任主管 > 角色变更**。返回 null ＝ 无需通知
- * （首次登记、重新启用、无实质变化都不属于本条覆盖的「删除/取消/降级/改角色」）。
+ * 覆盖：**加入（首次登记或重新启用）> 取消员工身份 > 卸任主管 > 角色变更**。
+ * 返回 null ＝ 无需通知（无实质变化）。
  *
- * 注意「新增员工」**不在此列**：`servants.ts` 的 v1.2.3 用户规则明确
- * 「系统通知不进对话流」——原先向主管注入的"新员工已加入本项目"正是被用户
- * 拍板降为诊断事件的（见 `recordServantRegistered` 注释）。2026-10-09 主管
- * 曾提出"对称地也通知新增"，与上述用户裁决冲突 ⇒ **已停手待裁决**，未接线。
+ * 「加入」也通知主管的依据（**2026-10-09 用户当次拍板：新员工加入恢复通知主管**，
+ * 翻转 v1.2.3「系统通知不进对话流」**对本案的适用**）：主管既要知道"谁走了/
+ * 谁降级了"，也要知道"谁来了"——否则新员工加入后主管的花名册认知同样有缺口。
+ * 详见 `api/servants.ts` 的 `recordServantRegistered` 注释（该处保留了完整沿革）。
  */
 export function detectRosterChange(
   previous: RosterSnapshot | null | undefined,
   next: RosterSnapshot | null | undefined,
 ): RosterChangeKind | null {
-  if (!previous || !next) return null
-  // ① 取消员工身份（曾是在册员工 → 现在不在册）
+  if (!next) return null
+  // ① 加入：从「未登记 / 未在册」变为在册员工（首次登记或重新启用）
+  if (next.enabled === true && previous?.enabled !== true) return 'added'
+  if (!previous) return null
+  // ② 取消员工身份（曾是在册员工 → 现在不在册）
   if (previous.enabled === true && next.enabled === false) return 'disabled'
-  // ② 卸任主管（曾任命为主管 → 现在不是）——"降级为普通会话"
+  // ③ 卸任主管（曾任命为主管 → 现在不是）——"降级为普通会话"
   if (previous.supervisor === true && next.supervisor === false) return 'demoted'
-  // ③ 角色变更（仅在仍是在册员工时有意义）
+  // ④ 角色变更（仅在仍是在册员工时有意义）
   if (next.enabled === true && (previous.role ?? '') !== (next.role ?? '')) return 'role_changed'
   return null
 }
@@ -125,6 +128,8 @@ function roleText(input: Pick<RosterChangeNoticeInput, 'role' | 'description'>):
 export function buildRosterChangeNotice(input: RosterChangeNoticeInput): string {
   const who = `${roleText(input)}（会话 ${input.sessionId}）`
   switch (input.kind) {
+    case 'added':
+      return `【系统】花名册变更：员工 ${who} 已加入花名册，可以给它派活了。`
     case 'removed':
       return `【系统】花名册变更：员工 ${who} 已被移除，不要再给它派活。\n如需重新安排，请先查看最新花名册。`
     case 'disabled':

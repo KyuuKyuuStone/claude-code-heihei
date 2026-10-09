@@ -778,38 +778,45 @@ describe('Servants API', () => {
         ['api', 'servant-sessions', sessionId],
       )
 
-    // ① 登记（首次登记不是本功能覆盖的跃迁 ⇒ 不通知）
+    // ① 首次登记 ⇒ added（2026-10-09 用户拍板恢复"新员工加入"通知）
     const d1 = stubNoticeDelivery()
     await put({ role: '前端', enabled: true })
     await waitForDeliver(d1, 1)
-    expect(d1).not.toHaveBeenCalled()
+    expect(d1).toHaveBeenCalledTimes(1)
+    expect(d1.mock.calls[0][0]).toBe('sup-fake')
+    expect(String(d1.mock.calls[0][1])).toContain('已加入花名册')
 
     // ② 取消员工身份 ⇒ disabled
     await put({ role: '前端', enabled: false })
-    await waitForDeliver(d1, 1)
-    expect(d1).toHaveBeenCalledTimes(1)
-    expect(d1.mock.calls[0][0]).toBe('sup-fake')
-    expect(String(d1.mock.calls[0][1])).toContain('取消员工身份')
-
-    // ③ 重新启用后升为主管，再卸任 ⇒ demoted
-    await put({ role: '前端', enabled: true, supervisor: true })
-    await put({ role: '前端', enabled: true, supervisor: false })
     await waitForDeliver(d1, 2)
     expect(d1).toHaveBeenCalledTimes(2)
-    expect(String(d1.mock.calls[1][1])).toContain('卸任主管')
+    expect(String(d1.mock.calls[1][1])).toContain('取消员工身份')
 
-    // ④ 改角色 ⇒ role_changed
-    await put({ role: '后端', enabled: true })
+    // ③ 重新启用 ⇒ added（再次加入）
+    await put({ role: '前端', enabled: true })
     await waitForDeliver(d1, 3)
     expect(d1).toHaveBeenCalledTimes(3)
-    expect(String(d1.mock.calls[2][1])).toContain('前端')
-    expect(String(d1.mock.calls[2][1])).toContain('后端')
+    expect(String(d1.mock.calls[2][1])).toContain('已加入花名册')
 
-    // ⑤ 删除 ⇒ removed
-    await del()
+    // ④ 升为主管后再卸任 ⇒ demoted
+    await put({ role: '前端', enabled: true, supervisor: true })
+    await put({ role: '前端', enabled: true, supervisor: false })
     await waitForDeliver(d1, 4)
     expect(d1).toHaveBeenCalledTimes(4)
-    expect(String(d1.mock.calls[3][1])).toContain('已被移除')
+    expect(String(d1.mock.calls[3][1])).toContain('卸任主管')
+
+    // ⑤ 改角色 ⇒ role_changed（**不是** added）
+    await put({ role: '后端', enabled: true })
+    await waitForDeliver(d1, 5)
+    expect(d1).toHaveBeenCalledTimes(5)
+    expect(String(d1.mock.calls[4][1])).toContain('前端')
+    expect(String(d1.mock.calls[4][1])).toContain('后端')
+
+    // ⑥ 删除 ⇒ removed
+    await del()
+    await waitForDeliver(d1, 6)
+    expect(d1).toHaveBeenCalledTimes(6)
+    expect(String(d1.mock.calls[5][1])).toContain('已被移除')
 
     setRosterChangeNoticeDeps(null)
   })
@@ -823,19 +830,21 @@ describe('Servants API', () => {
       )
 
     const d = stubNoticeDelivery()
+    // 首次登记 ⇒ added（1 次）；后两次同值提交无跃迁 ⇒ 不追加
     await put({ role: '前端', enabled: true })
     await put({ role: '前端', enabled: true })
     await put({ role: '前端', enabled: true })
-    await waitForDeliver(d, 1)
-    expect(d).not.toHaveBeenCalled() // 无跃迁 ⇒ 一次都不通知
-
-    await put({ role: '前端', enabled: false })
-    await waitForDeliver(d, 1)
-    expect(d).toHaveBeenCalledTimes(1)
-    // 再重复禁用：仍是同一个"已禁用"状态 ⇒ 不再通知
-    await put({ role: '前端', enabled: false })
     await waitForDeliver(d, 2)
     expect(d).toHaveBeenCalledTimes(1)
+    expect(String(d.mock.calls[0][1])).toContain('已加入花名册')
+
+    await put({ role: '前端', enabled: false })
+    await waitForDeliver(d, 2)
+    expect(d).toHaveBeenCalledTimes(2)
+    // 再重复禁用：仍是同一个"已禁用"状态 ⇒ 不再通知
+    await put({ role: '前端', enabled: false })
+    await waitForDeliver(d, 3)
+    expect(d).toHaveBeenCalledTimes(2)
 
     setRosterChangeNoticeDeps(null)
   })

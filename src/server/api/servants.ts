@@ -102,8 +102,9 @@ export async function handleServantsApi(
       // 员工首次登记 / 重新启用（enabled 从 false/未登记 变为 true）：
       // 1) 注入上岗消息——会话从此有内容、会落盘，关闭不再消失，
       //    员工一启动就明确自己的角色与职责；
-      // 2) 留痕 servant_registered（**仅诊断，不投递**，见 recordServantRegistered 注释
-      //    ——v1.2.3 用户规则「系统通知不进对话流」，新增员工**不**通知主管会话）。
+      // 2) 留痕 servant_registered（**仅诊断**，见 recordServantRegistered 注释）。
+      //    对主管的"新员工已加入"通知自 2026-10-09 起恢复（用户拍板），但走的是
+      //    下方 detectRosterChange ⇒ 'added' 那条**独立通道**，不在这里投递。
       // 失败不阻塞登记本身（身份已落盘）。
       if (entry.enabled && !previous?.enabled) {
         void sessionMessenger
@@ -775,15 +776,19 @@ function buildWorkerOrientation(
 /**
  * 员工登记留痕：写一条 `servant_registered` 诊断。
  *
- * v1.2.3 用户规则：**系统通知不进对话流**。原先这里会向主管注入一条
- * 「新员工已加入本项目」；用户拍板——对话流只放"需要人响应/决策"的消息
- * （员工汇报），这类登记属于维护可查的系统事件 ⇒ 降为诊断事件。
- * 关键字段（sessionId / role / description / workDir）全部落到诊断里，
- * 排查"为什么花名册里看不到某员工"时照样能看（含项目隔离导致的情况）。
- *
- * v1.7.5 更名（原名 `notifySupervisorOfNewWorker` **名不符实**：注释声称
- * "通知同项目的主管"，实现只写诊断、主管收不到任何消息）⇒ 按实际职责改为
- * `recordServantRegistered`。**本函数只写诊断，不投递**。
+ * 【沿革·留痕】
+ * · v1.2.3 用户规则：**系统通知不进对话流**。原先这里会向主管注入一条
+ *   「新员工已加入本项目」；用户拍板——对话流只放"需要人响应/决策"的消息
+ *   （员工汇报），这类登记属于维护可查的系统事件 ⇒ 降为诊断事件。
+ *   **该决定只降级了"对话流注入"，诊断留痕一直保留**（本函数就是它）。
+ * · **2026-10-09 用户当次拍板：新员工加入恢复通知主管** —— 即**翻转 v1.2.3
+ *   「系统通知不进对话流」对本条的适用**（用户原话「要的」）。实现方式**不是**
+ *   在本函数里恢复投递，而是走 v1.7.5 新增的独立通道
+ *   `notifySupervisorsOfRosterChange`（`detectRosterChange` 返回 `'added'` 时
+ *   由 PUT 分支投递），本函数**仍只写诊断**——保留可查的系统事件留痕。
+ * · v1.7.5 更名：原名 `notifySupervisorOfNewWorker` **名不符实**（注释声称
+ *   "通知同项目的主管"，实现只写诊断、主管收不到任何消息）⇒ 按实际职责改为
+ *   `recordServantRegistered`。**本函数只写诊断，不投递**。
  */
 async function recordServantRegistered(entry: {
   sessionId: string

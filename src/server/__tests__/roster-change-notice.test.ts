@@ -58,13 +58,24 @@ describe('detectRosterChange（跃迁判定 = 幂等闸门）', () => {
     )
   })
 
-  test('首次登记 / 重新启用 / 无实质变化 ⇒ null（不通知）', () => {
-    expect(detectRosterChange(undefined, { enabled: true, role: '前端' })).toBeNull()
-    expect(detectRosterChange(null, { enabled: true })).toBeNull()
-    expect(detectRosterChange({ enabled: false }, { enabled: true })).toBeNull()
+  test('加入：首次登记 / 重新启用 ⇒ added（2026-10-09 用户拍板恢复通知）', () => {
+    expect(detectRosterChange(undefined, { enabled: true, role: '前端' })).toBe('added')
+    expect(detectRosterChange(null, { enabled: true })).toBe('added')
+    expect(detectRosterChange({ enabled: false }, { enabled: true })).toBe('added')
+  })
+
+  test('无实质变化 ⇒ null（不通知）', () => {
     expect(detectRosterChange({ enabled: true, role: '前端' }, { enabled: true, role: '前端' })).toBeNull()
     // 未在册时改角色不算（不产生派活认知问题）
     expect(detectRosterChange({ enabled: false, role: '前端' }, { enabled: false, role: '后端' })).toBeNull()
+  })
+
+  test('已存在在册员工改角色 ⇒ role_changed，**不是** added', () => {
+    expect(detectRosterChange({ enabled: true, role: '前端' }, { enabled: true, role: '后端' })).toBe(
+      'role_changed',
+    )
+    // 首次登记同时带角色：added 优先于 role_changed（旧状态无名可改）
+    expect(detectRosterChange(undefined, { enabled: true, role: '前端' })).toBe('added')
   })
 
   test('优先级：取消员工 > 卸任主管 > 改角色', () => {
@@ -81,7 +92,12 @@ describe('detectRosterChange（跃迁判定 = 幂等闸门）', () => {
 })
 
 describe('buildRosterChangeNotice', () => {
-  test('四种变化各自说清「谁 / 什么变化 / 别再派活」', () => {
+  test('五种变化各自说清「谁 / 什么变化 / 该不该派活」', () => {
+    const added = buildRosterChangeNotice({ sessionId: 's1', kind: 'added', role: '前端', description: '画界面' })
+    expect(added).toContain('已加入花名册')
+    expect(added).toContain('可以给它派活')
+    expect(added).toContain('s1')
+
     const removed = buildRosterChangeNotice({ sessionId: 's1', kind: 'removed', role: '前端', description: '画界面' })
     expect(removed).toContain('已被移除')
     expect(removed).toContain('不要再给它派活')
