@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import {
   TOOL_EXEC_HARD_TIMEOUT_MS,
+  logToolCallThrew,
   withToolExecutionDiagnostics,
 } from '../../services/tools/toolExecution.js'
 import { setDiagnosticsLogWriterForTests } from '../../utils/diagLogs.js'
@@ -123,5 +124,49 @@ describe('withToolExecutionDiagnostics', () => {
 
   test('hard timeout constant stays at 10 minutes (covers Bash own timeout cap)', () => {
     expect(TOOL_EXEC_HARD_TIMEOUT_MS).toBe(600_000)
+  })
+})
+
+/**
+ * v1.7.4：打包 sidecar 无源码映射 ⇒ 工具抛错只剩压缩标识符，只有栈能对号。
+ * 这几例把「记栈」这件事钉死：**判红点** = 删掉 `logToolCallThrew` 里的
+ * logForDiagnosticsNoPII 调用（或去掉 stackHead），本组必红。
+ */
+describe('logToolCallThrew（工具抛错记栈）', () => {
+  beforeEach(() => {
+    diagCalls.length = 0
+    setDiagnosticsLogWriterForTests((level, event, data) => {
+      diagCalls.push({ level, event, data })
+    })
+  })
+  afterEach(() => {
+    setDiagnosticsLogWriterForTests(null)
+  })
+
+  test('记 tool_call_threw：工具名 / 错误名 / 消息 / 栈首，且不含入参与结果', () => {
+    const err = new Error("null is not an object (evaluating 'q')")
+    logToolCallThrew('CollabListTasks', err)
+
+    expect(diagCalls).toHaveLength(1)
+    const call = diagCalls[0]!
+    expect(call.level).toBe('warn')
+    expect(call.event).toBe('tool_call_threw')
+    expect(call.data.toolName).toBe('CollabListTasks')
+    expect(call.data.errorName).toBe('Error')
+    expect(String(call.data.errorMessage)).toContain("evaluating 'q'")
+    // 栈首存在且含帧信息（压缩产物里这就是唯一可对号的线索）
+    expect(String(call.data.stackHead)).toContain('at ')
+    // no-PII：没有工具入参 / 结果字段
+    expect(call.data).not.toHaveProperty('input')
+    expect(call.data).not.toHaveProperty('output')
+    expect(call.data).not.toHaveProperty('toolInput')
+    expect(call.data).not.toHaveProperty('content')
+  })
+
+  test('非 Error 抛出物：不崩，errorName 记类型名、stackHead 为空', () => {
+    logToolCallThrew('CollabListTasks', { weird: true })
+    expect(diagCalls).toHaveLength(1)
+    expect(diagCalls[0]!.data.errorName).toBe('object')
+    expect(diagCalls[0]!.data.stackHead).toBe('')
   })
 })

@@ -93,10 +93,20 @@ export async function fetchRoster(
   return pickRosterEntries(body?.servants)
 }
 
-/** 按 sessionId 建索引，供 List 输出补 role */
-export function indexRosterBySessionId(roster: readonly RosterEntry[]): Map<string, RosterEntry> {
+/**
+ * 按 sessionId 建索引，供 List 输出补 role。
+ *
+ * 形参容忍 null/undefined：`fetchRoster` 在花名册查询**失败**时返回 null（与
+ * 「花名册为空」严格区分，见其注释）。漏判空会把「服务抖动」升级成**工具崩溃**——
+ * v1.7.4 实测：CollabListTasks 在花名册请求 500 时抛
+ * `null is not an object (evaluating 'roster')`（打包 sidecar 压缩后为 `... 'q'`），
+ * 整个看台账调用失败。花名册只用来补 role，失败时降级为「无 role」即可。
+ */
+export function indexRosterBySessionId(
+  roster: readonly RosterEntry[] | null | undefined,
+): Map<string, RosterEntry> {
   const map = new Map<string, RosterEntry>()
-  for (const entry of roster) map.set(entry.sessionId, entry)
+  for (const entry of roster ?? []) map.set(entry.sessionId, entry)
   return map
 }
 

@@ -148,6 +148,30 @@ const SLOW_PHASE_LOG_THRESHOLD_MS = 2000
  * - Known error types: use their unminified name
  * - Fallback: "Error" (better than a mangled 3-char identifier)
  */
+/**
+ * 工具调用抛错 → 落一条诊断（v1.7.4）。
+ *
+ * 为什么要单独记栈：桌面端跑的是 **bun 编译的 sidecar 二进制**（无源码映射），
+ * 代码被压缩，线上异常只剩压缩标识符——实测 `null is not an object (evaluating 'q')`
+ * 的真实变量是 `roster`（`src/tools/CollabTools/shared.ts`）。只靠消息无法对号，
+ * 这道外层 catch 是打包产物里**唯一能拿到真栈的地方**。
+ *
+ * no-PII：只记工具名/错误名/消息/栈首 4 帧，**不含工具入参与结果正文**。
+ * 栈本身含源码路径，是为定位所必需的例外（主管 2026-10-09 裁决）。
+ */
+export function logToolCallThrew(toolName: string, error: unknown): void {
+  const isErr = error instanceof Error
+  logForDiagnosticsNoPII('warn', 'tool_call_threw', {
+    toolName,
+    errorName: isErr ? error.name : typeof error,
+    errorMessage: errorMessage(error).slice(0, 300),
+    stackHead:
+      isErr && error.stack
+        ? error.stack.split('\n').slice(0, 4).join('\n').slice(0, 800)
+        : '',
+  })
+}
+
 export function classifyToolError(error: unknown): string {
   if (
     error instanceof TelemetrySafeError_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
@@ -1773,6 +1797,7 @@ async function checkPermissionsAndCallTool(
       if (!(error instanceof ShellError)) {
         logError(error)
       }
+      logToolCallThrew(tool.name, error)
       logEvent('tengu_tool_use_error', {
         messageID:
           messageId as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,

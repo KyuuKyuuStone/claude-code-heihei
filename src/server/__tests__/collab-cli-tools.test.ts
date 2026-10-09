@@ -35,7 +35,7 @@ import {
   CollabReviewTool,
   getCollabTools,
 } from '../../tools/CollabTools/index.js'
-import { resolveDispatchTarget } from '../../tools/CollabTools/shared.js'
+import { indexRosterBySessionId, resolveDispatchTarget } from '../../tools/CollabTools/shared.js'
 import { getAllBaseTools, getTools } from '../../tools.js'
 import { getEmptyToolPermissionContext } from '../../Tool.js'
 import { TASK_STATUSES as SERVER_TASK_STATUSES } from '../services/collabTaskService.js'
@@ -831,6 +831,41 @@ describe('CollabListTasks（主管 / 员工）', () => {
     useEnv({ CC_HEIHEI_DESKTOP_SERVER_URL: stub.baseUrl })
     const { data } = await callTool(CollabListTasksTool, {})
     expect(data).toMatchObject({ ok: false, error: 'ledger_unsupported' })
+  })
+
+  // v1.7.4 修复：花名册请求失败（fetchRoster 返 null）过去直接进
+  // indexRosterBySessionId ⇒ `for (const entry of roster)` 抛
+  // `TypeError: null is not an object (evaluating 'roster')`（打包 sidecar 压缩后
+  // 显示为 `... 'q'`），整个看台账调用崩掉。台账已拉到 ⇒ 花名册只用来补 role，
+  // 失败应降级为「无 role」继续返回。**判红点**：去掉 `?? []` 与调用点的判空，
+  // 本用例抛 TypeError 必红。
+  it('花名册查询失败 ⇒ 降级为「无 role」继续返回台账，不崩', async () => {
+    const stub = startStub({
+      roster: [makeServant()],
+      tasks: [makeTask({ id: 'task-1', status: 'in_progress' })],
+      overrides: {
+        '/api/servant-sessions': () =>
+          Response.json({ error: 'BOOM', message: 'roster down' }, { status: 500 }),
+      },
+    })
+    stopServer = stub.stop
+    useEnv({ CC_HEIHEI_DESKTOP_SERVER_URL: stub.baseUrl })
+
+    const { data } = await callTool(CollabListTasksTool, {})
+    const output = data as {
+      ok: boolean
+      tasks: Array<{ taskId: string; to: Record<string, unknown> }>
+    }
+    expect(output.ok).toBe(true)
+    expect(output.tasks).toHaveLength(1)
+    expect(output.tasks[0]!.taskId).toBe('task-1')
+    // 花名册不可用 ⇒ 摘要只带 sessionId、不带 role（降级），任务本身照常返回
+    expect(output.tasks[0]!.to).toEqual({ sessionId: WORKER })
+    expect(output.tasks[0]!.to).not.toHaveProperty('role')
+
+    // 形参加宽的独立断言（防未来调用方直接传 null）
+    expect(indexRosterBySessionId(null).size).toBe(0)
+    expect(indexRosterBySessionId(undefined).size).toBe(0)
   })
 })
 

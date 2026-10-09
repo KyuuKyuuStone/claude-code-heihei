@@ -159,7 +159,11 @@ export const CollabListTasksTool = buildTool({
     )
     if (!ledger.ok) return fail(ledger.code, ledger.message)
 
-    const roster = indexRosterBySessionId(await fetchRoster(server, deps))
+    // 花名册仅用于给摘要补 role。查询失败时 fetchRoster 返 null ⇒ 降级为「无 role」
+    // 继续返回台账，不因花名册抖动把已拉到的任务整体判失败（与 CollabDispatchTool
+    // 「花名册失败 ≠ 目标/任务不存在」同口径）。
+    const rosterList = await fetchRoster(server, deps)
+    const roster = indexRosterBySessionId(rosterList)
     let tasks = ledger.value
     // 员工：只看派给自己的（mine 强制）；主管可用 mine 主动收窄
     if (runtime.role === 'servant' || input.mine === true) {
