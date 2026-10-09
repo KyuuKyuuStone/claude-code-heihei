@@ -23,6 +23,7 @@ import {
 // 残留——mock.restore 不还原，全量套件互污染，阶段4质检 13 fail 根因之一）
 import { SessionMessenger, setDeliverOverrideForTests } from '../services/sessionMessenger.js'
 import { setDiagnosticsLogWriterForTests } from '../../utils/diagLogs.js'
+import { setRosterChangeNoticeDeps } from '../services/rosterChangeNotice.js'
 import {
   hasBroadcastLock,
   resetBroadcastLocksForTests,
@@ -738,6 +739,104 @@ describe('Servants API', () => {
     expect(logged).toContain('explicit-delete')
     expect(logged).toContain('策划')
     expect(logged).toContain('"constraint":"whitelist"')
+  })
+
+  // ── v1.7.5：花名册变更必须通知同项目在册主管（此前只有诊断留痕） ──
+  // 判红点：删掉 servants.ts 里的 detectRosterChange/notifySupervisorsOfRosterChange
+  // 分支，下列用例全部红。
+  function stubNoticeDelivery() {
+    const deliverMock = mock(async (_t: string, _c: string, _h: string) => true)
+    setRosterChangeNoticeDeps({
+      listServants: (async () => [
+        { sessionId: 'sup-fake', supervisor: true, enabled: true, running: true },
+      ]) as never,
+      deliver: deliverMock as never,
+      getServerPort: () => 53100,
+      recordEvent: () => {},
+    })
+    return deliverMock
+  }
+
+  async function waitForDeliver(m: ReturnType<typeof mock>, n: number) {
+    for (let i = 0; i < 60 && m.mock.calls.length < n; i++) {
+      await new Promise((r) => setTimeout(r, 10))
+    }
+  }
+
+  it('v1.7.5：删除员工 ⇒ 通知在册主管；取消员工/降级/改角色各自触发一次', async () => {
+    const put = (body: Record<string, unknown>) =>
+      handleServantsApi(
+        jsonReq(`http://localhost/api/servant-sessions/${sessionId}`, 'PUT', body),
+        new URL(`http://localhost/api/servant-sessions/${sessionId}`),
+        ['api', 'servant-sessions', sessionId],
+      )
+    const del = () =>
+      handleServantsApi(
+        jsonReq(`http://localhost/api/servant-sessions/${sessionId}`, 'DELETE'),
+        new URL(`http://localhost/api/servant-sessions/${sessionId}`),
+        ['api', 'servant-sessions', sessionId],
+      )
+
+    // ① 登记（首次登记不是本功能覆盖的跃迁 ⇒ 不通知）
+    const d1 = stubNoticeDelivery()
+    await put({ role: '前端', enabled: true })
+    await waitForDeliver(d1, 1)
+    expect(d1).not.toHaveBeenCalled()
+
+    // ② 取消员工身份 ⇒ disabled
+    await put({ role: '前端', enabled: false })
+    await waitForDeliver(d1, 1)
+    expect(d1).toHaveBeenCalledTimes(1)
+    expect(d1.mock.calls[0][0]).toBe('sup-fake')
+    expect(String(d1.mock.calls[0][1])).toContain('取消员工身份')
+
+    // ③ 重新启用后升为主管，再卸任 ⇒ demoted
+    await put({ role: '前端', enabled: true, supervisor: true })
+    await put({ role: '前端', enabled: true, supervisor: false })
+    await waitForDeliver(d1, 2)
+    expect(d1).toHaveBeenCalledTimes(2)
+    expect(String(d1.mock.calls[1][1])).toContain('卸任主管')
+
+    // ④ 改角色 ⇒ role_changed
+    await put({ role: '后端', enabled: true })
+    await waitForDeliver(d1, 3)
+    expect(d1).toHaveBeenCalledTimes(3)
+    expect(String(d1.mock.calls[2][1])).toContain('前端')
+    expect(String(d1.mock.calls[2][1])).toContain('后端')
+
+    // ⑤ 删除 ⇒ removed
+    await del()
+    await waitForDeliver(d1, 4)
+    expect(d1).toHaveBeenCalledTimes(4)
+    expect(String(d1.mock.calls[3][1])).toContain('已被移除')
+
+    setRosterChangeNoticeDeps(null)
+  })
+
+  it('v1.7.5：重复提交相同值不重复通知（幂等闸门 = 只在真有跃迁时通知一次）', async () => {
+    const put = (body: Record<string, unknown>) =>
+      handleServantsApi(
+        jsonReq(`http://localhost/api/servant-sessions/${sessionId}`, 'PUT', body),
+        new URL(`http://localhost/api/servant-sessions/${sessionId}`),
+        ['api', 'servant-sessions', sessionId],
+      )
+
+    const d = stubNoticeDelivery()
+    await put({ role: '前端', enabled: true })
+    await put({ role: '前端', enabled: true })
+    await put({ role: '前端', enabled: true })
+    await waitForDeliver(d, 1)
+    expect(d).not.toHaveBeenCalled() // 无跃迁 ⇒ 一次都不通知
+
+    await put({ role: '前端', enabled: false })
+    await waitForDeliver(d, 1)
+    expect(d).toHaveBeenCalledTimes(1)
+    // 再重复禁用：仍是同一个"已禁用"状态 ⇒ 不再通知
+    await put({ role: '前端', enabled: false })
+    await waitForDeliver(d, 2)
+    expect(d).toHaveBeenCalledTimes(1)
+
+    setRosterChangeNoticeDeps(null)
   })
 })
 

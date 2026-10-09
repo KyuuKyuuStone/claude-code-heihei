@@ -17,6 +17,10 @@ import { sessionMessenger } from '../services/sessionMessenger.js'
 import { sessionService } from '../services/sessionService.js'
 import { collabEnvironmentService } from '../services/collabEnvironmentService.js'
 import { dispatchMailboxService } from '../services/dispatchMailboxService.js'
+import {
+  detectRosterChange,
+  notifySupervisorsOfRosterChange,
+} from '../services/rosterChangeNotice.js'
 import { isTombstoned } from '../services/sessionRegistry.js'
 import { forgetReceipt, getReceipt, listReceipts, recordDelivery } from '../services/dispatchReceiptService.js'
 import { diagnosticsService } from '../services/diagnosticsService.js'
@@ -115,6 +119,21 @@ export async function handleServantsApi(
           })
         void notifySupervisorOfNewWorker(entry)
       }
+
+      // v1.7.5：取消员工身份 / 卸任主管 / 角色变更 ⇒ 通知同项目在册主管，
+      // 否则主管对花名册的认知（B2 摘要）会过期、继续给已失效的目标派活。
+      // 幂等：detectRosterChange 只在「确有跃迁」时返回 change —— 重复提交
+      // 相同值（previous ≡ entry）不通知。非审批点，仅通知。
+      const rosterChange = detectRosterChange(previous, entry)
+      if (rosterChange) {
+        void notifySupervisorsOfRosterChange({
+          sessionId: targetId,
+          kind: rosterChange,
+          role: entry.role,
+          description: entry.description,
+          previousRole: previous?.role,
+        })
+      }
       // 花名册变化后收敛文件信箱监听目录（新增/移除员工的项目）
       void dispatchMailboxService.sync()
       // 协作身份变化（任命/卸任/改角色）：清主管标记缓存，下次会话启动按最新身份收权
@@ -152,6 +171,14 @@ export async function handleServantsApi(
           },
         })
         .catch(() => {})
+      // v1.7.5：删除员工同样要通知同项目在册主管（此前只有诊断留痕，
+      // 主管的 B2 摘要不会主动更新 ⇒ 可能继续给已删除的会话派活）。
+      void notifySupervisorsOfRosterChange({
+        sessionId: targetId,
+        kind: 'removed',
+        role: removed.role,
+        description: removed.description,
+      })
       void dispatchMailboxService.sync()
       return Response.json({ ok: true })
     }
