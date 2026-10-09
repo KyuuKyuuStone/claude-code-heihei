@@ -94,6 +94,7 @@ export async function buildRosterDigestSegmentForSupervisor(
   // 未装配（未走 L4 启动序，如单测）⇒ 不注入。摘要属加强项，不得阻塞投递。
   if (!depsProvider) return null
 
+
   // 摘要挂在**每条注入消息**的通路上：花名册读失败绝不可冒泡阻塞所有投递 ⇒
   // 降级为不注入，但留可诊断痕迹（对齐 servantInfoSource 的「加强项不得阻塞」口径）。
   let entries: RosterDigestEntry[]
@@ -115,6 +116,7 @@ export async function buildRosterDigestSegmentForSupervisor(
 
   return wrapRosterDigestSegment(formatRosterDigest(entries))
 }
+
 
 /**
  * 历史裸行形态（v1.7.4 之前摘要**直接拼在正文尾部**，没有包裹段）：

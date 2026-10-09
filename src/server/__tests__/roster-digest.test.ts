@@ -31,6 +31,14 @@ const emp = (role: string, i = 0): RosterDigestEntry => ({ sessionId: `emp-${rol
 const DIGEST_LINE = `${ROSTER_DIGEST_MARK}主管 1 人；员工 2 人：前端、后端`
 const SEGMENT = `${ROSTER_DIGEST_SEGMENT_OPEN}\n${DIGEST_LINE}\n${ROSTER_DIGEST_SEGMENT_CLOSE}`
 
+/** 从捕获的 SDK 出站行里取 user 消息的 content 块（v1.7.4 双块形态断言用）。 */
+function readUserBlocks(sent: string[]): Array<{ text?: string }> {
+  const userLine = sent
+    .map((line) => JSON.parse(line) as Record<string, never>)
+    .find((m) => m.type === 'user')
+  return (userLine as unknown as { message: { content: Array<{ text?: string }> } })?.message.content ?? []
+}
+
 function withRoster(entries: RosterDigestEntry[]) {
   setRosterDigestDepsForTests({ listServants: async () => entries })
 }
@@ -101,6 +109,12 @@ describe('rosterDigest（修缺陷）UI 读路径剥离', () => {
     expect(out.startsWith('派活正文')).toBe(true)
     const nonEmpty = out.split('\n').filter((l) => l.trim())
     expect(nonEmpty[nonEmpty.length - 1]).toContain('任务 ID：abc-123')
+    // v1.7.4：系统段改为**追加在末尾**（页脚之前）⇒ 剥离也必须支持尾部形态
+    const appended = `派活正文\n\n${SEGMENT}\n\n任务 ID：abc-123；完工汇报目标：sup-1；`
+    const out2 = stripRosterDigestSegment(appended)
+    expect(out2).not.toContain(ROSTER_DIGEST_MARK)
+    expect(out2.startsWith('派活正文')).toBe(true)
+    expect(out2.split('\n').filter((l) => l.trim()).pop()).toContain('任务 ID：abc-123')
   })
 
   test('⑦ 只剥**本模块的**系统段：CLI 自己的 <system-reminder> 原样保留；无标记时返回原引用', () => {
@@ -245,18 +259,124 @@ describe('rosterDigest（修缺陷）模型侧可见 + 唯一注入点', () => {
     try {
       const ok = await service.sendMessage('sup-1', '帮我看看进度')
       expect(ok).toBe(true)
-      const userLine = sent.map((line) => JSON.parse(line) as Record<string, never>).find((m) => m.type === 'user')
-      expect(userLine).toBeTruthy()
-      const content = (userLine as unknown as { message: { content: Array<{ text: string }> } }).message.content
-      const text = content.map((block) => block.text ?? '').join('\n')
-      expect(text).toContain(ROSTER_DIGEST_MARK)
-      expect(text).toContain('帮我看看进度')
-      expect(text.indexOf(ROSTER_DIGEST_SEGMENT_OPEN)).toBeLessThan(text.indexOf('帮我看看进度'))
+      const blocks = readUserBlocks(sent)
+      // 摘要仍在模型上下文里（B2 未退化）：**独立成块**且在**最前**
+      expect(blocks.length).toBe(2)
+      expect(blocks[0]?.text).toContain(ROSTER_DIGEST_MARK)
+      expect(blocks[0]?.text).toContain(ROSTER_DIGEST_SEGMENT_OPEN)
+      // 用户正文块**一字不动**（CLI 取最后一个 text 块当命令串 ⇒ 正文块必须是它）
+      expect(blocks[1]?.text).toBe('帮我看看进度')
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true })
     }
   })
 
+  test('⑭ 斜杠命令**原样送达**（判红用例）：主管发 /compact ⇒ 送 CLI 的正文逐字节等于 /compact', async () => {
+    const { ConversationService } = await import('../services/conversationService.js')
+    withRoster([sup, emp('前端')])
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-heihei-roster-slash-'))
+    const sent: string[] = []
+    const service = new ConversationService() as never as {
+      sessions: Map<string, unknown>
+      sendMessage: (id: string, content: string) => Promise<boolean>
+    }
+    service.sessions.set('sup-1', {
+      proc: {},
+      outputCallbacks: [],
+      workDir: tmpDir,
+      permissionMode: 'default',
+      sdkSocket: {
+        send(line: string) {
+          sent.push(line)
+        },
+      },
+      pendingOutbound: [],
+      startupPending: false,
+      startupExitCode: null,
+      stdoutLines: [],
+      stderrLines: [],
+      outputDrain: Promise.resolve(),
+      sdkMessages: [],
+      initMessage: null,
+      pendingPermissionRequests: new Map(),
+    })
+
+    try {
+      // /compact：**命令串块**必须原样 = `/compact`（CLI 的斜杠门看的是最后一个 text 块）
+      sent.length = 0
+      expect(await service.sendMessage('sup-1', '/compact')).toBe(true)
+      let blocks = readUserBlocks(sent)
+      expect(blocks[blocks.length - 1]?.text).toBe('/compact')
+      // 摘要自成一块、绝不混进命令块
+      expect(blocks.length).toBe(2)
+      expect(blocks[0]?.text).toContain(ROSTER_DIGEST_MARK)
+      expect(blocks[blocks.length - 1]?.text).not.toContain(ROSTER_DIGEST_MARK)
+
+      // 影响面：主管会话里**所有**走服务端→CLI 的斜杠命令都曾被吃掉 ⇒ 再验一条
+      sent.length = 0
+      expect(await service.sendMessage('sup-1', '/goal 修完这个缺陷')).toBe(true)
+      blocks = readUserBlocks(sent)
+      expect(blocks[blocks.length - 1]?.text).toBe('/goal 修完这个缺陷')
+
+      // 普通正文：正文块同样原样（前导空白由既有 buildUserContent 的 trim 规范化，与摘要无关）
+      sent.length = 0
+      expect(await service.sendMessage('sup-1', '  帮我看看进度  ')).toBe(true)
+      blocks = readUserBlocks(sent)
+      expect(blocks[blocks.length - 1]?.text).toBe('帮我看看进度')
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('⑮ 端到端①（CLI 斜杠门复现）：按 CLI 取串规则(最后一个 text 块)判 /compact ⇒ 命中本地命令', async () => {
+    // 忠实复现 `src/utils/processUserInput/processUserInput.ts:338-341`：
+    //   const lastBlock = processedBlocks[processedBlocks.length - 1]
+    //   if (lastBlock?.type === 'text') inputString = lastBlock.text
+    // 斜杠门（同文件 :533-535）：inputString !== null && inputString.startsWith('/')
+    const cliSlashGate = (blocks: Array<{ type?: string; text?: string }>): string | null => {
+      const lastBlock = blocks[blocks.length - 1]
+      const inputString = lastBlock?.type === 'text' ? (lastBlock.text ?? null) : null
+      return inputString !== null && inputString.startsWith('/') ? inputString : null
+    }
+
+    const { ConversationService } = await import('../services/conversationService.js')
+    withRoster([sup, emp('前端')])
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-heihei-roster-gate-'))
+    const sent: string[] = []
+    const service = new ConversationService() as never as {
+      sessions: Map<string, unknown>
+      sendMessage: (id: string, content: string) => Promise<boolean>
+    }
+    service.sessions.set('sup-1', {
+      proc: {},
+      outputCallbacks: [],
+      workDir: tmpDir,
+      permissionMode: 'default',
+      sdkSocket: { send(line: string) { sent.push(line) } },
+      pendingOutbound: [],
+      startupPending: false,
+      startupExitCode: null,
+      stdoutLines: [],
+      stderrLines: [],
+      outputDrain: Promise.resolve(),
+      sdkMessages: [],
+      initMessage: null,
+      pendingPermissionRequests: new Map(),
+    })
+    try {
+      expect(await service.sendMessage('sup-1', '/compact')).toBe(true)
+      const blocks = readUserBlocks(sent)
+      // 命中本地命令（而不是 null ⇒ 被当普通文本送模型）
+      expect(cliSlashGate(blocks)).toBe('/compact')
+      // 反证：把摘要拼回同一块（v1.7.4 缺陷形态）⇒ 门失效
+      const brokenBlocks = [{ type: 'text', text: `${SEGMENT}
+
+/compact` }]
+      expect(cliSlashGate(brokenBlocks)).toBeNull()
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true })
+    }
+  })
   test('⑪ 唯一注入点：两条上游（WS / 投递）都不自行注入摘要，只把正文交给 sendMessage', async () => {
     const read = (rel: string) => fs.readFile(new URL(rel, import.meta.url), 'utf8')
     const ws = await read('../ws/handler.ts')

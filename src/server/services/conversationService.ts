@@ -714,11 +714,12 @@ export class ConversationService {
     content: string,
     attachments?: AttachmentRef[],
   ): Promise<boolean> {
-  // v1.7.4 修缺陷：花名册摘要改**独立系统段前置**（模型/主管上下文照旧可见，B2 不退），
-  // 用户可见的正文与转录渲染由读路径 stripRosterDigestSegment 剥掉（见 messageConversion）。
+  // v1.7.4 修缺陷：花名册摘要走**独立 content block**（用户正文块一字不动）。
+  // 原因：CLI 取**最后一个 text 块**当命令串（`processUserInput.ts:338-341`）——
+  // 把摘要拼进正文字符串会改掉行首，主管会话里所有走服务端→CLI 的斜杠命令
+  // （/compact /goal /init…）都会被当普通文本送模型（用户实测：/compact 失效）。
   const rosterSegment = await buildRosterDigestSegmentForSupervisor(sessionId, content)
-  const modelContent = rosterSegment ? `${rosterSegment}${String.fromCharCode(10)}${String.fromCharCode(10)}${content}` : content
-  const userContent = await this.buildUserContent(modelContent, sessionId, attachments)
+  const userContent = await this.buildUserContent(content, sessionId, attachments, rosterSegment ?? undefined)
     let session = this.sessions.get(sessionId)
     if (session && !await this.refreshNetworkEnvironmentBeforeTurn(sessionId, session)) {
       return false

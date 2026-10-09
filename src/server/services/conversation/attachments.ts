@@ -44,6 +44,7 @@ export async function buildUserContent(
   content: string,
   sessionId: string,
   attachments?: AttachmentRef[],
+  leadingSystemText?: string,
 ): Promise<UserContentBlock[]> {
   const materialized = await materializeAttachments(sessionId, attachments)
   const trimmed = content.trim()
@@ -51,11 +52,19 @@ export async function buildUserContent(
     ? `${materialized.pathPrefix}${trimmed || 'Please analyze the attached files.'}`.trim()
     : trimmed
 
-  const blocks: UserContentBlock[] = text
+  const bodyBlocks: UserContentBlock[] = text
     ? [{ type: 'text', text }]
     : materialized.imageBlocks.length > 0
       ? [{ type: 'text', text: 'Please analyze the attached image.' }]
       : []
+
+  // v1.7.4 修缺陷：给模型的系统段（花名册摘要）**独立成块且在最前**。
+  // CLI 取**最后一个 text 块**当命令串（`src/utils/processUserInput/processUserInput.ts:338-341`），
+  // 因此用户正文那个块必须保持原样、且自成一块 —— 把系统段拼进正文字符串会改掉行首，
+  // 主管会话里所有走服务端→CLI 的斜杠命令（/compact /goal /init…）都会被当普通文本送模型。
+  const blocks: UserContentBlock[] = leadingSystemText
+    ? [{ type: 'text', text: leadingSystemText }, ...bodyBlocks]
+    : bodyBlocks
 
   blocks.push(...materialized.imageBlocks)
   for (const metadataText of materialized.imageMetadataTexts) {
