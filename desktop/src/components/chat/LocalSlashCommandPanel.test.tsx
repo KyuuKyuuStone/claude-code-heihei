@@ -2,13 +2,26 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom'
 
-const { sessionsApiMock, skillsApiMock } = vi.hoisted(() => ({
+const { sessionsApiMock, skillsApiMock, chatStoreMock } = vi.hoisted(() => ({
   sessionsApiMock: {
     getInspection: vi.fn(),
   },
   skillsApiMock: {
     list: vi.fn(),
   },
+  chatStoreMock: {
+    state: {
+      sessions: {} as Record<string, { chatState?: string; compactCount?: number }>,
+      sendMessage: vi.fn(),
+    },
+  },
+}))
+
+vi.mock('../../stores/chatStore', () => ({
+  useChatStore: Object.assign(
+    (selector: (state: unknown) => unknown) => selector(chatStoreMock.state),
+    { getState: () => chatStoreMock.state },
+  ),
 }))
 
 vi.mock('../../api/sessions', async (importOriginal) => {
@@ -77,9 +90,119 @@ function inspectionWithContext(context: SessionContextSnapshot): SessionInspecti
   }
 }
 
+describe('LocalSlashCommandPanel context compaction', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    chatStoreMock.state.sessions = {}
+    useSettingsStore.setState({ locale: 'en' })
+  })
+
+  const nearLimitContext: SessionContextSnapshot = {
+    ...baseContext,
+    totalTokens: 960_000,
+    maxTokens: 1_000_000,
+    rawMaxTokens: 1_000_000,
+    percentage: 96,
+    autoCompactThreshold: 967_000,
+    isAutoCompactEnabled: true,
+  }
+
+  it('shows the near-limit hint and sends /compact through the ordinary send path', async () => {
+    chatStoreMock.state.sessions = { 'session-1': { chatState: 'idle', compactCount: 0 } }
+    sessionsApiMock.getInspection.mockResolvedValue(inspectionWithContext(nearLimitContext))
+
+    render(<LocalSlashCommandPanel command="context" sessionId="session-1" onClose={vi.fn()} />)
+
+    expect(await screen.findByText('Context is near its limit — compacting is recommended')).toBeInTheDocument()
+    const action = screen.getByTestId('context-compact-action')
+    expect(action).toBeEnabled()
+
+    fireEvent.click(action)
+    expect(chatStoreMock.state.sendMessage).toHaveBeenCalledWith('session-1', '/compact')
+  })
+
+  it('adds a note when auto-compact is disabled', async () => {
+    chatStoreMock.state.sessions = { 'session-1': { chatState: 'idle', compactCount: 0 } }
+    sessionsApiMock.getInspection.mockResolvedValue(inspectionWithContext({
+      ...nearLimitContext,
+      isAutoCompactEnabled: false,
+    }))
+
+    render(<LocalSlashCommandPanel command="context" sessionId="session-1" onClose={vi.fn()} />)
+
+    expect(await screen.findByText('Auto-compact is off — compact manually')).toBeInTheDocument()
+  })
+
+  it('disables the action while a turn is in flight and while compacting', async () => {
+    chatStoreMock.state.sessions = { 'session-1': { chatState: 'thinking', compactCount: 0 } }
+    sessionsApiMock.getInspection.mockResolvedValue(inspectionWithContext(nearLimitContext))
+
+    const { rerender } = render(
+      <LocalSlashCommandPanel command="context" sessionId="session-1" onClose={vi.fn()} />,
+    )
+    expect(await screen.findByTestId('context-compact-action')).toBeDisabled()
+
+    chatStoreMock.state.sessions = { 'session-1': { chatState: 'compacting', compactCount: 0 } }
+    rerender(<LocalSlashCommandPanel command="context" sessionId="session-1" onClose={vi.fn()} />)
+
+    expect(screen.getByText('Compacting context…')).toBeInTheDocument()
+    expect(screen.getByTestId('context-compact-action')).toBeDisabled()
+  })
+
+  it('reports a finished compaction and forces one fresh context read', async () => {
+    chatStoreMock.state.sessions = { 'session-1': { chatState: 'idle', compactCount: 0 } }
+    sessionsApiMock.getInspection.mockResolvedValue(inspectionWithContext({
+      ...nearLimitContext,
+      totalTokens: 420_000,
+      percentage: 42,
+    }))
+
+    const { rerender } = render(
+      <LocalSlashCommandPanel command="context" sessionId="session-1" onClose={vi.fn()} />,
+    )
+    await screen.findByText('Context window usage')
+    const callsBefore = sessionsApiMock.getInspection.mock.calls.length
+
+    // compact_boundary bumped compactCount: the panel must re-read the CLI and
+    // say so, instead of leaving the pre-compact meter on screen (#743).
+    chatStoreMock.state.sessions = { 'session-1': { chatState: 'idle', compactCount: 1 } }
+    rerender(<LocalSlashCommandPanel command="context" sessionId="session-1" onClose={vi.fn()} />)
+
+    expect(screen.getByText('Context compacted')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(sessionsApiMock.getInspection.mock.calls.length).toBeGreaterThan(callsBefore)
+    })
+    expect(sessionsApiMock.getInspection).toHaveBeenCalledWith('session-1', {
+      includeContext: true,
+      contextOnly: true,
+      timeout: 45_000,
+    })
+  })
+
+  it('distinguishes a compaction that is still over the window', async () => {
+    chatStoreMock.state.sessions = { 'session-1': { chatState: 'idle', compactCount: 0 } }
+    sessionsApiMock.getInspection.mockResolvedValue(inspectionWithContext({
+      ...nearLimitContext,
+      totalTokens: 1_000_000,
+      percentage: 100,
+    }))
+
+    const { rerender } = render(
+      <LocalSlashCommandPanel command="context" sessionId="session-1" onClose={vi.fn()} />,
+    )
+    await screen.findByTestId('context-compact-action')
+
+    chatStoreMock.state.sessions = { 'session-1': { chatState: 'idle', compactCount: 1 } }
+    rerender(<LocalSlashCommandPanel command="context" sessionId="session-1" onClose={vi.fn()} />)
+
+    expect(screen.getByText('Still over the context window after compacting')).toBeInTheDocument()
+  })
+})
+
 describe('LocalSlashCommandPanel memory context', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    chatStoreMock.state.sessions = {}
     useSettingsStore.setState({ locale: 'en' })
     useTabStore.setState(useTabStore.getInitialState(), true)
     useUIStore.setState({

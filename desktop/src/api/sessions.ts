@@ -162,6 +162,10 @@ export type SessionContextSnapshot = {
   maxTokens: number
   rawMaxTokens: number
   percentage: number
+  /** Token level at which the CLI will auto-compact (effective window − buffer). */
+  autoCompactThreshold?: number
+  /** Whether the CLI has auto-compact enabled for this session's provider. */
+  isAutoCompactEnabled?: boolean
   gridRows: Array<Array<{
     color: string
     isFilled: boolean
