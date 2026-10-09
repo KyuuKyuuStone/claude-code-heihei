@@ -13,6 +13,7 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { IconButton } from '@/components/ui/IconButton'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { mcpStatusTone } from '@/lib/mcpStatus'
+import { formatTokensAgainstWindow } from '../../lib/formatTokenCount'
 import { useTranslation, type TranslationKey } from '../../i18n'
 import { useUIStore } from '../../stores/uiStore'
 import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
@@ -352,7 +353,7 @@ function CategoryBreakdown({ categories, rawMaxTokens, t }: { categories: Contex
                   </span>
                 </div>
                 <div className="shrink-0 text-right leading-tight">
-                  <div className="text-sm text-[var(--color-inspector-text)]">{formatNumber(category.tokens)}</div>
+                  <div className="text-sm text-[var(--color-inspector-text)]">{formatTokensAgainstWindow(category.tokens, rawMaxTokens)}</div>
                   <div className="mt-0.5 text-[12px] text-[var(--color-inspector-muted)]">{formatPercent(percent)}</div>
                 </div>
               </div>
@@ -499,7 +500,7 @@ function ContextOverview({ context, categories, t }: { context: SessionContextSn
         <span className="rounded-sm border border-[var(--color-inspector-border)] bg-[var(--color-inspector-chip)] px-2 py-1 font-mono text-xs text-[var(--color-inspector-muted-strong)]">{context.model}</span>
       </div>
       <div className="font-mono text-[24px] font-semibold text-[var(--color-inspector-text)]">
-        {formatNumber(context.totalTokens)}
+        {formatTokensAgainstWindow(context.totalTokens, context.rawMaxTokens)}
         <span className="mx-1.5 text-[var(--color-inspector-text)]">/</span>
         <span>{formatNumber(context.rawMaxTokens)}</span>
         <span className="ml-3 align-middle text-sm font-normal text-[var(--color-inspector-accent-secondary)]">[{formatPercent(usedPercent)} {t('slash.inspector.context.used')}]</span>
@@ -509,13 +510,13 @@ function ContextOverview({ context, categories, t }: { context: SessionContextSn
       </div>
       <div className="mt-8 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <div className="rounded-md border border-[var(--color-inspector-border)] bg-[var(--color-inspector-surface)] px-4 py-3">
-          <ContextStatPill label={t('slash.inspector.context.free')} value={formatNumber(freeTokens)} detail={formatPercent(freePercent)} />
+          <ContextStatPill label={t('slash.inspector.context.free')} value={formatTokensAgainstWindow(freeTokens, context.rawMaxTokens)} detail={formatPercent(freePercent)} />
         </div>
         <div className="rounded-md border border-[var(--color-inspector-border)] bg-[var(--color-inspector-surface)] px-4 py-3">
-          <ContextStatPill label={t('slash.inspector.context.messages')} value={formatNumber(context.messageBreakdown?.assistantMessageTokens ?? 0)} detail={t('slash.inspector.context.assistant')} />
+          <ContextStatPill label={t('slash.inspector.context.messages')} value={formatTokensAgainstWindow(context.messageBreakdown?.assistantMessageTokens ?? 0, context.rawMaxTokens)} detail={t('slash.inspector.context.assistant')} />
         </div>
         <div className="rounded-md border border-[var(--color-inspector-border)] bg-[var(--color-inspector-surface)] px-4 py-3">
-          <ContextStatPill label={t('slash.inspector.context.toolResults')} value={formatNumber(context.messageBreakdown?.toolResultTokens ?? 0)} />
+          <ContextStatPill label={t('slash.inspector.context.toolResults')} value={formatTokensAgainstWindow(context.messageBreakdown?.toolResultTokens ?? 0, context.rawMaxTokens)} />
         </div>
         <div className="rounded-md border border-[var(--color-inspector-border)] bg-[var(--color-inspector-surface)] px-4 py-3">
           <ContextStatPill label={t('slash.inspector.context.context')} value={formatPercent(usedPercent)} />

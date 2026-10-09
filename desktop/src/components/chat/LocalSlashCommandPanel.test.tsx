@@ -164,6 +164,41 @@ describe('LocalSlashCommandPanel memory context', () => {
     })
   })
 
+  it('keeps the header, pills and category rows on one ruler at the window limit', async () => {
+    sessionsApiMock.getInspection.mockResolvedValue(inspectionWithContext({
+      ...baseContext,
+      categories: [
+        { name: 'Messages', tokens: 2_037_458, color: '#8b5cf6' },
+        { name: 'Memory files', tokens: 1_170, color: '#14b8a6' },
+      ],
+      totalTokens: 1_000_000,
+      maxTokens: 1_000_000,
+      rawMaxTokens: 1_000_000,
+      percentage: 100,
+      messageBreakdown: {
+        ...baseContext.messageBreakdown!,
+        assistantMessageTokens: 2_037_458,
+      },
+    }))
+
+    render(
+      <LocalSlashCommandPanel
+        command="context"
+        sessionId="session-1"
+        onClose={vi.fn()}
+      />,
+    )
+
+    // Header total (clamped), the Messages pill, and the oversized Messages
+    // category row all read "≥ 1,000,000" — never a raw value larger than the
+    // window they sit under. The small category keeps its exact value.
+    await waitFor(() => {
+      expect(screen.getAllByText('≥ 1,000,000').length).toBeGreaterThanOrEqual(3)
+    })
+    expect(screen.queryByText('2,037,458')).not.toBeInTheDocument()
+    expect(screen.getByText('1,170')).toBeInTheDocument()
+  })
+
   it('opens skill details in the unified Skill Center', async () => {
     const onClose = vi.fn()
     const fetchSkillDetail = vi.fn().mockResolvedValue(undefined)

@@ -11,3 +11,22 @@ export function formatTokenCount(n?: number): string {
   if (n < 1_000_000) return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k`
   return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}m`
 }
+
+/**
+ * Window-aware token display for the context meter. The server clamps the
+ * context total to the model window (calculateCurrentContextTokenTotal), so a
+ * reading that reaches the window really means "at or over the window" —
+ * printing the window figure alone reads as "exactly full". Rendering
+ * `≥ <window>` keeps the headline total and every per-category figure on one
+ * ruler, so a category can never look larger than the window above it.
+ */
+export function formatTokensAgainstWindow(
+  tokens: number | undefined,
+  windowTokens: number | undefined,
+): string {
+  const value = tokens ?? 0
+  const window = windowTokens ?? 0
+  const formatter = new Intl.NumberFormat()
+  if (window > 0 && value >= window) return `≥ ${formatter.format(window)}`
+  return formatter.format(value)
+}

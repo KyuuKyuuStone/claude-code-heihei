@@ -372,6 +372,56 @@ describe('ContextUsageIndicator request behavior', () => {
   })
 })
 
+describe('ContextUsageIndicator window ruler', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useSettingsStore.setState({ locale: 'en' })
+  })
+
+  afterEach(() => {
+    cleanup()
+  })
+
+  it('reads at-or-over-window values as ≥ the window, never a bare window figure', async () => {
+    sessionsApiMock.getInspection.mockResolvedValue({
+      ...baseInspection,
+      context: {
+        ...baseInspection.context,
+        categories: [
+          { name: 'Messages', tokens: 2_037_458, color: '#2D628F' },
+          { name: 'System tools', tokens: 11_029, color: '#777777' },
+        ],
+        totalTokens: 1_000_000,
+        maxTokens: 1_000_000,
+        rawMaxTokens: 1_000_000,
+        percentage: 100,
+      },
+    })
+
+    render(<ContextUsageIndicator sessionId="session-1" chatState="idle" messageCount={1} />)
+
+    // The headline total is clamped to the window, so its real value is
+    // "at or over 1,000,000"; the oversized Messages row must use the same
+    // ruler instead of printing 2,037,458 beside a 1,000,000 window.
+    await waitFor(() => {
+      expect(screen.getAllByText('≥ 1,000,000').length).toBeGreaterThanOrEqual(2)
+    })
+    expect(screen.queryByText('2,037,458')).not.toBeInTheDocument()
+    // A category under the window keeps its exact value.
+    expect(screen.getByText('11,029')).toBeInTheDocument()
+  })
+
+  it('labels the live context snapshot as an estimate, not only the transcript fallback', async () => {
+    sessionsApiMock.getInspection.mockResolvedValue(baseInspection)
+
+    render(<ContextUsageIndicator sessionId="session-1" chatState="idle" messageCount={1} />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Estimate')).toBeInTheDocument()
+    })
+  })
+})
+
 describe('ContextUsageIndicator touch target', () => {
   afterEach(() => {
     cleanup()

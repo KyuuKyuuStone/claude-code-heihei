@@ -4,6 +4,7 @@ import { useTranslation } from '../../i18n'
 import type { ChatState } from '../../types/chat'
 import { useMobileViewport } from '../../hooks/useMobileViewport'
 import { isDesktopRuntime } from '../../lib/desktopRuntime'
+import { formatTokensAgainstWindow } from '../../lib/formatTokenCount'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
 import { Spinner } from '@/components/ui/Spinner'
 
@@ -91,7 +92,6 @@ export function ContextUsageIndicator({
   // viewport instead — see the trigger's height below.
   const isMobileBrowser = useMobileViewport() && !isDesktopRuntime()
   const [context, setContext] = useState<SessionContextSnapshot | null>(null)
-  const [contextSource, setContextSource] = useState<'live' | 'estimate' | null>(null)
   const [loading, setLoading] = useState(() => shouldFetchContext(sessionId, draft))
   const [error, setError] = useState<string | null>(null)
   const [updatedAt, setUpdatedAt] = useState<number | null>(null)
@@ -139,10 +139,8 @@ export function ContextUsageIndicator({
       .then((inspection) => {
         if (seq !== requestSeq.current || activeContextIdentity !== contextIdentityRef.current) return false
         const nextContext = inspection.context ?? inspection.contextEstimate ?? null
-        const nextSource = inspection.context ? 'live' : inspection.contextEstimate ? 'estimate' : null
         const usageModel = inspection.usage?.models.find((model) => firstNonEmpty(model.displayName, model.model)) ?? null
         setContext(nextContext)
-        setContextSource(nextSource)
         setInspectionModel(firstNonEmpty(
           inspection.context?.model,
           inspection.contextEstimate?.model,
@@ -201,7 +199,6 @@ export function ContextUsageIndicator({
       requestSeq.current += 1
       lastAutoRefreshAtRef.current = 0
       setContext(null)
-      setContextSource(null)
       setError(null)
       setUpdatedAt(null)
       setInspectionModel(null)
@@ -327,7 +324,7 @@ export function ContextUsageIndicator({
             <div className="mt-4 grid grid-cols-2 gap-2">
               <div>
                 <div className="text-[12.5px] text-[var(--color-text-tertiary)]">{t('contextIndicator.used')}</div>
-                <div className="mt-[3px] font-mono text-sm font-medium text-[var(--color-text-primary)]">{formatNumber(usedTokens)}</div>
+                <div className="mt-[3px] font-mono text-sm font-medium text-[var(--color-text-primary)]">{formatTokensAgainstWindow(usedTokens, maxTokens)}</div>
               </div>
               <div>
                 <div className="text-[12.5px] text-[var(--color-text-tertiary)]">{t('contextIndicator.free')}</div>
@@ -346,7 +343,7 @@ export function ContextUsageIndicator({
                     <div key={category.name}>
                       <div className="flex items-baseline justify-between gap-3">
                         <span className="min-w-0 truncate text-[13.5px] text-[var(--color-text-primary)]">{category.name}</span>
-                        <span className="shrink-0 font-mono text-[13px] text-[var(--color-text-secondary)]">{formatNumber(category.tokens)}</span>
+                        <span className="shrink-0 font-mono text-[13px] text-[var(--color-text-secondary)]">{formatTokensAgainstWindow(category.tokens, maxTokens)}</span>
                       </div>
                       {/* One terracotta scale for every row. The per-category
                           colors that used to fill these bars came from the API
@@ -361,11 +358,13 @@ export function ContextUsageIndicator({
             )}
             <div className="mt-4 text-xs text-[var(--color-text-tertiary)]">
               {formatUpdatedAt(updatedAt, t)}
-              {contextSource === 'estimate' && (
-                <span className="ml-2 inline-flex rounded-full border border-[var(--color-border)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]">
-                  {t('contextIndicator.estimate')}
-                </span>
-              )}
+              {/* Both sources are estimates — the live channel is a
+                  get_context_usage request sent with estimateOnly, and the
+                  fallback is derived from the transcript — so label them alike
+                  instead of only tagging the fallback. */}
+              <span className="ml-2 inline-flex rounded-full border border-[var(--color-border)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]">
+                {t('contextIndicator.estimate')}
+              </span>
             </div>
           </>
         ) : isPendingContext ? (
@@ -400,11 +399,11 @@ export function ContextUsageIndicator({
             >
               {displayContext ? formatPercent(percentage) : '--'}
             </div>
-            {contextSource === 'estimate' && (
-              <span className="mb-1 rounded-full border border-[var(--color-border)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
-                {t('contextIndicator.estimate')}
-              </span>
-            )}
+            {/* Same estimate label as the desktop popover: every context
+                snapshot this component renders is an estimate. */}
+            <span className="mb-1 rounded-full border border-[var(--color-border)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
+              {t('contextIndicator.estimate')}
+            </span>
           </div>
 
           {displayContext ? (
@@ -412,7 +411,7 @@ export function ContextUsageIndicator({
               <div className="grid grid-cols-3 gap-2 font-mono text-xs">
                 <div className="rounded-[var(--radius-lg)] bg-[var(--color-surface-container)] p-3">
                   <div className="text-[var(--color-text-tertiary)]">{t('contextIndicator.used')}</div>
-                  <div className="mt-1 text-[var(--color-text-primary)]">{formatNumber(usedTokens)}</div>
+                  <div className="mt-1 text-[var(--color-text-primary)]">{formatTokensAgainstWindow(usedTokens, maxTokens)}</div>
                 </div>
                 <div className="rounded-[var(--radius-lg)] bg-[var(--color-surface-container)] p-3">
                   <div className="text-[var(--color-text-tertiary)]">{t('contextIndicator.free')}</div>
@@ -431,7 +430,7 @@ export function ContextUsageIndicator({
                       <div key={category.name}>
                         <div className="flex items-center justify-between gap-3 text-xs">
                           <span className="min-w-0 truncate text-[var(--color-text-secondary)]">{category.name}</span>
-                          <span className="shrink-0 font-mono text-[var(--color-text-tertiary)]">{formatNumber(category.tokens)}</span>
+                          <span className="shrink-0 font-mono text-[var(--color-text-tertiary)]">{formatTokensAgainstWindow(category.tokens, maxTokens)}</span>
                         </div>
                         <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-hover)]">
                           <div className="h-full rounded-full bg-[var(--color-brand)]" style={{ width: `${percent}%` }} />
