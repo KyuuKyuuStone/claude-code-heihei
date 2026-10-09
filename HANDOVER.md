@@ -38,7 +38,7 @@
 ## GitHub 信息
 
 - **仓库**：`https://github.com/KyuuKyuuStone/claude-code-heihei`
-- **当前版本**：`v1.7.3`（代码侧 2026-10-04 收口；**未发布**——tag/Release/出包**均待用户当次口令**）
+- **当前版本**：**v1.7.4 已发布**（2026-10-09；tag `v1.7.4` @ `93fec48`；GitHub Release **正式版（非 Pre-release）**，挂三资产 exe / blockmap / latest.yml；发布前 preflight 四阶段全绿——gates 22s / test 1525s（156 段）/ build 176s / smoke 56s，主管发布时实测记录）。前版 v1.7.3 也已于 2026-10-04 发布（实测 `gh release list` 在案）
 - **主分支**：`main`（本轮只更新文档，不执行 git 写操作）
 
 ## 当前状态
@@ -68,7 +68,7 @@
 - **v1.4.1**：**主管通道放行**——主管 Write 收权**放行工作目录外任意位置**（写派活 payload 到临时目录、写汇总文档到桌面等直接 Write 完成，不再绕道）；派活协议补「主管通道」说明（`src/collaboration/dispatchProtocol.ts`：明确 Write 放行范围 + 禁 heredoc 内联 JSON 防反斜杠折叠，实测 6 连 400 的根因）
 - **v1.5.0**：**花名册高危数据丢失修复 + Windows/打包收口**。① `servantService.listServants()` 读路径改为**零写入**：摘要暂时不可用时仍保留花名册条目、标题退化为 sessionId 前缀；清理只由明确删除事件触发。② 新增 `pruneForDeletedSessions(sessionIds)` 兜底：一次清理涉及 ≥2 条或会清空整册时整批跳过并写 warn 诊断 `servant_roster_mass_cleanup_skipped`，采用「宁留脏条目、不静默丢协作身份」策略。③ 花名册与会话统一用 `getClaudeConfigHomeDir()` 解析配置目录。受影响版本：**v1.4.1 及更早**；根因是暂时查不到会话摘要被误判为会话删除，一个普通 GET 读请求便会写盘清空花名册。④ 收口为 Windows + Electron，移除 macOS/Linux 平台支持面与外部 IM 适配器，构建链统一到 bun；修复平台清理造成的测试断链。用户从 **v1.2.7 升级并实测通过，无 bug**。**打包/排障教训**：经运维复核，v1.5.0 首包 `win-unpacked` 内的 sidecar **确实包含修复**（命中特征 `pruneForDeletedSessions` 与 `servant_roster_mass_cleanup_skipped`）；此前因 `session-deleted-auto-cleanup` 也合法存在于新源码（作为 prune 路径的 reason 值），被误当成旧逻辑残留，导致误判打漏。今后排查必须先确认 grep 的是**当前运行的那份二进制**：按端口文件中的 pid 找到对应进程及其实际路径；诊断日志会混入多个实例事件，须依据 pid/startedAt 区分来源。打包验证只使用稳定的字符串字面量 / 日志事件名（如 `pruneForDeletedSessions`、`servant_roster_mass_cleanup_skipped`）；函数名 `getClaudeConfigHomeDir` 可能被 bundle 内联或改名，**不得作为产物验证判据**。GUI 整包首启未由运维独立验证（单实例锁阻止第二实例）；用户随后安装升级实测通过。发布说明：`release-notes/v1.5.0.md`。相关方案与执行证据保存在仓库外私有文档归档中。**版本快照只记变更结论，不外放本机绝对路径或事故细节。**
 
-**版本快照补记（v1.5.1 → v1.7.2，2026-09-30 ~ 10-03）**：
+**版本快照补记（v1.5.1 → v1.7.4，2026-09-30 ~ 10-09）**：
 
 - **v1.5.1**：协作设置弹窗重设计；角色特性文案 v2（新增架构师，35 个模板角色）；主管按花名册路由派活（内置路由表 + 动态 rosterTable 降 token）；任务台账服务端第一批（`/api/collab-tasks`）；花名册写入加队列防 lost update。
 - **v1.6.0**：协作大版本——**任务台账与协作闭环**（状态机 `dispatched→accepted→in_progress→delivered→verified/rework`）、**CLI 原生协作工具**（`CollabDispatch` / `CollabReview` / `CollabListTasks` / `CollabReport`）、广播逐目标记账、文件信箱降级。本机信任边界（`127.0.0.1`、无进程级鉴权，`taskId` 非访问凭证）。
@@ -76,16 +76,18 @@
 - **v1.7.0**：六个巨型文件结构拆分（纯移动；六门面合计 **22642 → 13819** 行）；错误提示人话化；默认超时 120s → 320s；协作通知消息默认折叠；会话启动加 180s 总超时兜底。
 - **v1.7.1**：错误态「人话标题 + 可折叠技术详情」、26 处瞬时提示人话化、409 文案接入；**首次跑通全量自动化测试**（src 286 / desktop 240 文件）；新增 `scripts/preflight-release.mjs` 与 `scripts/check-import-semantics.ts`。
 - **v1.7.2**：修两个「会话静默假死」根因——① 协议通知用假地址（`127.0.0.1:0`）拉起主管；② 权限等待无超时（现 **有客户端 15 分钟 / 无客户端 90 秒**到期自动拒绝 + 五语言可见性）；看门狗扩覆盖「被投递程序化拉起的主管会话」；转录读取缓存（整读 3 → 1）；体积门禁口径修复（豁免 cap 优先于基线）。
+- **v1.7.3**：**红灯缺陷批（4 修 1 挂档）**——① Bun truncate 永挂 ⇒ 两处产品路径改**重写语义 + 短读守卫**（`d853213`/`2f615a0`）；② 隔离实例端口文件污染 ⇒ 读写两侧统一 `getCcHeiheiDir()`（`c09ae36`/`ab078e5`/`77cb060`）；③ 协作设置弹窗补失败态（`d07f907`）；④ 台账 replay 缺字段归一（`55c3d24`）。衍生修：320s 超时误报与业务失败区分（`f356346`）、409 文案正则（`bd6b858`）、CI 8.3 短路径测试侧修复（`0355134`/`ee38ecd`）；`turn-checkpoints` 慢（同输入 4.1~70.7s ≈17× 不稳定、成因未定）**挂档**。2026-10-04 发布。发布说明 `release-notes/v1.7.3.md`。
+- **v1.7.4**：**结构债收官 + 桌面缺陷/体验批（75 笔）**——① **花名册摘要「模型可见 / 用户不可见」修复**（`8b62801` + `83bcad0`）：摘要改**独立 `<system-reminder>` 系统段前置注入**（不再拼正文尾）、历史/实时两条读路径剥离、历史裸行剥离、检索面剥离、**源码守卫用例**钉注入点（模型侧仍可见 ⇒ B2 能力不退化）；② **上下文面板**：接近上限提示 + 一键压缩 + 压完明确反馈（`ca3d8de`），压缩入口进悬停弹层 + 面板后取数补一次短重试 + Context 页打「估算」标（`f019dcb`）；③ 面板显示口径三处统一——饱和显式标 `≥窗口`（`45a698e`）；④ **结构债三笔全清**：G1 两文件 **handler 2384 / sessionService 2343**（均 ≤2500，**豁免 0 条**、基线 19 项）、G2 分层违规 **18 → 0**（`ad04f1c`，永久例外 0）、G9 tsc 棘轮关卡 **CI 闭环**（主步 + 种子演练步，基线 **7141** 只降不升）；另 A10 两半落定（后台任务状态上提已落地 `3d061ae`/`1a9981d`/`0d00b99`；`/api/session-activity` 端点**裁决放弃**——找不到消费方）。2026-10-09 发布。发布说明 `release-notes/v1.7.4.md`。
 
 **当前缺口与债务（不美化）**：
 
-- `sessionService.ts` 未拆（豁免 `cap 3846`，续签 **1.7.3**，附条件「1.7.3 须含红灯区批次」）；`handler.ts` 豁免 `cap 3372`，同样续至 1.7.3。
-- ~~**服务端（root）从来没有有效类型关卡**（root tsconfig 因 TS6 无效；类型关卡目前只覆盖 desktop 子项目）。~~ → **2026-10-08 收口（G9 类型关卡落地）**：① `tsconfig.json` 去 `baseUrl`——TS6 下带它 = 仅 1 条 TS5101、**0 文件被检的真空检查**（exit 2）；去后全量 tsc 与 `--ignoreDeprecations 6.0` 对照组**签名多重集逐项持平（5558 签名 / 7255 条，0 新增 0 消失 0 计数差）**，depcruise 3649 模块不变，`paths` 不受影响；② 闸门 `bun run lint:types`（`scripts/check-tsc-baseline.ts`）：签名 = `文件::错误码::归一化message`（数字占位、**行号不入签名**），只紧不松四规则（子集 PASS / 新增或计数超 FAIL / `--update` 同提交下调 / CI 基线相对 origin/main 防倒转）+ 真空自毁（0 诊断 exit≠0 判红）+ sanity 下限（总数 < 基线 50% 判红，拦「1 ≤ 7255」式假绿）+ 自带 node 堆旗标 `--max-old-space-size=12288`（默认堆全量 OOM exit 134）；③ 基线 `scripts/tsc-baseline.json`：**total=7255，存量=长期债务，本批只立闸门不清算**（逾期销账 = 7255 长期挂账，不设还款期）；④ 判别力双段自证：单测段 `scripts/check-tsc-baseline.test.ts` **14 pass**（新增红/计数+1 红/收敛不拦/真空红/TS5101 形态红/骤降红/全清红）+ 管道段种子补丁 `scripts/g9-seed-error.patch`（注入必红且差异清单精确指认、`git apply -R` 复原必绿、apply 失败判红）；⑤ CI 接入 `layer-lint` job 两步（主步带 `--baseline-ref origin/main` + 种子演练步）；**pre-commit 不接**（全量 tsc 分钟级，file-size <2s 才配进钩子）。
+- ~~`sessionService.ts` / `handler.ts` 体积豁免~~ → **2026-10-08 收官（G1）**：两文件 **2343 / 2384**（均 ≤2500），`file-size-allowlist.json` **entries 已清空（0 条）**、基线 21 → **19 项**，改按规则 1 硬标准管理；实测 `lint:file-size` PASS（2727 文件 0 失败）。明细见下方 v1.7.4 快照与 G1 收官条目。
+- ~~**服务端（root）从来没有有效类型关卡**（root tsconfig 因 TS6 无效；类型关卡目前只覆盖 desktop 子项目）。~~ → **2026-10-08 收口（G9 类型关卡落地）**：① `tsconfig.json` 去 `baseUrl`——TS6 下带它 = 仅 1 条 TS5101、**0 文件被检的真空检查**（exit 2）；去后全量 tsc 与 `--ignoreDeprecations 6.0` 对照组**签名多重集逐项持平（5558 签名 / 7255 条，0 新增 0 消失 0 计数差）**，depcruise 3649 模块不变，`paths` 不受影响；② 闸门 `bun run lint:types`（`scripts/check-tsc-baseline.ts`）：签名 = `文件::错误码::归一化message`（数字占位、**行号不入签名**），只紧不松四规则（子集 PASS / 新增或计数超 FAIL / `--update` 同提交下调 / CI 基线相对 origin/main 防倒转）+ 真空自毁（0 诊断 exit≠0 判红）+ sanity 下限（总数 < 基线 50% 判红，拦「1 ≤ 7255」式假绿）+ 自带 node 堆旗标 `--max-old-space-size=12288`（默认堆全量 OOM exit 134）；③ 基线 `scripts/tsc-baseline.json`：**total=7255，存量=长期债务，本批只立闸门不清算**（逾期销账 = 7255 长期挂账，不设还款期）；④ 判别力双段自证：单测段 `scripts/check-tsc-baseline.test.ts` **14 pass**（新增红/计数+1 红/收敛不拦/真空红/TS5101 形态红/骤降红/全清红）+ 管道段种子补丁 `scripts/g9-seed-error.patch`（注入必红且差异清单精确指认、`git apply -R` 复原必绿、apply 失败判红）；⑤ CI 接入 `layer-lint` job 两步（主步带 `--baseline-ref origin/main` + 种子演练步）；**pre-commit 不接**（全量 tsc 分钟级，file-size <2s 才配进钩子）。**基线现值 7141**（后续批次下调，棘轮只降不升；`scripts/tsc-baseline.json` 实测）；CI 主步 + 种子演练步均已接入且全绿（v1.7.4 批）。
 - ~~会话列表/索引族红灯批、30 处瞬时 toast 分类、第 4 处长驻点（`desktop/src/main.tsx:62` 根崩溃屏）等仍待办。~~ → **2026-10-08 收口**：红灯批＝**v1.7.3 完成**（5 缺陷 4 修 1 挂档）；30 处瞬时 toast 分类＝v1.7.1 落地 **26 处已全覆盖**（「30」为原始估算，另 4 处经复核为**排除项、非待办**——**无「4 处待补」**，见条目 12 勘误）；第 4 处长驻点（`main.tsx` 根崩溃屏）＝**按设计稿排除、非缺口**（见条目 12 勘误）。
-- **「320 秒超时」专项排查进行中**：已定位为 `turn-checkpoints` 结构性 `O(m·n)` 循环的候选成因，**O(n²) 尚未证实、修法未落地**（据主管口径，未在代码/提交中核到物证）。
+- **「320 秒超时」专项 → 已挂档（v1.7.3 发布说明在案）**：详见下方条目 4——`O(n²)` 已证伪，同输入实测 4.1~70.7s（≈17×）不稳定、成因未定，本轮零代码改动收口；「超时误报」本身已随 `f356346` 区分超时与业务失败。
 - v1.7.2 未验证项：渲染层视觉未真机走查、720px 短版降级未做、转录缓存「同尺寸重写 + mtime 精度」风险、`startedByDelivery` 不持久化、无客户端 15 分钟档未做 e2e。
 
-**豁免续签记（2026-10-04）**：两条豁免（`sessionService` cap 3846 / `handler` cap 3372）`expiresInVersion` 由 1.7.3 续至 **1.7.4**，理由＝「1.7.3 已含红灯区缺陷批 ⇒ 条件达成」。**如实记录**：两文件当前**已超自身基线**（`sessionService` 3796 > 基线 3795；`handler` 3351 > 基线 3322）——续签后由 **cap 覆盖**（豁免条目按裁决二十二只按 cap 判）；该状态是「红灯批为修复批、非减行批」的直接结果，非新债。
+**豁免续签记（2026-10-04）**：两条豁免（`sessionService` cap 3846 / `handler` cap 3372）`expiresInVersion` 由 1.7.3 续至 **1.7.4**，理由＝「1.7.3 已含红灯区缺陷批 ⇒ 条件达成」。**如实记录**：两文件当前**已超自身基线**（`sessionService` 3796 > 基线 3795；`handler` 3351 > 基线 3322）——续签后由 **cap 覆盖**（豁免条目按裁决二十二只按 cap 判）；该状态是「红灯批为修复批、非减行批」的直接结果，非新债。**→ 已收官（2026-10-08，G1）**：两文件降至 **2343 / 2384**，豁免撤除（2 → **0 条**），两笔超基线债务随 sessionService 四族外移 + handler D1′ 拆分清偿完毕（见下方 G1 收官条目）。
 
 ### 已查实待修缺陷（v1.7.3+ 候选）
 
@@ -259,6 +261,14 @@
 **v1.5.0 花名册修复与打包教训**：`servantService.listServants()` 读路径零写入；`pruneForDeletedSessions` 仅响应明确删除事件，批量 ≥2 条或清空整册时拒绝并记诊断；配置目录统一使用 `getClaudeConfigHomeDir()`。运维复核确认首包 `win-unpacked` 内的 sidecar 已包含修复；此前误判是把新源码中仍合法存在的 `session-deleted-auto-cleanup` reason 字符串当成旧逻辑证据。**以后排查先按端口文件 pid 找到当前服务进程的实际二进制路径，再对那份二进制 grep 稳定的修复字符串字面量 / 日志事件名**（本次用 `pruneForDeletedSessions`、`servant_roster_mass_cleanup_skipped`）；不要把函数名 `getClaudeConfigHomeDir` 当判据（bundle 可能内联或改名）。诊断日志可能混入多个实例的事件，必须结合 pid/startedAt 区分来源，避免误归因。不能只凭构建命令成功或 exe 存在认定修复已进包。**以后打包必须对正在运行的实际产物验证修复特征串，避免只查错产物。** 用户随后安装 v1.5.0 从 v1.2.7 升级实测通过。发布说明见 `release-notes/v1.5.0.md`。相关过程材料已在仓库外私有归档。 GUI 整包首启未由运维独立验证（Electron 单实例锁阻止第二实例）；之后用户安装 v1.5.0 从 v1.2.7 升级实测通过。发布说明见 `release-notes/v1.5.0.md`。相关过程材料已在仓库外私有归档。 
 
 ### 已知问题 / 待办
+
+**v1.7.4 发布后未结队列（2026-10-09 登记，原样不美化；新会话从这里接手）**：
+
+1. **`/compact` 从输入框发出没走本地命令通道**——内容被当普通消息送到模型（**疑似缺陷，待查**；按主管派活转述原样登记，仓库内暂无排查记录）。有据的区分线索：`release-notes/v1.7.4.md:63` 所述**按钮**路径已核实走本地命令通道；本条指**输入框手敲** `/compact` 路径，两者是不同入口——排查先复现输入框路径。
+2. **潜伏偶发 ECONNRESET**（`conversations.test.ts:3698`，已登记 `scripts/known-flaky.json` 第 3 条，2026-10-08 花名册摘要批追加；同批隔离 108/108 绿、复跑即绿）——真定位归「潜伏偶发专项批」（条目 10 记名排队）。
+3. **市场「卸载失败」文案 30 键**（卸载专用 6 键 × 5 语言；`Market.tsx:75` 现直出原始串）——待设计师出稿后单开一小批（条目 13 债①）。
+4. **三项待拍板**：#86 collab-tasks 入参重设计、#87 whoami 探活清理、#81 依赖升级（**待用户拍板**；#81 对比材料在案 `D:/xxw_p/cc-heihei-plan/依赖升级对比材料_2026-10-06.md`；**#86/#87 编号在本仓库文档未检索到书面出处**，按主管转述原样登记）。
+5. **CI 旧账 `Server full suite`**（条目 0b——runner 环境型已知家族，**非门禁**；push 红按挂账口径解读，红文件清单变化才算真回归）。
 - ~~**v1.6.0 路线：原生协作 + 任务台账**~~ → **已交付（v1.6.0 / v1.6.1）**：持久化任务台账 + 原生协作工具 + 任务面板已上线，流程保持全自动、**不增加人工审批点**。当前协作缺口见上方「版本快照补记」的缺口与债务。
 - **新增需求：协作设置弹窗重设计**——提供行业/场景模板（至少软件开发、小说写作等），便于用户按用途快速配置主管与员工角色；交互与模板范围待产品设计细化。
 - **桌面 vitest 基线已清零，豁免也已清理**（v1.1.2 → v1.2.5）：历史遗留 14 失败文件 / 40 失败用例于 v1.1.2 全部处理完毕；其中 generalSettings 25 条（H5 设置区 / 官方 provider 卡片 / cc-switch 入口）曾按用户拍板「应存在」转为**显式 skip**（条目 **B1-D2**）——**v1.2.5 用户改判「都不要，干净删掉」**：三特性实为**初始快照自带的未接线半成品、不接线**，**代码与 25 条 skip 用例已一并移除**（基线 skip 27 → 2）。分诊与加固记录见 `D:/xxw_p/cc-heihei-docs/v1.2.x/批次0_B1分诊报告_20260914.md`、`批次1_B1修复进度_20260914.md`
@@ -319,7 +329,7 @@
 - **桌面端类型**：`desktop/src/lib/desktopHost/types.ts`
 
 ### 构建和运行
-- 开发：`cd desktop && bun run electron:dev`
+- ⚠️ **网络两坑（2026-10-06 实证）**：① 协作投递 / 本机 API 一律 `curl --noproxy '*'`——app 崩溃后系统代理桥留「死代理 env」，走代理的请求全部 ECONNREFUSED（重启自愈）；② git 网络失败用 `git -c http.proxy= -c https.proxy=` 临时绕过（**本机 git config 写死死代理 `127.0.0.1:7897`，不许改**）。- 开发：`cd desktop && bun run electron:dev`
 - 打包：`cd desktop && bun run electron:build && bun ./node_modules/electron-builder/out/cli/cli.js --publish never -c.directories.output=D:/xxw_p/cc-heihei-dist/<版本号>`（统一产物父目录，每版本一个子目录，目录名即版本号；测试包另加 `-c.extraMetadata.version=<版本>`，见 D:/xxw_p/cc-heihei-dist/.keep.json）
   - **输出目录必须在 ZCode 工作区外**（工作区内会被 ZCode 索引锁死 app.asar）
   - ⚠️ **本机 node 24.19.0 跑大型 JS 负载会 JIT 崩溃**（SIGILL 132 / SIGSEGV 139，且零输出、小任务正常）——v1.3.0 曾因此「外层 exit=0 但产物缺失」。**改走 bun 直跑四步**（`build:preview-agent` / `tsc -b` / `vite build` / `electron-builder`）已实测兼容；症状特征是 node 链 exit 29/132/139 但 win-unpacked 缺 `resources/app.asar`
@@ -331,6 +341,16 @@
   4. 上传三个文件：**exe + `latest.yml` + `exe.blockmap`**（后两个在打包输出目录；latest.yml 是 electron-updater 的版本元数据，blockmap 是增量更新差分）
 
 ## 交接给下一个 AI 的建议
+
+**2026-10-09 交接要点（v1.7.4 发布后，先看这 5 条）**：
+
+1. **当前状态**：v1.7.4 已发布（tag @ `93fec48`，正式 Release 三资产）；结构债 **G1 / G2 / G9 全部收官**（豁免 0 条、分层违规 0、tsc 基线 7141 只降不升）——**可以开新功能**。
+2. **未结队列 5 条**在「已知问题 / 待办」区顶部：`/compact` 输入框路径待查（疑似缺陷）、ECONNRESET 偶发待定位、市场卸载文案待设计师、#86 / #87 / #81 待拍板、CI 旧账 0b 挂账非门禁。
+3. **铁律不变**：本地模型冻结、不参与协作会话；67% 甜点比例用户定；主管会话不亲自改文件（机制拦截）；共享工作区**禁 stash/checkout/reset**；commit 不带 Co-Authored-By；**push 须逐次请批（仅 CI 修复类有长期授权；产品改动 / tag / Release 仍须请示）**。
+4. **网络两坑**：投递一律 `curl --noproxy '*'`；git 用 `git -c http.proxy= -c https.proxy=` 绕死代理（git config 不许改）。
+5. **产物与发布**：产物统一 `D:/xxw_p/cc-heihei-dist/<版本号>/`；发版三资产缺一不可（exe / blockmap / latest.yml）；**已推 tag 不重建、已发布资产不替换**。
+
+以下为历史建议（仍有效）：
 
 1. **先读这份文档**，理解项目状态。
 2. **本地模型已冻结**——能用但不再新增功能、**不参与协作会话**；别动 llama.cpp 二进制（`desktop/src-tauri/binaries/`），除非更新版本。核心是**会话级协作**（主管/员工）。
@@ -347,6 +367,6 @@
 
 ---
 
-*交接时间：2026-09-13（v1.1.1 周期）；文档同步：2026-09-14 ~ 10-03（v1.2.0 ~ v1.7.2）*
-*当前版本：v1.7.3（未发布：tag 待用户口令；README 与 release-notes 待更新）*
-*交接状态：协作状态单一权威源（v1.3.0）+ 地基收口（v1.4.0）+ 主管通道放行（v1.4.1）+ 花名册高危修复及 Windows 瘦身（v1.5.0）+ 任务台账与原生协作（v1.6.0 / v1.6.1）+ 结构拆分与静默假死根因修复（v1.7.x）；后续版本快照与公告按用户确认节奏执行*
+*交接时间：2026-09-13（v1.1.1 周期）；文档同步：2026-09-14 ~ 10-09（v1.2.0 ~ v1.7.4）*
+*当前版本：v1.7.4（已发布 2026-10-09：tag @ 93fec48、正式 Release 三资产、preflight 四阶段全绿）*
+*交接状态：协作状态单一权威源（v1.3.0）+ 地基收口（v1.4.0）+ 主管通道放行（v1.4.1）+ 花名册高危修复及 Windows 瘦身（v1.5.0）+ 任务台账与原生协作（v1.6.0 / v1.6.1）+ 结构拆分与静默假死根因修复（v1.7.x）+ 结构债收官与上下文压缩入口（v1.7.3 / v1.7.4）；后续版本快照与公告按用户确认节奏执行*
