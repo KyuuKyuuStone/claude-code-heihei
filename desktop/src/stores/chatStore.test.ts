@@ -196,6 +196,18 @@ describe('stripGeneratedImageMetadataLines', () => {
   it('returns empty string when the text is only metadata', () => {
     expect(stripGeneratedImageMetadataLines('[Image source: /tmp/x.png]')).toBe('')
   })
+
+  it('strips metadata lines that precede the prompt body (server order since v1.7.4)', () => {
+    // v1.7.4 `c2ea30f` 起服务端把图片元数据文本排在正文**之前**（正文块恒定最后，
+    // 见 `src/server/services/conversation/attachments.ts:50-58`），而本函数是**按行**剥离、
+    // 与块序无关。本条把新顺序钉住，避免将来被改成位置相关（那时旧顺序用例仍会绿、只有这条会红）。
+    const text = [
+      '[Image source: C:\\Users\\cc-heihei\\.claude\\uploads\\sid\\a.png]',
+      'first line of the prompt',
+      'second line',
+    ].join('\n')
+    expect(stripGeneratedImageMetadataLines(text)).toBe('first line of the prompt\nsecond line')
+  })
 })
 
 describe('chatStore tool settlement', () => {
@@ -884,6 +896,50 @@ describe('chatStore history mapping', () => {
             path: '/Users/test/.claude/uploads/session-1/second-pasted-image.png',
             data: 'data:image/png;base64,SECONDPNG',
             mimeType: 'image/png',
+          },
+        ],
+      },
+    ])
+  })
+
+  it('maps the v1.7.4 server block order (refs + image metadata before the prompt body)', () => {
+    // 服务端不变量：**用户正文块永远是最后一个 text 块**（`src/server/services/conversation/attachments.ts:50-58`，
+    // c2ea30f「同源附件问题一并修」）。修复后写入的转录里，附件路径引用块与图片元数据文本都排在正文**之前**。
+    // 上面两条用例喂的是修复前的顺序——磁盘上存量转录仍是那个形状，必须继续支持，故保留；
+    // 本条补上修复后的形状，钉住「可见正文只留 body、元数据不进气泡」在两种顺序下都成立。
+    const mapped = mapHistoryMessagesToUiMessages([
+      {
+        id: 'new-order-user-1',
+        type: 'user',
+        timestamp: '2026-06-04T08:07:15.803Z',
+        content: [
+          { type: 'text', text: '@"/Users/test/project/notes.md"' },
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/jpeg', data: 'JPEGBASE64' },
+          },
+          { type: 'text', text: '[Image source: /Users/test/.claude/uploads/session-1/pasted-image.jpeg]' },
+          { type: 'text', text: '解释一下这张图片讲了什么东西' },
+        ],
+      },
+    ])
+
+    expect(mapped).toMatchObject([
+      {
+        id: 'new-order-user-1',
+        type: 'user_text',
+        content: '解释一下这张图片讲了什么东西',
+        modelContent: [
+          '@"/Users/test/project/notes.md"',
+          '[Image source: /Users/test/.claude/uploads/session-1/pasted-image.jpeg]',
+          '解释一下这张图片讲了什么东西',
+        ].join('\n'),
+        attachments: [
+          { type: 'file', name: 'notes.md', path: '/Users/test/project/notes.md' },
+          {
+            type: 'image',
+            name: 'pasted-image.jpeg',
+            path: '/Users/test/.claude/uploads/session-1/pasted-image.jpeg',
           },
         ],
       },
@@ -5960,6 +6016,36 @@ describe('chatStore history mapping', () => {
     const userMessages = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages
       .filter((message) => message.type === 'user_text')
     expect(userMessages).toHaveLength(1)
+  })
+
+  it('dedupes when the replay puts [Image source] metadata before the prompt body (server order since v1.7.4)', () => {
+    // v1.7.4 `c2ea30f` 起，回显正文的 text 块 join 顺序是 [摘要?, 引用块?, 元数据…, 正文]
+    // ⇒ 元数据排在正文**之前**。上面几条用例喂的是修复前的顺序（磁盘上存量转录仍长这样，保留）；
+    // 本条补上新顺序，确认按行剥离 + 去重对新旧两种顺序都成立。
+    const prompt = 'describe this screenshot for me'
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          messages: [
+            { id: 'live-user', type: 'user_text', content: prompt, timestamp: 1 },
+          ],
+          chatState: 'thinking',
+        }),
+      },
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'user_message_replay',
+      content: [
+        '[Image source: /Users/me/.claude/uploads/sid/a.png]',
+        prompt,
+      ].join('\n'),
+    })
+
+    const userMessages = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages
+      .filter((message) => message.type === 'user_text')
+    expect(userMessages).toHaveLength(1)
+    expect(userMessages?.[0]).toMatchObject({ content: prompt })
   })
 
   it('dedupes a prompt when data-only files replay with server-materialized upload paths', () => {
