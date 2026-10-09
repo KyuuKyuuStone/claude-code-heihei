@@ -5,6 +5,7 @@ import type { ChatState } from '../../types/chat'
 import { useMobileViewport } from '../../hooks/useMobileViewport'
 import { isDesktopRuntime } from '../../lib/desktopRuntime'
 import { formatTokensAgainstWindow } from '../../lib/formatTokenCount'
+import { ContextCompactBanner } from './ContextCompactBanner'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
 import { Spinner } from '@/components/ui/Spinner'
 
@@ -335,6 +336,16 @@ export function ContextUsageIndicator({
                 <div className="mt-[3px] font-mono text-sm font-medium text-[var(--color-text-primary)]">{maxTokens > 0 ? formatNumber(maxTokens) : '--'}</div>
               </div>
             </div>
+            {/* Same banner component and copy keys as the /context panel. The
+                popover itself is pointer-events-none, so it stays clickable only
+                while the group is hovered/focused — an invisible trigger must
+                never swallow clicks. */}
+            <div
+              data-testid="context-compact-popover-slot"
+              className="pointer-events-none mt-4 group-hover/context:pointer-events-auto group-focus-within/context:pointer-events-auto"
+            >
+              <ContextCompactBanner context={displayContext} sessionId={sessionId} t={t} />
+            </div>
             {details.length > 0 && (
               <div className="mt-[18px] flex flex-col gap-3">
                 {details.map((category) => {
@@ -421,6 +432,9 @@ export function ContextUsageIndicator({
                   <div className="text-[var(--color-text-tertiary)]">{t('contextIndicator.window')}</div>
                   <div className="mt-1 text-[var(--color-text-primary)]">{maxTokens > 0 ? formatNumber(maxTokens) : '--'}</div>
                 </div>
+              </div>
+              <div className="mt-4">
+                <ContextCompactBanner context={displayContext} sessionId={sessionId} t={t} />
               </div>
               {details.length > 0 && (
                 <div className="mt-5 space-y-3">

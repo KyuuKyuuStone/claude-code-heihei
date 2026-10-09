@@ -20,7 +20,7 @@ import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
 import { useMcpStore } from '../../stores/mcpStore'
 import { useSkillStore } from '../../stores/skillStore'
 import { useChatStore } from '../../stores/chatStore'
-import type { ChatState } from '../../types/chat'
+import { ContextCompactBanner } from './ContextCompactBanner'
 import type { McpServerRecord } from '../../types/mcp'
 import type { SkillMeta } from '../../types/skill'
 import type { SlashCommandOption } from './composerUtils'
@@ -498,7 +498,14 @@ function ContextOverview({ context, categories, t }: { context: SessionContextSn
   return (
     <div className="rounded-md border border-[var(--color-inspector-border)] bg-[var(--color-inspector-panel)] px-5 py-6">
       <div className="mb-8 flex items-start justify-between gap-4">
-        <InspectorSectionTitle>{t('slash.inspector.context.windowUsage')}</InspectorSectionTitle>
+        <div className="flex flex-wrap items-center gap-2">
+          <InspectorSectionTitle>{t('slash.inspector.context.windowUsage')}</InspectorSectionTitle>
+          {/* The panel reads the same estimateOnly channel as the hover
+              popover, so it carries the same label — one ruler, one key. */}
+          <span className="rounded-full border border-[var(--color-inspector-border)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-inspector-muted)]">
+            {t('contextIndicator.estimate')}
+          </span>
+        </div>
         <span className="rounded-sm border border-[var(--color-inspector-border)] bg-[var(--color-inspector-chip)] px-2 py-1 font-mono text-xs text-[var(--color-inspector-muted-strong)]">{context.model}</span>
       </div>
       <div className="font-mono text-[24px] font-semibold text-[var(--color-inspector-text)]">
@@ -528,99 +535,17 @@ function ContextOverview({ context, categories, t }: { context: SessionContextSn
   )
 }
 
-/**
- * Near-limit hint + one-click compaction. Threshold comes from the CLI
- * (`autoCompactThreshold`, already in the get_context_usage payload and already
- * derived from the provider-overridden window), so the hint never disagrees
- * with what the CLI will actually do.
- *
- * The action reuses the ordinary send path with `/compact` — a CLI local
- * command with `supportsNonInteractive: true` — instead of adding a protocol.
- * It is disabled while a turn is in flight so it cannot be fired twice.
- */
-function ContextCompactBanner({
-  context,
-  sessionId,
-  chatState,
-  compactCount,
-  t,
-}: {
-  context: SessionContextSnapshot
-  sessionId?: string
-  chatState: ChatState
-  compactCount: number
-  t: Translate
-}) {
-  // Baseline captured on mount: feedback only covers a compaction that happened
-  // while this panel was open, not one from an earlier visit.
-  const baselineRef = useRef(compactCount)
-  const compactedSinceOpen = compactCount > baselineRef.current
-  const threshold = context.autoCompactThreshold
-  const usedPercent = Math.max(0, context.percentage)
-  const nearLimit =
-    usedPercent >= 90 ||
-    (typeof threshold === 'number' && threshold > 0 && context.totalTokens >= threshold)
-  const isCompacting = chatState === 'compacting'
-  // Only tell them apart once the post-compact reading has landed; the clamped
-  // total equals the window exactly when it is at or over it.
-  const saturated = context.rawMaxTokens > 0 && context.totalTokens >= context.rawMaxTokens
-
-  if (!nearLimit && !isCompacting && !compactedSinceOpen) return null
-
-  const status = isCompacting
-    ? t('slash.inspector.context.compacting')
-    : compactedSinceOpen
-      ? saturated
-        ? t('slash.inspector.context.compactStillOver')
-        : t('slash.inspector.context.compacted')
-      : t('slash.inspector.context.compactHint')
-
-  return (
-    <div
-      className="rounded-md border border-[var(--color-inspector-border)] bg-[var(--color-inspector-panel)] px-5 py-4"
-      data-testid="context-compact-banner"
-    >
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold text-[var(--color-inspector-text)]">{status}</div>
-          {context.isAutoCompactEnabled === false && (
-            <div className="mt-1 text-[13px] text-[var(--color-inspector-muted)]">
-              {t('slash.inspector.context.autoCompactOff')}
-            </div>
-          )}
-        </div>
-        <button
-          type="button"
-          data-testid="context-compact-action"
-          disabled={!sessionId || chatState !== 'idle'}
-          onClick={() => {
-            if (!sessionId) return
-            useChatStore.getState().sendMessage(sessionId, '/compact')
-          }}
-          className="shrink-0 rounded-sm border border-[var(--color-inspector-border)] bg-[var(--color-inspector-chip)] px-3 py-1.5 text-xs font-semibold text-[var(--color-inspector-muted-strong)] hover:text-[var(--color-inspector-text)] disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {t('slash.inspector.context.compactAction')}
-        </button>
-      </div>
-    </div>
-  )
-}
-
 function ContextTab({
   context,
   error,
   loading,
   sessionId,
-  chatState,
-  compactCount,
   t,
 }: {
   context?: SessionContextSnapshot
   error?: string
   loading?: boolean
   sessionId?: string
-  chatState: ChatState
-  compactCount: number
   t: Translate
 }) {
   if (error && !context) return <ErrorState title={error} />
@@ -632,13 +557,7 @@ function ContextTab({
   const categories = Array.isArray(context.categories) ? context.categories : []
   return (
     <div className="space-y-6">
-      <ContextCompactBanner
-        context={context}
-        sessionId={sessionId}
-        chatState={chatState}
-        compactCount={compactCount}
-        t={t}
-      />
+      <ContextCompactBanner context={context} sessionId={sessionId} t={t} />
       <ContextOverview context={context} categories={categories} t={t} />
       <MemoryFilesBreakdown files={Array.isArray(context.memoryFiles) ? context.memoryFiles : []} t={t} />
       <CategoryBreakdown categories={categories} rawMaxTokens={context.rawMaxTokens} t={t} />
@@ -811,10 +730,11 @@ function SessionInspectorPanel({
   const [contextLoading, setContextLoading] = useState(false)
   const [contextError, setContextError] = useState<string | null>(null)
   const contextRequestKeyRef = useRef<string | null>(null)
-  // Compaction feedback: the CLI emits compact_boundary, which bumps
-  // compactCount, and the chat state flips through 'compacting'. Both ride the
-  // existing session store — no new protocol.
-  const chatState = useChatStore((s) => (sessionId ? s.sessions[sessionId]?.chatState ?? 'idle' : 'idle'))
+  const [contextRetryNonce, setContextRetryNonce] = useState(0)
+  const contextRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const contextRetriedKeyRef = useRef<string | null>(null)
+  // compact_boundary bumps compactCount; keying the context read on it is what
+  // forces a fresh get_context_usage after a compaction (#743).
   const compactCount = useChatStore((s) => (sessionId ? s.sessions[sessionId]?.compactCount ?? 0 : 0))
 
   useEffect(() => {
@@ -833,6 +753,12 @@ function SessionInspectorPanel({
     setContextLoading(false)
     setContextError(null)
     contextRequestKeyRef.current = null
+    contextRetriedKeyRef.current = null
+    setContextRetryNonce(0)
+    if (contextRetryTimerRef.current) {
+      clearTimeout(contextRetryTimerRef.current)
+      contextRetryTimerRef.current = null
+    }
     sessionsApi.getInspection(sessionId, { includeContext: false })
       .then((response) => {
         if (!cancelled) setData(assertSessionInspectionResponse(response, t))
@@ -846,8 +772,10 @@ function SessionInspectorPanel({
   }, [sessionId, t])
 
   // Keyed by compactCount so a compaction forces one fresh get_context_usage
-  // (the pre-compact reading would otherwise stay on screen, #743).
-  const contextFetchKey = sessionId ? `${sessionId}#${compactCount}` : null
+  // (the pre-compact reading would otherwise stay on screen, #743). The retry
+  // nonce is appended so a failed post-compact read can be replayed once.
+  const contextBaseKey = sessionId ? `${sessionId}#${compactCount}` : null
+  const contextFetchKey = contextBaseKey ? `${contextBaseKey}@${contextRetryNonce}` : null
   useEffect(() => {
     if (!sessionId || selectedTab !== 'context' || data === null) return
     if (contextRequestKeyRef.current === contextFetchKey) return
@@ -872,7 +800,19 @@ function SessionInspectorPanel({
         setContextError(inspected.errors?.context ?? null)
       })
       .catch((err) => {
-        if (!cancelled) setContextError(err instanceof Error ? err.message : String(err))
+        if (cancelled) return
+        setContextError(err instanceof Error ? err.message : String(err))
+        // The CLI is often still busy finishing the turn that triggered the
+        // compaction, so a failed post-compact read retries once on a short
+        // delay (same policy as the context meter) before surfacing the error.
+        if (contextBaseKey && compactCount > 0 && contextRetriedKeyRef.current !== contextBaseKey) {
+          contextRetriedKeyRef.current = contextBaseKey
+          if (contextRetryTimerRef.current) clearTimeout(contextRetryTimerRef.current)
+          contextRetryTimerRef.current = setTimeout(() => {
+            contextRetryTimerRef.current = null
+            setContextRetryNonce((nonce) => nonce + 1)
+          }, FORCED_REFRESH_RETRY_MS)
+        }
       })
       .finally(() => {
         if (!cancelled) setContextLoading(false)
@@ -880,7 +820,14 @@ function SessionInspectorPanel({
     return () => {
       cancelled = true
     }
-  }, [contextFetchKey, data, selectedTab, sessionId, t])
+  }, [contextBaseKey, contextFetchKey, compactCount, data, selectedTab, sessionId, t])
+
+  useEffect(
+    () => () => {
+      if (contextRetryTimerRef.current) clearTimeout(contextRetryTimerRef.current)
+    },
+    [],
+  )
 
   const tabs: Array<{ id: SessionInspectorTab; label: string }> = [
     { id: 'status', label: t('slash.inspector.tab.status') },
@@ -902,8 +849,6 @@ function SessionInspectorPanel({
           error={contextError ?? data.errors?.context}
           loading={contextLoading && !data.contextEstimate}
           sessionId={sessionId}
-          chatState={chatState}
-          compactCount={compactCount}
           t={t}
         />
       ) : (
@@ -1084,6 +1029,11 @@ function SkillsPanel({ cwd, onClose }: { cwd?: string; onClose: () => void }) {
     </PanelShell>
   )
 }
+
+// Mirrors the context meter's post-compact retry delay: long enough for the
+// CLI to finish the turn that triggered the compaction, short enough that the
+// panel still feels live.
+const FORCED_REFRESH_RETRY_MS = 5_000
 
 const COMMAND_GROUPS = [
   {

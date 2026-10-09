@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
 
-const { sessionsApiMock, runtimeMocks } = vi.hoisted(() => ({
+const { sessionsApiMock, runtimeMocks, chatStoreMock } = vi.hoisted(() => ({
   sessionsApiMock: {
     getInspection: vi.fn(),
   },
@@ -10,6 +10,19 @@ const { sessionsApiMock, runtimeMocks } = vi.hoisted(() => ({
     isMobileViewport: false,
     isDesktopRuntime: false,
   },
+  chatStoreMock: {
+    state: {
+      sessions: {} as Record<string, { chatState?: string; compactCount?: number }>,
+      sendMessage: vi.fn(),
+    },
+  },
+}))
+
+vi.mock('../../stores/chatStore', () => ({
+  useChatStore: Object.assign(
+    (selector: (state: unknown) => unknown) => selector(chatStoreMock.state),
+    { getState: () => chatStoreMock.state },
+  ),
 }))
 
 vi.mock('../../hooks/useMobileViewport', () => ({
@@ -380,6 +393,47 @@ describe('ContextUsageIndicator window ruler', () => {
 
   afterEach(() => {
     cleanup()
+  })
+
+  it('offers the same compaction hint and action inside the hover popover', async () => {
+    chatStoreMock.state.sessions = { 'session-1': { chatState: 'idle', compactCount: 0 } }
+    sessionsApiMock.getInspection.mockResolvedValue({
+      ...baseInspection,
+      context: {
+        ...baseInspection.context,
+        totalTokens: 190_000,
+        maxTokens: 200_000,
+        rawMaxTokens: 200_000,
+        percentage: 95,
+        autoCompactThreshold: 167_000,
+      },
+    })
+
+    render(<ContextUsageIndicator sessionId="session-1" chatState="idle" messageCount={1} />)
+
+    // Same shared component and keys as the /context panel.
+    expect(await screen.findByTestId('context-compact-action')).toBeInTheDocument()
+    expect(screen.getByText('Context is near its limit — compacting is recommended')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('context-compact-action'))
+    expect(chatStoreMock.state.sendMessage).toHaveBeenCalledWith('session-1', '/compact')
+  })
+
+  it('keeps the popover hint clickable only while the popover is revealed', async () => {
+    chatStoreMock.state.sessions = { 'session-1': { chatState: 'idle', compactCount: 0 } }
+    sessionsApiMock.getInspection.mockResolvedValue({
+      ...baseInspection,
+      context: { ...baseInspection.context, totalTokens: 190_000, percentage: 95 },
+    })
+
+    render(<ContextUsageIndicator sessionId="session-1" chatState="idle" messageCount={1} />)
+
+    await screen.findByTestId('context-compact-action')
+    // An invisible popover must not swallow clicks: the wrapper only becomes
+    // interactive while the trigger group is hovered or focused.
+    const wrapper = screen.getByTestId('context-compact-popover-slot')
+    expect(wrapper).toHaveClass('pointer-events-none')
+    expect(wrapper).toHaveClass('group-hover/context:pointer-events-auto')
   })
 
   it('reads at-or-over-window values as ≥ the window, never a bare window figure', async () => {

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom'
 
@@ -177,6 +177,45 @@ describe('LocalSlashCommandPanel context compaction', () => {
       contextOnly: true,
       timeout: 45_000,
     })
+  })
+
+  it('retries the post-compact context read once before surfacing the error', async () => {
+    vi.useFakeTimers()
+    try {
+      chatStoreMock.state.sessions = { 'session-1': { chatState: 'idle', compactCount: 1 } }
+      sessionsApiMock.getInspection
+        .mockResolvedValueOnce({ ...inspectionWithContext(nearLimitContext), context: undefined })
+        .mockRejectedValueOnce(new Error('Request timed out after 45s'))
+        .mockResolvedValueOnce(inspectionWithContext(nearLimitContext))
+
+      render(<LocalSlashCommandPanel command="context" sessionId="session-1" onClose={vi.fn()} />)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(sessionsApiMock.getInspection).toHaveBeenCalledTimes(2)
+      expect(screen.getByText('Request timed out after 45s')).toBeInTheDocument()
+
+      // The CLI is usually still busy right after a compaction; one short
+      // retry recovers the reading instead of leaving an error on screen.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000)
+      })
+      expect(sessionsApiMock.getInspection).toHaveBeenCalledTimes(3)
+      expect(screen.queryByText('Request timed out after 45s')).not.toBeInTheDocument()
+      expect(screen.getByText('Context is near its limit — compacting is recommended')).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('labels the Context page as an estimate, sharing the popover key', async () => {
+    sessionsApiMock.getInspection.mockResolvedValue(inspectionWithContext(baseContext))
+
+    render(<LocalSlashCommandPanel command="context" sessionId="session-1" onClose={vi.fn()} />)
+
+    expect(await screen.findByText('Context window usage')).toBeInTheDocument()
+    expect(screen.getByText('Estimate')).toBeInTheDocument()
   })
 
   it('distinguishes a compaction that is still over the window', async () => {
