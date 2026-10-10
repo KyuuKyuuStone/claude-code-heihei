@@ -104,6 +104,7 @@
     "desktop/src/components/chat/ToolCallGroup.tsx::error TS2307::Cannot find module '@/components/ui/IconButton' or its corresponding type declarations.": 1,
     "desktop/src/components/chat/ToolCallGroup.tsx::error TS2307::Cannot find module '@/components/ui/Modal' or its corresponding type declarations.": 1,
     "desktop/src/components/chat/ToolCallGroup.tsx::error TS7006::Parameter 'event' implicitly has an 'any' type.": 2,
+    "desktop/src/components/chat/messagelist/ShedPayloadAction.tsx::error TS2307::Cannot find module '@/components/ui/Button' or its corresponding type declarations.": 1,
     "desktop/src/components/chat/messagelist/cards.tsx::error TS2307::Cannot find module '@/components/ui/Button' or its corresponding type declarations.": 1,
     "desktop/src/components/chat/messagelist/cards.tsx::error TS2307::Cannot find module '@/components/ui/Spinner' or its corresponding type declarations.": 1,
     "desktop/src/components/composite/BrandSeal.tsx::error TS2307::Cannot find module '@/lib/cx' or its corresponding type declarations.": 1,
