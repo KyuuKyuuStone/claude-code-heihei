@@ -1483,12 +1483,8 @@ async function* queryModel(
     }
   }
 
-  // M2：请求体体积观测（每请求诊断 + 滚动分位汇总 + 接近窗口可行动告警），
-  // 在消息定形（含 deferred prepend）后记录
-  void recordRequestBodySize(
-    Buffer.byteLength(jsonStringify(messagesForAPI), "utf-8"),
-    contextWindowTokens,
-  );
+  // M2：请求体体积 + 媒体块画像观测（v1.7.5 增媒体计数，供 413 诊断判链路上限）
+  void recordRequestBodySize(messagesForAPI, contextWindowTokens);
 
   // Chrome tool-search instructions: when the delta attachment is enabled,
   // these are carried as a client-side block in mcp_instructions_delta

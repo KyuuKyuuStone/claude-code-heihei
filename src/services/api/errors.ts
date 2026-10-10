@@ -36,6 +36,7 @@ import {
   API_PDF_MAX_PAGES,
   PDF_TARGET_RAW_SIZE,
 } from '../../constants/apiLimits.js'
+import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { formatFileSize } from '../../utils/format.js'
 import { ImageResizeError } from '../../utils/imageResizer.js'
@@ -50,6 +51,7 @@ import {
   type OverageDisabledReason,
 } from '../claudeAiLimits.js'
 import { shouldProcessRateLimits } from '../rateLimitMocking.js' // Used for /mock-limits command
+import { getLastRequestBodyProfile } from './contextGovernance.js'
 import { extractConnectionErrorDetails, formatAPIError } from './errorUtils.js'
 import { StreamWatchdogTimeoutError } from './streamWatchdog.js'
 
@@ -234,10 +236,15 @@ export function getImageUnsupportedErrorMessage(): string {
     : 'This model does not support images. Double press esc to go back, switch to a vision-capable model, or continue with text.'
 }
 export function getRequestTooLargeErrorMessage(): string {
-  const limits = `max ${formatFileSize(PDF_TARGET_RAW_SIZE)}`
+  // v1.7.5 修误导：此处曾用 `PDF_TARGET_RAW_SIZE`（PDF 原始大小目标，20MB）
+  // 冒充「整个请求的上限」，把用户往「换个更小的文件」引，而真实成因
+  // （body 字节数、是否含内联媒体、是官方网关 ~32MB 还是链路上更小的中转）
+  // 一概不说。改为中性文案，**不写死错误数字**；可核对的观测（实测 body 字节、
+  // 媒体块计数、被剥离的消息）落在诊断 `request_too_large_observed` 与
+  // `api_media_blocks_stripped` 里。
   return getIsNonInteractiveSession()
-    ? `Request too large (${limits}). Try with a smaller file.`
-    : `Request too large (${limits}). Double press esc to go back and try with a smaller file.`
+    ? 'Request too large: the request body exceeds the server-side size limit. Oversized attachments are dropped on retry; if this repeats, remove the large file/image from the conversation or start a new session.'
+    : 'Request too large (the request body exceeds the server-side size limit). Double press esc to go back, then remove the large file/image or start a new session.'
 }
 export const OAUTH_ORG_NOT_ALLOWED_ERROR_MESSAGE =
   'Your account does not have access to Claude Code. Please run /login.'
@@ -782,6 +789,21 @@ export function getAssistantMessageFromError(
   // Check for request too large errors (413 status)
   // This typically happens when a large PDF + conversation context exceeds the 32MB API limit
   if (error instanceof APIError && error.status === 413) {
+    // v1.7.5 可观测：把**实测 body 字节**与本次发送的媒体块计数落诊断，用来判
+    // 「到底是官方网关 ~32MB，还是链路上更小的中转（例如 nginx 默认 1MB）」——
+    // 这是修复取值的唯一硬证据（见 HANDOVER「413 反复堆叠」一条）。
+    const profile = getLastRequestBodyProfile()
+    logForDiagnosticsNoPII('warn', 'request_too_large_observed', {
+      ...(profile
+        ? {
+            body_bytes: profile.bytes,
+            image_blocks: profile.imageBlocks,
+            document_blocks: profile.documentBlocks,
+            media_stripped_message_ids: profile.mediaStrippedMessageIds,
+          }
+        : { body_bytes: null }),
+      context_window_tokens: profile?.contextWindowTokens ?? null,
+    })
     return createAssistantAPIErrorMessage({
       content: getRequestTooLargeErrorMessage(),
       error: 'invalid_request',

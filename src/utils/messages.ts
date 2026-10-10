@@ -45,6 +45,11 @@ import {
   getPdfTooLargeErrorMessage,
   getRequestTooLargeErrorMessage,
 } from '../services/api/errors.js'
+import { beginMediaStripTracking } from '../services/api/contextGovernance.js'
+import {
+  applyMediaStripToUserMessage,
+  buildMediaStripTargets,
+} from './mediaStripRecovery.js'
 import type { AnyObject, Progress } from '../Tool.js'
 import { isConnectorTextBlock } from '../types/connectorText.js'
 import type {
@@ -2028,63 +2033,21 @@ export function normalizeMessagesForAPI(
     [getRequestTooLargeErrorMessage()]: new Set(['document', 'image']),
   }
 
-  // Walk the reordered messages to build a targeted strip map:
-  // userMessageUUID → set of block types to strip from that message.
-  const stripTargets = new Map<string, Set<string>>()
-  for (let i = 0; i < reorderedMessages.length; i++) {
-    const msg = reorderedMessages[i]!
-    if (!isSyntheticApiErrorMessage(msg)) {
-      continue
-    }
-    let blockTypesToStrip: Set<string> | undefined
-    const blockTypesFromCode =
-      typeof msg.businessErrorCode === 'string'
-        ? BUSINESS_ERROR_MEDIA_BLOCK_TYPES[msg.businessErrorCode as BusinessErrorCode]
-        : undefined
-    if (blockTypesFromCode) {
-      blockTypesToStrip = new Set(blockTypesFromCode)
-    }
-
-    // Determine which legacy text error this is.
-    const errorText =
-      Array.isArray(msg.message.content) &&
-      msg.message.content[0]?.type === 'text'
-        ? msg.message.content[0].text
-        : undefined
-    if (!blockTypesToStrip && errorText) {
-      blockTypesToStrip = errorToBlockTypes[errorText]
-    }
-    if (!blockTypesToStrip) {
-      continue
-    }
-    // Walk backward to find the nearest preceding user message. Normal pasted
-    // images are ordinary user turns, while attachment-derived media can be
-    // meta turns; both need to be stripped after a provider media rejection.
-    for (let j = i - 1; j >= 0; j--) {
-      const candidate = reorderedMessages[j]!
-      if (candidate.type === 'user') {
-        const existing = stripTargets.get(candidate.uuid)
-        if (existing) {
-          for (const t of blockTypesToStrip) {
-            existing.add(t)
-          }
-        } else {
-          stripTargets.set(candidate.uuid, new Set(blockTypesToStrip))
-        }
-        break
-      }
-      // Skip over other synthetic error messages
-      if (isSyntheticApiErrorMessage(candidate)) {
-        continue
-      }
-      // Stop if we hit an assistant message or any other non-user message.
-      break
-    }
-  }
+  // Build a targeted strip map: userMessageUUID → block types to strip from it.
+  // v1.7.5 修 413 锁死：回扫改为「越过 assistant/synthetic 错误、直到第一条
+  // **确实含可剥离媒体**的 user 消息」——细节与根因见 mediaStripRecovery.ts。
+  const stripTargets = buildMediaStripTargets(
+    reorderedMessages,
+    errorToBlockTypes,
+    isSyntheticApiErrorMessage,
+  )
 
   const result: (UserMessage | AssistantMessage)[] = []
   const assistantIndexByMessageId = new Map<string, number>()
   let indexedResultLength = 0
+  // v1.7.5：本次请求的媒体剥离从零开始记账（逐条由 mediaStripRecovery 写入，
+  // 供 413 诊断回答「命中并被剥离的是哪几条消息」）
+  beginMediaStripTracking()
   reorderedMessages
     .filter(
       (
@@ -2144,27 +2107,16 @@ export function normalizeMessagesForAPI(
           // Strip document/image blocks from the specific user message that
           // preceded a PDF/image/request-too-large error, to prevent re-sending
           // the problematic content on every subsequent API call.
+          // v1.7.5：剥离实现（含复用 compact 的 stripImagesFromMessages、
+          // 按类型删除、剥离记账与诊断）全部下移到 mediaStripRecovery.ts。
           const typesToStrip = stripTargets.get(normalizedMessage.uuid)
           if (typesToStrip) {
-            const content = normalizedMessage.message.content
-            if (Array.isArray(content)) {
-              const filtered = content.filter(
-                block => !typesToStrip.has(block.type),
-              )
-              if (filtered.length === 0) {
-                // All content blocks were stripped; skip this message entirely
-                return
-              }
-              if (filtered.length < content.length) {
-                normalizedMessage = {
-                  ...normalizedMessage,
-                  message: {
-                    ...normalizedMessage.message,
-                    content: filtered,
-                  },
-                }
-              }
-            }
+            const outcome = applyMediaStripToUserMessage(
+              normalizedMessage,
+              typesToStrip,
+            )
+            if (outcome.kind === 'drop') return
+            if (outcome.kind === 'replaced') normalizedMessage = outcome.message
           }
 
           // Server renders tool_reference expansion as <functions>...</functions>

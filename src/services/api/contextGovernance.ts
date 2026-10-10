@@ -242,6 +242,69 @@ let bodySizeRequestCount = 0
 /** 告警 episode 状态：true = 当前超阈段已告警过，回落前静默 */
 let bodySizeAlertActive = false
 
+/**
+ * v1.7.5：最近一次请求的**观测画像**——实测 body 字节 + 本次发送的媒体块计数
+ * + 当时解析出的上下文窗口 + 因媒体类错误被剥离的消息 id。供 413 诊断
+ * （`errors.ts` 的 `request_too_large_observed`）取用，用来判「到底是官方网关
+ * ~32MB，还是链路上更小的中转（例如 nginx 默认 1MB）」。**纯观测，不参与决策。**
+ */
+export type RequestBodyProfile = {
+  bytes: number
+  imageBlocks: number
+  documentBlocks: number
+  contextWindowTokens: number
+  mediaStrippedMessageIds: string[]
+}
+
+let lastRequestBodyProfile: RequestBodyProfile | null = null
+let pendingStrippedMessageIds: string[] = []
+
+/** 开始组装一次请求：清掉上一次的剥离记录（`normalizeMessagesForAPI` 入口调用） */
+export function beginMediaStripTracking(): void {
+  pendingStrippedMessageIds = []
+}
+
+/** 记下「本请求因媒体类错误剥掉了这条消息」（`mediaStripRecovery` 逐条调用） */
+export function noteMediaStrippedMessage(messageId: string): void {
+  pendingStrippedMessageIds.push(messageId)
+}
+
+/** 最近一次请求的观测画像（未发过请求时为 null） */
+export function getLastRequestBodyProfile(): RequestBodyProfile | null {
+  return lastRequestBodyProfile
+}
+
+/**
+ * 统计一次请求实际发送的媒体块数（顶层 + tool_result 内嵌），与
+ * `claude.ts:stripExcessMediaItems` 同口径。为什么需要：媒体条数有上限
+ * （`API_MAX_MEDIA_PER_REQUEST`=100）但**字节无上限** ⇒ 413 诊断必须能区分
+ * 「媒体撑爆」与「纯文本撑爆」。只读、零副作用。
+ */
+export function countMediaBlocksInMessages(
+  messages: readonly Message[],
+): { imageBlocks: number; documentBlocks: number } {
+  let imageBlocks = 0
+  let documentBlocks = 0
+  const tally = (block: unknown) => {
+    const t = (block as { type?: string } | null)?.type
+    if (t === 'image') imageBlocks++
+    else if (t === 'document') documentBlocks++
+  }
+  for (const message of messages) {
+    const content = (message as { message?: { content?: unknown } }).message
+      ?.content
+    if (!Array.isArray(content)) continue
+    for (const block of content) {
+      tally(block)
+      const inner = block as { type?: string; content?: unknown }
+      if (inner.type === 'tool_result' && Array.isArray(inner.content)) {
+        for (const nested of inner.content) tally(nested)
+      }
+    }
+  }
+  return { imageBlocks, documentBlocks }
+}
+
 /** 分位数（线性插值简化版：取排序后最近位次） */
 export function percentile(samples: number[], p: number): number | null {
   if (samples.length === 0) return null
@@ -257,15 +320,36 @@ export function percentile(samples: number[], p: number): number | null {
  * 「窗口×告警份额」时发可行动告警（接近上下文窗口 → 建议压缩或开新会话）。
  * 告警按 episode 去重：超阈只告一次，体积回落到阈值以下后才允许再次告警
  * （与其他告警模式一致：一 episode 一次）。
+ *
+ * v1.7.5：入参放宽为 `消息数组`（`claude.ts` 直接传 messagesForAPI）——字节数
+ * 与媒体块计数同处算出，并顺带留存第 413 诊断需要的请求画像；
+ * 传数字（既有测试/其他调用方）时行为与原先完全一致，媒体计数记 0。
  */
 export function recordRequestBodySize(
-  bytes: number,
+  bodyOrBytes: number | readonly Message[],
   contextWindowTokens: number,
 ): { alerted: boolean } {
+  const bytes =
+    typeof bodyOrBytes === 'number'
+      ? bodyOrBytes
+      : byteLength(jsonStringify(bodyOrBytes))
   bodySizeRequestCount++
   bodySizeSamples.push(bytes)
   if (bodySizeSamples.length > BODY_SIZE_SAMPLE_WINDOW) {
     bodySizeSamples.shift()
+  }
+
+  // v1.7.5：留存本请求画像（含媒体计数与「本请求剥离了哪些消息」），供 413 诊断取用
+  const mediaCounts =
+    typeof bodyOrBytes === 'number'
+      ? { imageBlocks: 0, documentBlocks: 0 }
+      : countMediaBlocksInMessages(bodyOrBytes)
+  lastRequestBodyProfile = {
+    bytes,
+    contextWindowTokens,
+    imageBlocks: mediaCounts.imageBlocks,
+    documentBlocks: mediaCounts.documentBlocks,
+    mediaStrippedMessageIds: pendingStrippedMessageIds,
   }
 
   logGovernanceEvent('debug', 'request_body_bytes', {
@@ -309,6 +393,8 @@ export function resetBodySizeSamplesForTests(): void {
   bodySizeSamples.length = 0
   bodySizeRequestCount = 0
   bodySizeAlertActive = false
+  lastRequestBodyProfile = null
+  pendingStrippedMessageIds = []
 }
 
 // ── L1+L2：历史消息裁剪（provider 窗口自适应硬封顶）────────────────────────
