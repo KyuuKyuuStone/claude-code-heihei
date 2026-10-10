@@ -96,14 +96,30 @@ describe('speechService 可用性与降级', () => {
     expect(spoken[0]!.voice).toBeNull()
   })
 
-  it('detectSpeechScript：假名→ja、谚文→ko、汉字→zh、其余→en（混排按 假名>谚文>汉字）', () => {
+  it('detectSpeechScript：单一书写系统各一例（日/韩/中/英）', () => {
     expect(detectSpeechScript('こんにちは')).toBe('ja')
     expect(detectSpeechScript('カタカナ')).toBe('ja')
     expect(detectSpeechScript('안녕하세요')).toBe('ko')
     expect(detectSpeechScript('中文句子')).toBe('zh')
     expect(detectSpeechScript('plain ascii')).toBe('en')
-    expect(detectSpeechScript('你好、こんにちは')).toBe('ja')
-    expect(detectSpeechScript('你好、안녕')).toBe('ko')
+  })
+
+  it('detectSpeechScript：混排按字符数取多数（多数改变结果）', () => {
+    // 汉字 3 : 假名 5 ⇒ 假名多 → ja
+    expect(detectSpeechScript('你们好，こんにちは')).toBe('ja')
+    // 假名 5 : 汉字 6 ⇒ 汉字多 → zh（「出现即选」会错判成 ja）
+    expect(detectSpeechScript('こんにちは、你好你好你好')).toBe('zh')
+    // 汉字 6 : 谚文 2 ⇒ 汉字多 → zh（「出现即选」会错判成 ko）
+    expect(detectSpeechScript('你好世界你好，안녕')).toBe('zh')
+    // 汉字 4 : 谚文 5 ⇒ 谚文多 → ko
+    expect(detectSpeechScript('你好世界，안녕하세요')).toBe('ko')
+  })
+
+  it('detectSpeechScript：平局按 ja > ko > zh', () => {
+    expect(detectSpeechScript('あ한中')).toBe('ja') // 假名 1 = 谚文 1 = 汉字 1
+    expect(detectSpeechScript('한中')).toBe('ko') // 谚文 1 = 汉字 1
+    expect(detectSpeechScript('あ한')).toBe('ja') // 假名 1 = 谚文 1
+    expect(detectSpeechScript('中ああ')).toBe('ja')
   })
 
   it('pickVoice：按书写系统挑 voice（日文不再被当成中文读）', () => {
@@ -112,8 +128,10 @@ describe('speechService 可用性与降级', () => {
     expect(pickVoice('안녕하세요', all)?.lang).toBe('ko-KR')
     expect(pickVoice('你好世界', all)?.lang).toBe('zh-CN')
     expect(pickVoice('hello world', all)?.lang).toBe('en-US')
-    // 中日混排：含假名 ⇒ 走日文。
-    expect(pickVoice('你好、こんにちは', all)?.lang).toBe('ja-JP')
+    // 混排跟多数走：假名多 → ja，汉字多 → zh。
+    expect(pickVoice('你们好，こんにちは', all)?.lang).toBe('ja-JP')
+    expect(pickVoice('こんにちは、你好你好你好', all)?.lang).toBe('zh-CN')
+    expect(pickVoice('你好世界你好，안녕', all)?.lang).toBe('zh-CN')
   })
 
   it('pickVoice：中文优先 zh-CN，其次任意 zh；目标语言缺失回退 null（用默认 voice）', () => {

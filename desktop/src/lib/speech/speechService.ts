@@ -68,24 +68,34 @@ function getUtteranceCtor(): UtteranceCtor | null {
 export type SpeechScript = 'ja' | 'ko' | 'zh' | 'en'
 
 /** 假名（平假名/片假名）。 */
-const KANA_RE = /[\u3040-\u309f\u30a0-\u30ff]/
+const KANA_RE = /[\u3040-\u309f\u30a0-\u30ff]/g
 /** 谚文（jamo + 兼容字母 + 音节）。 */
-const HANGUL_RE = /[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]/
+const HANGUL_RE = /[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]/g
 /** 汉字（扩展 A + 基本区 + 兼容表意）。 */
-const HAN_RE = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/
+const HAN_RE = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g
+
+/** 统计文本中命中某字符集的字符数（`match` 传全局正则，不看 lastIndex）。 */
+function countMatches(text: string, pattern: RegExp): number {
+  return text.match(pattern)?.length ?? 0
+}
 
 /**
- * 按书写系统分流：含假名 → ja；含谚文 → ko；否则含汉字 → zh；其余 → en。
+ * 按书写系统分流：统计假名/谚文/汉字的**字符数**，取计数最多者 ——
+ * 假名最多 → ja、谚文最多 → ko、汉字最多 → zh、三者皆 0 → en。
  *
- * 取代旧口径「CJK 一律按 zh」——假名/谚文被当成中文会让 ja/ko voice 挑成 zh，
- * 读出来是错的（日文汉字与韩文汉字词虽同源，但整句读法不同）。
- * 混排优先级：假名 > 谚文 > 汉字（`你好、こんにちは` 走 ja）。
+ * 取代旧口径「CJK 一律按 zh」；也不按「出现即选」——一条以中文为主、只夹一个假名的
+ * 消息若整条改用 ja 音色，汉字会被念成日语音读，比原问题更糟，故按多数判定。
+ * 平局按 ja > ko > zh 的次序裁决。
  */
 export function detectSpeechScript(text: string): SpeechScript {
-  if (KANA_RE.test(text)) return 'ja'
-  if (HANGUL_RE.test(text)) return 'ko'
-  if (HAN_RE.test(text)) return 'zh'
-  return 'en'
+  const kana = countMatches(text, KANA_RE)
+  const hangul = countMatches(text, HANGUL_RE)
+  const han = countMatches(text, HAN_RE)
+  const max = Math.max(kana, hangul, han)
+  if (max === 0) return 'en'
+  if (kana === max) return 'ja'
+  if (hangul === max) return 'ko'
+  return 'zh'
 }
 
 /**
