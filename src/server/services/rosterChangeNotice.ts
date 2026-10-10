@@ -6,9 +6,16 @@
  * 消息** ⇒ 认知过期，可能继续给它派活（派活会被 `resolveDispatchTarget` 以
  * `not_on_roster` 挡下，但那时已经浪费一个回合）。
  *
- * 本模块在该变化**真正发生**时，向**同项目、正在运行**的主管投递一条简短系统
- * 消息。形态镜像 `supervisorProtocolNotice`：
- * - 只投递**正在运行**的主管（不为一条通知把会话拉起来，裁决二十①）；
+ * 本模块在该变化**真正发生**时，向**同项目**的主管投递一条简短系统消息。
+ * 形态镜像 `supervisorProtocolNotice`：
+ * - **无条件投递**（过去抄自 `supervisorProtocolNotice` 的「只投递正在运行的主管，
+ *   不为一条通知把会话拉起来，裁决二十①」这道闸门已于 **2026-10-10 用户报缺陷当日裁决移除**）。
+ *   理由：① 花名册变更是**协作状态变化**（主管必须知道，否则会继续给失效目标派活），
+ *   **不是**运维性协议通知（后者丢了无所谓，协议文档才是真源）；② 投递链路
+ *   `sessionMessenger.deliver` 本就设计成**目标未加载则自动拉起**（裁决二十一④），
+ *   派活/信箱都靠它 ⇒ 为花名册变更自动拉起主管与既有语义**一致**，不是新行为。
+ *   原闸门使 `running = phase === 'running'`（仅"正在生成"那一瞬）⇒ 主管空闲/等输入时
+ *   通知就被丢弃，表现为「时灵时不灵」（用户实测：加/删员工均收不到）。
  * - 投递地址取**真实端口**（裁决二十②），不再用端口 0 的假值；
  * - 失败/跳过各记一条诊断，不静默；无论如何**不抛错**（通知是体验项，
  *   绝不能影响花名册变更本身）。
@@ -142,7 +149,7 @@ export function buildRosterChangeNotice(input: RosterChangeNoticeInput): string 
 }
 
 /**
- * 向**同项目、正在运行**的主管投递一条花名册变更通知。
+ * 向**同项目**的主管投递一条花名册变更通知（**无条件投递**，见模块头裁决）。
  *
  * 同项目：自己解析被变更会话的 workDir 并 `sameProject` 过滤（**解析不到就不通知**，
  * 见裁决②）。失败路径一律吞掉并记诊断——通知是体验项，绝不能影响花名册变更本身。
@@ -196,18 +203,9 @@ export async function notifySupervisorsOfRosterChange(
   const notice = buildRosterChangeNotice(input)
   const serverHost = `127.0.0.1:${noticeDeps.getServerPort()}`
   for (const supervisor of supervisors) {
-    // 裁决二十①：不为一条通知把未运行的主管拉起来。未运行者下次启动时，
-    // roster 摘要本就按**实时花名册**重新注入，认知不会过期。
-    if (!supervisor.running) {
-      noticeDeps.recordEvent({
-        type: 'roster_change_notice_skipped',
-        severity: 'info',
-        summary: '主管会话未运行，跳过花名册变更通知（不代为拉起）',
-        sessionId: supervisor.sessionId,
-        details: { sessionId: supervisor.sessionId, reason: 'not-running', change: input.kind },
-      })
-      continue
-    }
+    // 2026-10-10 裁决：**无条件投递**（原 `!supervisor.running` 闸门已移除）。
+    // 理由见模块头：花名册变更是协作状态变化，且 `deliver` 本就会自动拉起
+    // 未加载的主管（裁决二十一④）。
     try {
       await noticeDeps.deliver(supervisor.sessionId, notice, serverHost)
     } catch (error) {

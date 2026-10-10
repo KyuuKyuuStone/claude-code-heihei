@@ -7,7 +7,8 @@ import {
 } from '../services/rosterChangeNotice.js'
 
 // v1.7.5：员工被删除 / 取消员工身份 / 降级为普通会话 / 角色变更 ⇒ 通知同项目
-// **正在运行**的主管（否则主管的 B2 花名册摘要会过期，继续给失效目标派活）。
+// 主管（否则主管的 B2 花名册摘要会过期，继续给失效目标派活）。
+// **2026-10-10 裁决**：不再要求主管「正在运行」——一律投递，未加载者由 deliver 拉起。
 //
 // 依赖走注入缝（同 setSupervisorNoticeDeps 形态，禁 mock.module）。
 // **判红点**：删掉 servants.ts 里的 detectRosterChange 分支或本模块的投递循环，
@@ -179,8 +180,8 @@ describe('notifySupervisorsOfRosterChange', () => {
     expect(deliverMock).toHaveBeenCalledTimes(1)
   })
 
-  test('未运行的主管不被拉起，只记跳过诊断', async () => {
-    const deliverMock = mock(async () => true)
+  test('未运行的主管照常投递（2026-10-10 裁决去掉 not-running 闸门）', async () => {
+    const deliverMock = mock(async (_sessionId: string, _notice: string, _serverHost: string) => true)
     const { deps, events } = makeDeps({
       listServants: async () => [sup('sup-idle', { running: false })] as never,
       deliver: deliverMock as never,
@@ -189,10 +190,13 @@ describe('notifySupervisorsOfRosterChange', () => {
 
     await notifySupervisorsOfRosterChange({ sessionId: 'emp-1', kind: 'disabled' })
 
-    expect(deliverMock).not.toHaveBeenCalled()
+    // 花名册变更是协作状态变化 ⇒ 一律投递；未加载的主管由 deliver 自动拉起
+    expect(deliverMock).toHaveBeenCalledTimes(1)
+    expect(deliverMock.mock.calls[0][0]).toBe('sup-idle')
+    expect(deliverMock.mock.calls[0][1]).toContain('已取消员工身份')
+    // 不得再有 not-running 跳过诊断
     const skipped = events.filter((e) => e.type === 'roster_change_notice_skipped')
-    expect(skipped).toHaveLength(1)
-    expect((skipped[0]!.details as { change?: string }).change).toBe('disabled')
+    expect(skipped).toHaveLength(0)
   })
 
   test('被变更的会话自身不会被通知（它可能仍是主管）', async () => {
