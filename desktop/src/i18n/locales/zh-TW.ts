@@ -35,7 +35,11 @@ export const zh: Record<TranslationKey, string> = {
   'chat.copyPath': '複製路徑',
   'chat.shedPayload.action': '修復會話',
   'chat.shedPayload.running': '正在修復會話…',
-  'chat.shedPayload.done': '已釋放 {mb} MB，可重新傳送',
+  'chat.shedPayload.done': '已釋放 {size} {unit}，可重新傳送',
+  'chat.shedPayload.nothingToClean': '沒有可清理的內容',
+  'chat.shedPayload.unitMb': 'MB',
+  'chat.shedPayload.unitKb': 'KB',
+  'chat.shedPayload.unitB': 'B',
   'chat.shedPayload.failed': '修復失敗：{message}',
   'common.dismissNotification': '關閉通知',
 

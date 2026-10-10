@@ -35,7 +35,11 @@ export const jp: Record<TranslationKey, string> = {
   'chat.copyPath': 'パスをコピー',
   'chat.shedPayload.action': 'セッションを修復',
   'chat.shedPayload.running': 'セッションを修復中…',
-  'chat.shedPayload.done': '{mb} MB を解放しました。再送信できます',
+  'chat.shedPayload.done': '{size} {unit} を解放しました。再送信できます',
+  'chat.shedPayload.nothingToClean': 'クリーンアップできる内容がありません',
+  'chat.shedPayload.unitMb': 'MB',
+  'chat.shedPayload.unitKb': 'KB',
+  'chat.shedPayload.unitB': 'B',
   'chat.shedPayload.failed': '修復に失敗しました：{message}',
   'common.dismissNotification': '通知を閉じる',
 

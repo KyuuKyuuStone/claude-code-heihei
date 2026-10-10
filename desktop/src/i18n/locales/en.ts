@@ -33,7 +33,11 @@ export const en = {
   'chat.copyPath': 'Copy path',
   'chat.shedPayload.action': 'Repair session',
   'chat.shedPayload.running': 'Repairing session…',
-  'chat.shedPayload.done': 'Freed {mb} MB — you can resend now',
+  'chat.shedPayload.done': 'Freed {size} {unit} — you can resend now',
+  'chat.shedPayload.nothingToClean': 'Nothing to clean up',
+  'chat.shedPayload.unitMb': 'MB',
+  'chat.shedPayload.unitKb': 'KB',
+  'chat.shedPayload.unitB': 'B',
   'chat.shedPayload.failed': 'Repair failed: {message}',
   'common.dismissNotification': 'Dismiss notification',
 

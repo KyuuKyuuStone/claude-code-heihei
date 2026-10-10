@@ -35,7 +35,11 @@ export const kr: Record<TranslationKey, string> = {
   'chat.copyPath': '경로 복사',
   'chat.shedPayload.action': '세션 복구',
   'chat.shedPayload.running': '세션 복구 중…',
-  'chat.shedPayload.done': '{mb} MB를 확보했습니다. 다시 보낼 수 있습니다',
+  'chat.shedPayload.done': '{size} {unit}를 확보했습니다. 다시 보낼 수 있습니다',
+  'chat.shedPayload.nothingToClean': '정리할 내용이 없습니다',
+  'chat.shedPayload.unitMb': 'MB',
+  'chat.shedPayload.unitKb': 'KB',
+  'chat.shedPayload.unitB': 'B',
   'chat.shedPayload.failed': '복구 실패: {message}',
   'common.dismissNotification': '알림 닫기',
 

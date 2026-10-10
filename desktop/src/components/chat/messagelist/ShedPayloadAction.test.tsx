@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../../../api/client'
+import { useSettingsStore } from '../../../stores/settingsStore'
 import { ShedPayloadAction } from './ShedPayloadAction'
 
 const { shedPayload } = vi.hoisted(() => ({ shedPayload: vi.fn() }))
@@ -18,6 +19,11 @@ const okResponse = {
   backupPath: '/tmp/backup.jsonl',
 }
 
+beforeEach(() => {
+  // 钉住语言，409/成功文案断言才可复算（不依赖运行环境的默认语言）。
+  useSettingsStore.getState().setLocale('zh')
+})
+
 afterEach(() => {
   shedPayload.mockReset()
 })
@@ -30,7 +36,8 @@ describe('ShedPayloadAction', () => {
     fireEvent.click(screen.getByTestId('shed-payload-action'))
 
     await waitFor(() => {
-      expect(screen.getByText(/4\.0 MB/)).toBeTruthy()
+      // 4 MiB 释放量 ⇒ 仍走 MB 一位小数。
+      expect(document.querySelector('[data-shed-payload="done"]')?.textContent).toBe('已释放 4.0 MB，可重新发送')
     })
     expect(shedPayload).toHaveBeenCalledWith('oversized-session')
     // 成功后按钮消失 ⇒ 该条错误不再可点（用户改自己重发，不自动重试）。
@@ -59,20 +66,54 @@ describe('ShedPayloadAction', () => {
     })
   })
 
-  it('surfaces the server message when there is nothing to shed (409)', async () => {
+  it('shows the localized notice for 409 instead of the server developer string', async () => {
+    // 服务端 409 的 body.message 是 errorHandler 拼的 `NOTHING_TO_SHED: …` 开发者串。
     shedPayload.mockRejectedValue(new ApiError(409, {
       error: 'NOTHING_TO_SHED',
-      message: '该会话没有可清理的内容',
+      message: 'NOTHING_TO_SHED: no media blocks or oversized text blocks found in this session transcript',
     }))
     render(<ShedPayloadAction sessionId="oversized-session" />)
 
     fireEvent.click(screen.getByTestId('shed-payload-action'))
 
     await waitFor(() => {
-      expect(screen.getByText('该会话没有可清理的内容')).toBeTruthy()
+      expect(document.querySelector('[data-shed-payload="nothing"]')?.textContent).toBe('没有可清理的内容')
     })
+    // 服务端那句英文串一个字都不许上界面。
+    expect(document.body.textContent).not.toContain('NOTHING_TO_SHED')
     // 409 是终态：不给重试（重试必然同样结果）。
     expect(screen.queryByTestId('shed-payload-action')).toBeNull()
+  })
+
+  it('reports sub-megabyte results in KB', async () => {
+    shedPayload.mockResolvedValue({
+      ...okResponse,
+      bytesBefore: 320 * 1024,
+      bytesAfter: 0,
+    })
+    render(<ShedPayloadAction sessionId="oversized-session" />)
+
+    fireEvent.click(screen.getByTestId('shed-payload-action'))
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-shed-payload="done"]')?.textContent).toBe('已释放 320 KB，可重新发送')
+    })
+  })
+
+  it('reports a sub-kilobyte result in bytes, never 0.0 MB', async () => {
+    shedPayload.mockResolvedValue({
+      ...okResponse,
+      bytesBefore: 320,
+      bytesAfter: 0,
+    })
+    render(<ShedPayloadAction sessionId="oversized-session" />)
+
+    fireEvent.click(screen.getByTestId('shed-payload-action'))
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-shed-payload="done"]')?.textContent).toBe('已释放 320 B，可重新发送')
+    })
+    expect(document.body.textContent).not.toContain('0.0 MB')
   })
 
   it('keeps a retry available when the repair itself fails', async () => {
