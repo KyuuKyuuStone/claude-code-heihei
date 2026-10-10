@@ -4102,7 +4102,7 @@ describe('Sessions API', () => {
       }
     })
 
-    it('一次删 2 个员工会话 ⇒ mass-cleanup 兜底整批跳过：不摘除、不通知（v1.5.0 防线，待裁决）', async () => {
+    it('一次删 2 个员工会话 ⇒ 两条都摘除，且主管收到 2 条 removed（v1.7.5 放宽兜底）', async () => {
       const workDir = await fs.mkdtemp(path.join(tmpDir, 'del-notify-massguard-'))
       const a = await createSessionIn(workDir)
       const b = await createSessionIn(workDir)
@@ -4119,18 +4119,23 @@ describe('Sessions API', () => {
           body: JSON.stringify({ sessionIds: [a, b] }),
         })
         expect(res.status).toBe(200)
-        await new Promise((r) => setTimeout(r, 50))
-        expect(deliver).not.toHaveBeenCalled()
-        // 兜底生效：条目仍在（宁可留脏条目也不静默清空）
+        // 逐条通知：两条各一条，绝不能只发一条
+        await waitForDeliver(deliver, 2)
+        expect(deliver).toHaveBeenCalledTimes(2)
+        expect(deliver.mock.calls.map((c) => c[0])).toEqual(['sup-same', 'sup-same'])
+        const bodies = deliver.mock.calls.map((c) => String(c[1])).join('\n')
+        expect(bodies).toContain('后端')
+        expect(bodies).toContain('前端')
+        // 两条都已摘除（兜底不再拦截）
         const remaining = (await servantService.listServants()).map((s) => s.sessionId)
-        expect(remaining).toContain(a)
-        expect(remaining).toContain(b)
+        expect(remaining).not.toContain(a)
+        expect(remaining).not.toContain(b)
       } finally {
         setRosterChangeNoticeDeps(null)
       }
     })
 
-    it('删唯一员工会话 ⇒ 触发 remaining===0 兜底：不摘除、不通知（v1.5.0 防线，待裁决）', async () => {
+    it('删唯一员工会话 ⇒ 条目摘除 + 主管收到 removed（用户实测踩的坑，v1.7.5 钉死）', async () => {
       const workDir = await fs.mkdtemp(path.join(tmpDir, 'del-notify-last-'))
       const only = await createSessionIn(workDir)
       const resolved = (await sessionService.getSessionWorkDir(only)) as string
@@ -4140,10 +4145,12 @@ describe('Sessions API', () => {
       const deliver = stubNotice([{ sessionId: 'sup-same', workDir: resolved }], events)
       try {
         expect((await fetch(`${baseUrl}/api/sessions/${only}`, { method: 'DELETE' })).status).toBe(200)
-        await new Promise((r) => setTimeout(r, 50))
-        expect(deliver).not.toHaveBeenCalled()
-        // 兜底生效 ⇒ 花名册留下脏条目（会话已不存在）
-        expect((await servantService.listServants()).some((s) => s.sessionId === only)).toBe(true)
+        await waitForDeliver(deliver, 1)
+        expect(deliver).toHaveBeenCalledTimes(1)
+        expect(deliver.mock.calls[0][0]).toBe('sup-same')
+        expect(String(deliver.mock.calls[0][1])).toContain('已被移除')
+        // 不再留僵尸条目（原 remaining===0 兜底已按 v1.7.5 裁决删除）
+        expect((await servantService.listServants()).some((s) => s.sessionId === only)).toBe(false)
       } finally {
         setRosterChangeNoticeDeps(null)
       }

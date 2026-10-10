@@ -4,6 +4,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { servantService } from '../services/servantService.js'
 import { sessionService } from '../services/sessionService.js'
+import { setDiagnosticsLogWriterForTests } from '../../utils/diagLogs.js'
 
 /**
  * 花名册被自动清空的高危 bug 回归（v1.5.0）。
@@ -17,8 +18,11 @@ import { sessionService } from '../services/sessionService.js'
  * 现在的契约：
  * - 读路径（listServants）**永不写盘**；
  * - 摘要取不到时条目照常返回（title 退化为 id 前缀）；
- * - 移除只由明确删除事件触发（pruneForDeletedSessions），且有兜底防线：
- *   「N>0 → 0」或「一次移除多条」一律跳过。
+ * - 移除只由明确删除事件触发（pruneForDeletedSessions）。**v1.7.5 放宽**：原
+ *   「N>0 → 0」或「一次移除多条」整批跳过的兜底已删除——调用方只剩显式会话删除
+ *   （已确认真删）、摘条目后会通知在册主管（不再静默）、且「员工身份 = 会话」，
+ *   留着条目反而是让主管花名册撒谎的僵尸条目；一次摘多条仅记 warn
+ *   `servant_roster_large_cleanup`（可观测性，不影响行为）。
  */
 
 const ID_A = 'aaaa1111-1111-4111-8111-111111111111'
@@ -166,24 +170,38 @@ describe('花名册高危修复：读路径不删数据', () => {
     )
   })
 
-  it('pruneForDeletedSessions：N>0 → 0 被兜底拦截（不留空花名册）', async () => {
+  it('pruneForDeletedSessions：删唯一员工（N>0 → 0）正常摘除，不留僵尸条目', async () => {
     await writeRoster([entry(ID_A)])
-    const before = await fs.readFile(rosterPath, 'utf-8')
 
     const removed = await servantService.pruneForDeletedSessions([ID_A])
 
-    expect(removed).toEqual([])
-    expect(await fs.readFile(rosterPath, 'utf-8')).toBe(before)
+    // v1.7.5 裁决：删唯一员工是合法操作，不再被「remaining===0」拦截
+    expect(removed.map((r) => r.sessionId)).toEqual([ID_A])
+    expect((await readRoster()).servants).toEqual([])
   })
 
-  it('pruneForDeletedSessions：一次移除多条被兜底拦截', async () => {
+  it('pruneForDeletedSessions：一次移除多条照常整批摘除，并记 warn 诊断 servant_roster_large_cleanup', async () => {
     await writeRoster([entry(ID_A), entry(ID_B), entry(ID_C)])
-    const before = await fs.readFile(rosterPath, 'utf-8')
 
-    const removed = await servantService.pruneForDeletedSessions([ID_A, ID_B])
+    const events: Array<{ level: string; event: string; data: Record<string, unknown> }> = []
+    setDiagnosticsLogWriterForTests((level, event, data) => {
+      events.push({ level, event, data: { ...(data ?? {}) } })
+    })
+    try {
+      const removed = await servantService.pruneForDeletedSessions([ID_A, ID_B])
 
-    expect(removed).toEqual([])
-    expect(await fs.readFile(rosterPath, 'utf-8')).toBe(before)
+      // v1.7.5 裁决：doomed>=2 由「拦截」降级为「只记 warn」⇒ 条目照常整批摘除
+      expect(removed.map((r) => r.sessionId).sort()).toEqual([ID_A, ID_B].sort())
+      expect((await readRoster()).servants.map((s) => s.sessionId)).toEqual([ID_C])
+
+      const warn = events.find((e) => e.event === 'servant_roster_large_cleanup')
+      expect(warn?.level).toBe('warn')
+      expect(warn?.data).toMatchObject({ requested: 2, total: 3, remaining: 1 })
+      // 旧名（名不符实：不再 skip）不得再出现
+      expect(events.some((e) => e.event === 'servant_roster_mass_cleanup_skipped')).toBe(false)
+    } finally {
+      setDiagnosticsLogWriterForTests(null)
+    }
   })
 
   it('pruneForDeletedSessions：空数组或没有匹配条目时是 no-op', async () => {

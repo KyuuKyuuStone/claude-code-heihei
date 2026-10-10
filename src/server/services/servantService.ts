@@ -487,17 +487,27 @@ export class ServantService {
 
   /** 移除会话的协作身份；返回被删条目（供调用方发 servant_removed 事件） */
   /**
-   * 明确的会话删除事件钩子（v1.5.0 花名册高危修复）。
+   * 显式会话删除事件钩子（v1.5.0 花名册高危修复；v1.7.5 放宽兜底）。
    *
-   * 花名册条目的移除**只允许**从这里发生：调用方（DELETE /api/sessions/:id）
-   * 已经确认这些会话真的被删了。以前这个清理挂在 listServants（GET 路径）上，
+   * 花名册条目的移除**只允许**从这里发生：调用方（`DELETE /api/sessions/:id`、
+   * `POST /api/sessions/batch-delete`）都发生在 `sessionService.deleteSession` 成功之后，
+   * 即**已确认这些会话真的被删了**。以前这个清理挂在 listServants（GET 读路径）上，
    * 靠「摘要为 null」推断删除——一次 IO 抖动就能清空整个花名册。
    *
-   * 兜底防线：只要这次移除会导致「N>0 → 0」或「一次移除多条」，就判定可疑，
-   * 整批跳过并记 warn 诊断 servant_roster_mass_cleanup_skipped。宁可留脏条目
-   * （用户可手动移除），也不让协作身份静默消失。
+   * ⚠ **防退化契约**：本函数只允许由**显式会话删除**调用（调用方已确认真删）。
+   * 若将来引入任何**非显式 / 推断型**调用方（例如又挂回读路径靠摘要推断），
+   * 必须回到「可疑即整批拦截」语义——否则一次 IO 抖动就可能抹掉整册。
    *
-   * @returns 实际被移除的条目（被兜底拦截时为空数组）
+   * v1.5.0 的原措辞是「宁可留脏条目（用户可手动移除），也不让协作身份**静默**消失」，
+   * 防线为「N>0 → 0」或「一次移除多条」整批跳过。**v1.7.5 起该前提已消失**：
+   * ① 调用方只剩显式删除事件（无推断型）；② 摘条目后**会通知在册主管**
+   * （`api/sessions.ts` 的 `notifySupervisorsOfRosterChange`），不再静默。
+   * 且本产品里**员工身份 = 会话**——删会话必然要删身份，不存在「删会话但保留员工」
+   * 的语义 ⇒ 显式删会话时摘条目**永远**是对的，留着反而是让主管花名册撒谎的僵尸条目。
+   * 故：删「唯一员工」（remaining === 0）不再拦截；一次摘多条**照常执行**，
+   * 仅记 warn 诊断 `servant_roster_large_cleanup`（可观测性，不影响行为）。
+   *
+   * @returns 实际被移除的条目（无匹配条目时为空数组）
    */
   async pruneForDeletedSessions(sessionIds: readonly string[]): Promise<ServantEntry[]> {
     if (sessionIds.length === 0) return []
@@ -510,13 +520,14 @@ export class ServantService {
 
       const total = data.servants.length
       const remaining = total - doomed.length
-      if (doomed.length >= 2 || (total > 0 && remaining === 0)) {
-        logForDiagnosticsNoPII('warn', 'servant_roster_mass_cleanup_skipped', {
+      // v1.7.5：一次摘多条**不再拦截**，仅留可观测性告警。
+      // （原名 servant_roster_mass_cleanup_skipped 已名不副实——它不再 skip 任何东西。）
+      if (doomed.length >= 2) {
+        logForDiagnosticsNoPII('warn', 'servant_roster_large_cleanup', {
           requested: doomed.length,
           total,
           remaining,
         })
-        return []
       }
 
       data.servants = data.servants.filter((s) => !targets.has(s.sessionId))
