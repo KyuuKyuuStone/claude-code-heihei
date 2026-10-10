@@ -21,6 +21,7 @@ import {
 import { sessionService } from './sessionService.js'
 import { ApiError } from '../middleware/errorHandler.js'
 import { markSessionStartedByDelivery } from './sessionRegistry.js'
+import { getSessionPayloadLock } from './servantOversizeFailure.js'
 
 /**
  * 投递地址校验（v1.7.2 P0-a 裁决二十③）：必须是 `host:port` 且端口在 1–65535。
@@ -162,6 +163,21 @@ export class SessionMessenger {
     // 「未登记」态，exists() 会对它们返回 false，从而误拦存活会话（v1.3.0 回归）。
     if (isTombstoned(targetSessionId)) {
       throw ApiError.notFound(`Session not found: ${targetSessionId}`)
+    }
+
+    // C-A（v1.7.5）派活闸门：目标处于「请求超限锁死态」⇒ **拒绝投递**。
+    // 拦在自动拉起（startSession）之前——否则给一个必然再撞 413 的会话重新拉起、
+    // 白烧一个回合。语义取幂等拒绝（409）：先修复，再派活。
+    // 只拦投递入口：**台账状态机不动**（任务不会因此改状态，主管可重新派活/先修复）。
+    const lock = getSessionPayloadLock(targetSessionId)
+    if (lock.locked) {
+      throw new ApiError(
+        409,
+        `Session ${targetSessionId} is locked by request-oversize failures (413); ` +
+          'delivery is refused until it is repaired. Fix it first: ' +
+          `POST /api/sessions/${encodeURIComponent(targetSessionId)}/shed-payload`,
+        'PAYLOAD_LOCKED',
+      )
     }
 
     if (!conversationService.hasSession(targetSessionId)) {

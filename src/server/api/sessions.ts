@@ -24,6 +24,7 @@ import { sessionService } from '../services/sessionService.js'
 import { servantService } from '../services/servantService.js'
 import { notifySupervisorsOfRosterChange } from '../services/rosterChangeNotice.js'
 import { conversationService } from '../services/conversationService.js'
+import { shedSessionPayload } from '../services/sessionShedService.js'
 import { getSessionSnapshot } from '../services/sessionRegistry.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { closeSessionConnection, getSlashCommands, interruptSessionRuntime } from '../ws/handler.js'
@@ -278,6 +279,17 @@ export async function handleSessionsApi(
         { error: 'NOT_FOUND', message: 'Use /api/sessions/:id/chat via conversations API' },
         { status: 404 }
       )
+    }
+
+    // ── R-A（v1.7.5）：POST /api/sessions/:id/shed-payload ──────────────────
+    // 修复被 413 卡死的会话：剥离媒体块与超大文本块（内容落盘、原位留占位引用），
+    // 改前备份 transcript，并停掉进程让内存态随下次投递重载。响应字段见
+    // sessionShedService.ShedPayloadResult（前端「修复会话」按钮按此契约实现）。
+    if (subResource === 'shed-payload') {
+      if (req.method !== 'POST') {
+        throw new ApiError(405, `Method ${req.method} not allowed on shed-payload`, 'METHOD_NOT_ALLOWED')
+      }
+      return Response.json(await shedSessionPayload(sessionId))
     }
 
     // -----------------------------------------------------------------------

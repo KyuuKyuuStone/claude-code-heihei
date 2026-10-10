@@ -13,6 +13,7 @@ import { markCrashed, markStarting, registerSession } from '../services/sessionR
 import { resetSessionEventsForTests } from '../services/sessionEvents.js'
 import {
   isDeterministicOversizeError,
+  resetOversizeLockForTests,
   resetServantTurnErrorsForTests,
   setOversizeFailureDepsForTests,
 } from '../services/servantOversizeFailure.js'
@@ -54,6 +55,7 @@ beforeEach(async () => {
   })
   resetServantIncidentState()
   resetServantTurnErrorsForTests()
+  resetOversizeLockForTests()
   // C-B：升级通知走独立缝（不复用 incident 的 deliver）——这样能分辨
   // 「是否给死掉的员工会话注入了续跑」与「是否通知了主管」两件事
   escalationDeliverMock.mockClear()
@@ -97,6 +99,7 @@ afterEach(async () => {
   setOversizeFailureDepsForTests(null)
   resetServantIncidentState()
   resetServantTurnErrorsForTests()
+  resetOversizeLockForTests()
   if (originalConfigDir) process.env.CLAUDE_CONFIG_DIR = originalConfigDir
   else delete process.env.CLAUDE_CONFIG_DIR
   mock.restore()
@@ -183,10 +186,15 @@ describe('onServantTurnError', () => {
       sessionId: 'emp-1',
     })
 
-    // ④ 同一 episode 反复报错不再重复升级、也绝不注入
+    // ④ 连续第 2 次 ⇒ 触发 R-C 锁死（锁死那一次再通知主管一次），仍绝不注入
     await onServantTurnError({ sessionId: 'emp-1', streak: 2, summary: 'Request too large' })
     expect(deliverMock).not.toHaveBeenCalled()
-    expect(escalationDeliverMock).toHaveBeenCalledTimes(1)
+    expect(escalationDeliverMock).toHaveBeenCalledTimes(2)
+    expect(String(escalationDeliverMock.mock.calls[1][1])).toContain('已锁死')
+    // ⑤ 已锁死后继续报错不重复轰炸（C-B 升级去重 + 锁死只在跃迁那一次通知）
+    await onServantTurnError({ sessionId: 'emp-1', streak: 3, summary: 'Request too large' })
+    expect(escalationDeliverMock).toHaveBeenCalledTimes(2)
+    expect(deliverMock).not.toHaveBeenCalled()
   })
 
   test('反向用例：429/网络类**可恢复**错误仍照常自动续跑（C-B 不误杀）', async () => {

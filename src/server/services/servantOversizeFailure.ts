@@ -83,6 +83,98 @@ export function resetServantTurnErrorsForTests(): void {
   lastTurnErrorBySession.clear()
 }
 
+/* ── R-C（v1.7.5）：连续超限失败 → 锁死态（熔断） ─────────────────────────── */
+
+/**
+ * 连触阈值：同一会话**连续** 2 次确定性超限失败即锁死。
+ * 为什么是 2：第 1 次已经停掉自动续跑/重推（C-B）并通知了主管；若紧接着第 2 次
+ * 仍撞同一确定性失败，说明"内容没变小"这一事实不会自己好转——继续每回合重发
+ * 只是把链路和配额烧光。取 2 既避免一次抖动就熔断，又能迅速止住刷屏。
+ */
+export const OVERSIZE_LOCK_THRESHOLD = 2
+
+type LockInfo = {
+  locked: boolean
+  /** 连续（未化解的）超限失败次数 */
+  streak: number
+  lockedAt?: string
+  reason?: string
+}
+
+const oversizeStreak = new Map<string, number>()
+const lockedSessions = new Map<string, { lockedAt: string; reason: string }>()
+
+/** 测试隔离 */
+export function resetOversizeLockForTests(): void {
+  oversizeStreak.clear()
+  lockedSessions.clear()
+}
+
+/** C-A 读点：该会话是否处于「请求超限锁死态」 */
+export function isSessionPayloadLocked(sessionId: string): boolean {
+  return lockedSessions.has(sessionId)
+}
+
+/** C-A 读点：完整锁死信息（未锁死也有 streak，便于诊断） */
+export function getSessionPayloadLock(sessionId: string): LockInfo {
+  const locked = lockedSessions.get(sessionId)
+  return {
+    locked: locked !== undefined,
+    streak: oversizeStreak.get(sessionId) ?? 0,
+    ...(locked ? { lockedAt: locked.lockedAt, reason: locked.reason } : {}),
+  }
+}
+
+/** 手动/程序化置锁（修复失败等场景；正常链路走 noteOversizeFailure） */
+export function lockSessionPayload(sessionId: string, reason: string): void {
+  if (!sessionId) return
+  lockedSessions.set(sessionId, { lockedAt: new Date().toISOString(), reason })
+}
+
+/**
+ * 修复成功后的解锁：**解锁 + 连续计数归零 + 清掉上一回合错误快照**。
+ * 三者必须一起做——只解锁不清计数，下一次超限会立刻再次达到阈值；
+ * 不清快照，假死重推仍会按「上一回合超限」跳过。
+ */
+export function unlockSessionPayload(sessionId: string): void {
+  lockedSessions.delete(sessionId)
+  oversizeStreak.delete(sessionId)
+  lastTurnErrorBySession.delete(sessionId)
+}
+
+/**
+ * 记一次确定性超限失败：累加连续计数 → 达阈值则**锁死 + 通知主管**。
+ * 通知只在「本次刚刚锁死」那一次发出（重复失败不重复轰炸）。
+ * 可恢复错误**不**走这里（调用方已用 isDeterministicOversizeError 判过）。
+ */
+export async function noteOversizeFailure(
+  input: OversizeFailureInput,
+): Promise<LockInfo> {
+  if (!input.sessionId) return { locked: false, streak: 0 }
+  const streak = (oversizeStreak.get(input.sessionId) ?? 0) + 1
+  oversizeStreak.set(input.sessionId, streak)
+
+  if (streak >= OVERSIZE_LOCK_THRESHOLD && !lockedSessions.has(input.sessionId)) {
+    const reason = `连续 ${streak} 次请求体超限（413/request_too_large），已锁死该会话：恢复投递前必须先做修复（POST /api/sessions/${input.sessionId}/shed-payload）`
+    lockedSessions.set(input.sessionId, { lockedAt: new Date().toISOString(), reason })
+    deps.recordEvent({
+      type: 'session_payload_locked',
+      severity: 'error',
+      summary: `会话已被请求超限锁死（连续 ${streak} 次），已停止对其投递并通知主管：${input.sessionId}`,
+      sessionId: input.sessionId,
+      details: {
+        sessionId: input.sessionId,
+        streak,
+        source: input.source,
+        action: 'lock_and_notify_supervisor',
+      },
+    })
+    await notifySupervisorsOfOversizeFailure({ ...input, attempts: streak, locked: true })
+    return getSessionPayloadLock(input.sessionId)
+  }
+  return getSessionPayloadLock(input.sessionId)
+}
+
 /* ── 升级通道：通知同项目主管 ───────────────────────────────────────────── */
 
 export type OversizeFailureDeps = {
@@ -131,6 +223,8 @@ export type OversizeFailureInput = {
   /** 已连续失败轮数（turn_error 场景）或已重推次数（stall_repush 场景） */
   attempts?: number
   errorSummary?: string
+  /** 本次通知是否因「锁死」而发（R-C）：文案要指向修复动作 */
+  locked?: boolean
 }
 
 /** 通知文案（纯函数，便于测试） */
@@ -141,6 +235,16 @@ export function buildOversizeFailureNotice(input: OversizeFailureInput): string 
       ? `已自动重推 ${input.attempts ?? 0} 次`
       : `已连续 ${input.attempts ?? 0} 轮报错`
   const tail = (input.errorSummary ?? '').trim().slice(0, 200)
+  if (input.locked) {
+    return [
+      `【系统】${who}（会话 ID：${input.sessionId}）因**请求体超限**已连续失败 ${input.attempts ?? OVERSIZE_LOCK_THRESHOLD} 次，**已锁死**：在修复前，任何派活/消息投递都会被拒绝（不重复重发）。`,
+      '修复方式：在桌面端点「修复会话」（或调用 POST /api/sessions/<会话ID>/shed-payload），剥离媒体块与超大文本块后自动解锁。',
+      '修复会先备份 transcript，内容落盘可查，不删行、不动 uuid 链。',
+      tail ? `错误原文（截断）：${tail}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n')
+  }
   return [
     `【系统】${who}（会话 ID：${input.sessionId}）出现**请求体超限**类错误（413 / request_too_large），${attempts}。`,
     '这是确定性失败：请求内容没变，继续自动续跑/重推只会重复报错。**已停止自动续跑/重推**。',

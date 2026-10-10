@@ -242,7 +242,13 @@ export function classifyHttpFailure(result: CollabHttpResult): string {
       ? COLLAB_ERROR_CODES.ledgerUnsupported
       : COLLAB_ERROR_CODES.taskNotFound
   }
-  if (result.status === 409) return COLLAB_ERROR_CODES.notReviewable
+  if (result.status === 409) {
+    // v1.7.5 C-A：锁死闸门用同一套 409 形态，但要给员工一个**可行动**的码，
+    // 不能混进「not_reviewable」（那是验收语义）。
+    return (result.body as { error?: unknown } | null)?.error === 'PAYLOAD_LOCKED'
+      ? COLLAB_ERROR_CODES.payloadLocked
+      : COLLAB_ERROR_CODES.notReviewable
+  }
   if (result.status === 403) return COLLAB_ERROR_CODES.invalidTarget
   return COLLAB_ERROR_CODES.badRequest
 }

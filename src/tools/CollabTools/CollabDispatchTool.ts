@@ -191,6 +191,14 @@ export const CollabDispatchTool = buildTool({
       )
     }
     if (result.status === 409) {
+      // v1.7.5 C-A：409 现在有两种语义——跨项目拒绝（老）与**目标被超限锁死**（新）。
+      // 必须按结构化 error 分辨：锁死是可行动的（先修复会话），不能笼统报成跨项目。
+      if ((result.body as { error?: unknown } | null)?.error === 'PAYLOAD_LOCKED') {
+        return fail(
+          COLLAB_ERROR_CODES.payloadLocked,
+          result.message ?? '目标会话因请求超限被锁死，请先修复会话（shed-payload）再派活。',
+        )
+      }
       return fail(COLLAB_ERROR_CODES.crossProject, result.message ?? '跨项目派活被拒绝。')
     }
     if (!result.ok) {

@@ -440,6 +440,51 @@ describe('CollabDispatch（主管）', () => {
     expectNoTurnState(output)
   })
 
+  // ── v1.7.5 C-A：被锁死的目标 ⇒ 结构化、可读地拒绝（不是笼统 409 语义）──
+  it('C-A：目标被超限锁死 ⇒ error=payload_locked 且 message 指向修复', async () => {
+    const lockedMessage =
+      `Session ${WORKER} is locked by request-oversize failures (413); delivery is refused ` +
+      `until it is repaired. Fix it first: POST /api/sessions/${WORKER}/shed-payload`
+    const stub = startStub({
+      roster: [makeServant()],
+      overrides: {
+        '/api/session-messages': () =>
+          Response.json({ error: 'PAYLOAD_LOCKED', message: lockedMessage }, { status: 409 }),
+      },
+    })
+    stopServer = stub.stop
+    useEnv({ CC_HEIHEI_SESSION_ID: SUPERVISOR, CC_HEIHEI_COLLAB_ROLE: 'supervisor', CC_HEIHEI_DESKTOP_SERVER_URL: stub.baseUrl })
+
+    const { data } = await callTool(CollabDispatchTool, {
+      to: WORKER,
+      content: '继续干',
+      taskId: 'task-locked',
+    })
+    const output = data as Record<string, unknown>
+    expect(output.ok).toBe(false)
+    expect(output.error).toBe('payload_locked')
+    expect(String(output.message)).toContain('shed-payload')
+    expect(String(output.message)).toContain('locked')
+  })
+
+  it('C-A 反向：普通 409（非锁死）仍归类 cross_project（派活语义不变，不误判）', async () => {
+    const stub = startStub({
+      roster: [makeServant()],
+      overrides: {
+        '/api/session-messages': () =>
+          Response.json({ error: 'CONFLICT', message: 'some other conflict' }, { status: 409 }),
+      },
+    })
+    stopServer = stub.stop
+    useEnv({ CC_HEIHEI_SESSION_ID: SUPERVISOR, CC_HEIHEI_COLLAB_ROLE: 'supervisor', CC_HEIHEI_DESKTOP_SERVER_URL: stub.baseUrl })
+
+    const { data } = await callTool(CollabDispatchTool, { to: WORKER, content: '继续干', taskId: 'task-x' })
+    const output = data as Record<string, unknown>
+    expect(output.ok).toBe(false)
+    // 派活路径上普通 409 一直是「跨项目拒绝」语义；只要**不是** payload_locked 即可
+    expect(output.error).toBe('cross_project')
+  })
+
   it('按角色名派活（唯一匹配）时解析成 sessionId', async () => {
     const stub = startStub({ roster: [makeServant()] })
     stopServer = stub.stop

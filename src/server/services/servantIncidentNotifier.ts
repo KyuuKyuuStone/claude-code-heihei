@@ -20,6 +20,7 @@ import { ProviderService } from './providerService.js'
 import { servantService } from './servantService.js'
 import {
   isDeterministicOversizeError,
+  noteOversizeFailure,
   notifySupervisorsOfOversizeFailure,
 } from './servantOversizeFailure.js'
 
@@ -307,6 +308,20 @@ export async function onServantTurnError(input: {
         })
       })
     }
+    // R-C：每次确定性超限都计数——连续 2 次即锁死（并在锁死那一次通知主管）。
+    await noteOversizeFailure({
+      sessionId: input.sessionId,
+      source: 'turn_error',
+      ...(entry.role ? { role: entry.role } : {}),
+      ...(entry.description ? { description: entry.description } : {}),
+      attempts: input.streak,
+      errorSummary: input.summary,
+    }).catch((error) => {
+      logForDiagnosticsNoPII('warn', 'oversize_lock_threw', {
+        sessionId: input.sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    })
     return
   }
 

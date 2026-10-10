@@ -9,6 +9,7 @@ import {
 import {
   getServantLastTurnError,
   recordServantTurnError,
+  resetOversizeLockForTests,
   resetServantTurnErrorsForTests,
   setOversizeFailureDepsForTests,
 } from '../services/servantOversizeFailure.js'
@@ -111,6 +112,7 @@ beforeEach(() => {
   listServantsMock.mockImplementation(async () => [])
   // C-B：清空「上一回合错误」登记（跨用例隔离）+ 注入升级通知缝
   resetServantTurnErrorsForTests()
+  resetOversizeLockForTests()
   escalationDeliverMock.mockClear()
   escalationDeliverMock.mockImplementation(async () => true)
   setOversizeFailureDepsForTests({

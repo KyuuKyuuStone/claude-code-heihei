@@ -142,6 +142,11 @@ export const COLLAB_ERROR_CODES = {
   serverUnreachable: 'server_unreachable',
   mailboxWriteFailed: 'mailbox_write_failed',
   badRequest: 'bad_request',
+  /**
+   * v1.7.5 C-A：目标会话因**请求体超限**被锁死（服务端 409 PAYLOAD_LOCKED）。
+   * 确定性失败，重试无用——必须先修复会话（shed-payload）。
+   */
+  payloadLocked: 'payload_locked',
 } as const
 
 export const COLLAB_WARNING_CODES = {

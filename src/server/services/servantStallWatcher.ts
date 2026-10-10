@@ -26,6 +26,7 @@ import { requireSessionDelivery } from './sessionDelivery.js'
 import {
   getServantLastTurnError,
   isDeterministicOversizeError,
+  noteOversizeFailure,
   notifySupervisorsOfOversizeFailure,
 } from './servantOversizeFailure.js'
 
@@ -313,6 +314,21 @@ export class ServantStallWatcher {
         }).catch((error) => {
           console.warn(
             `[StallWatcher] Failed to escalate deterministic oversize failure: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          )
+        })
+        // R-C：连续 2 次即锁死（锁死那次由该模块负责再通知一次主管）
+        await noteOversizeFailure({
+          sessionId: servant.sessionId,
+          source: 'stall_repush',
+          ...(servant.role ? { role: servant.role } : {}),
+          ...(servant.title ? { description: servant.title } : {}),
+          attempts: current.nudges,
+          ...(lastTurnError ? { errorSummary: lastTurnError } : {}),
+        }).catch((error) => {
+          console.warn(
+            `[StallWatcher] Failed to lock oversize session: ${
               error instanceof Error ? error.message : String(error)
             }`,
           )
