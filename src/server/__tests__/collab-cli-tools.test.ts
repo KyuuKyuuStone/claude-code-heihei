@@ -578,6 +578,45 @@ describe('CollabReport（员工）', () => {
     expectNoTurnState(output)
   })
 
+  it('P2 返工：deliverables 数百条超长路径 ⇒ 内联截断（条数 50 / 单条 1KiB）+ 全文落盘', async () => {
+    const stub = startStub({ tasks: [makeTask({ status: 'in_progress' })] })
+    stopServer = stub.stop
+    useEnv({ CC_HEIHEI_DESKTOP_SERVER_URL: stub.baseUrl })
+
+    const deliverables = Array.from({ length: 300 }, (_, i) => `src/dir${i}/${'p'.repeat(3000)}.ts`)
+    const { data } = await callTool(CollabReportTool, { taskId: 'task-1', summary: '已实现', deliverables })
+    const output = data as Record<string, unknown>
+    expect(output.ok).toBe(true)
+
+    // 投递体（session-messages）与台账（report）两处都必须被截断
+    const message = stub.received.find((item) => item.path === '/api/session-messages')
+    const report = stub.received.find((item) => item.path === '/api/collab-tasks/task-1/report')
+    const inlinedReport = (report?.body as { deliverables?: string[] } | undefined)?.deliverables
+    expect(inlinedReport).toHaveLength(50)
+    expect(inlinedReport?.[0]?.length).toBeLessThanOrEqual(1024)
+    // 投递体里给出"其余未内联、见落盘文件"的可读指引
+    expect(String(message?.body?.content)).toContain('交付物过多')
+    expect(String(message?.body?.content)).toContain('完整清单见落盘文件')
+    // 投递体整体（含截断后的交付物）远小于服务端 512KiB 兜底
+    expect(Buffer.byteLength(String(message?.body?.content), 'utf8')).toBeLessThan(64 * 1024)
+    expectNoTurnState(output)
+  })
+
+  it('P2 反向：正常规模汇报逐字节不变（不误伤）', async () => {
+    const stub = startStub({ tasks: [makeTask({ status: 'in_progress' })] })
+    stopServer = stub.stop
+    useEnv({ CC_HEIHEI_DESKTOP_SERVER_URL: stub.baseUrl })
+
+    const deliverables = ['src/a.ts', 'src/b.ts']
+    const { data } = await callTool(CollabReportTool, { taskId: 'task-1', summary: '已实现', deliverables })
+    expect((data as Record<string, unknown>).ok).toBe(true)
+
+    const message = stub.received.find((item) => item.path === '/api/session-messages')
+    expect(String(message?.body?.content)).toBe('【汇报】已实现\n交付物：\n- src/a.ts\n- src/b.ts')
+    const report = stub.received.find((item) => item.path === '/api/collab-tasks/task-1/report')
+    expect((report?.body as { deliverables?: string[] }).deliverables).toEqual(deliverables)
+  })
+
   it('不带 taskId 时取唯一未结任务；多个则报错并列出候选', async () => {
     const stub = startStub({
       tasks: [

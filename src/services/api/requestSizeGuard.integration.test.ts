@@ -11,7 +11,9 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { enableConfigs } from '../../utils/config.js'
-import { queryWithModel } from './claude.js'
+import { getEmptyToolPermissionContext } from '../../Tool.js'
+import { createUserMessage } from '../../utils/messages.js'
+import { queryModelWithoutStreaming, queryWithModel } from './claude.js'
 
 const ENV_MAX = 'CC_HEIHEI_API_REQUEST_MAX_BYTES'
 const ENV_TRIGGER = 'CC_HEIHEI_API_REQUEST_TRIGGER_BYTES'
@@ -152,6 +154,73 @@ async function runQuery(options: {
   }
 }
 
+/**
+ * 与 runQuery 同款 harness，但直接投喂**真实消息数组**（可含 image 块）⇒ 走真实的
+ * wire 转换（`addCacheBreakpoints` → `userMessageToMessageParam`）与发送前预检。
+ * 这正是 B1 返工要复现的**生产形态**：不自己拼 `{role, content}`，而是让生产代码去拼。
+ */
+async function runQueryWithMessages(
+  messages: ReturnType<typeof createUserMessage>[],
+  limits: { max?: string; trigger?: string },
+): Promise<{ receivedRequests: number; sentBody: string; sentBodyBytes: number }> {
+  const requests: Array<{ body: string; path: string }> = []
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url)
+      requests.push({ body: await request.text(), path: url.pathname })
+      return new Response(sseOk('preflight-model'), {
+        headers: { 'content-type': 'text/event-stream' },
+      })
+    },
+  })
+  stopServer = () => server.stop(true) as unknown as void
+  configDir = await mkdtemp(join(tmpdir(), 'cc-heihei-preflight-media-'))
+
+  const globals = globalThis as typeof globalThis & { MACRO?: { BUILD_TIME: string } }
+  globals.MACRO = { BUILD_TIME: '' }
+  process.env.NODE_ENV = 'production'
+  process.env.CLAUDE_CONFIG_DIR = configDir
+  delete process.env.CLAUDE_CODE_USE_BEDROCK
+  delete process.env.CLAUDE_CODE_USE_VERTEX
+  delete process.env.CLAUDE_CODE_USE_FOUNDRY
+  process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${server.port}`
+  delete process.env.ANTHROPIC_AUTH_TOKEN
+  process.env.ANTHROPIC_API_KEY = 'loopback-test-key'
+  process.env.ANTHROPIC_MODEL = 'preflight-model'
+  if (limits.max === undefined) delete process.env[ENV_MAX]
+  else process.env[ENV_MAX] = limits.max
+  if (limits.trigger === undefined) delete process.env[ENV_TRIGGER]
+  else process.env[ENV_TRIGGER] = limits.trigger
+  enableConfigs()
+
+  await queryModelWithoutStreaming({
+    messages,
+    systemPrompt: [] as unknown as Parameters<typeof queryModelWithoutStreaming>[0]['systemPrompt'],
+    thinkingConfig: { type: 'disabled' },
+    tools: [] as unknown as Parameters<typeof queryModelWithoutStreaming>[0]['tools'],
+    signal: new AbortController().signal,
+    options: {
+      model: 'preflight-model',
+      querySource: 'insights',
+      agents: [],
+      isNonInteractiveSession: true,
+      hasAppendSystemPrompt: false,
+      mcpTools: [],
+      // queryModel 的日志分支会同步调它（只用于 logAPIQuery）⇒ 必须给一个实现
+      getToolPermissionContext: async () => getEmptyToolPermissionContext(),
+    } as never,
+  })
+
+  const sendRequests = requests.filter((r) => !r.path.includes('count_tokens'))
+  return {
+    receivedRequests: sendRequests.length,
+    sentBody: sendRequests[0]?.body ?? '',
+    sentBodyBytes: sendRequests[0] ? Buffer.byteLength(sendRequests[0].body, 'utf8') : 0,
+  }
+}
+
 test('回归：正常上限下照常发出 1 次请求（预检不干扰正常会话）', async () => {
   const { receivedRequests, content, stop } = await runQuery({
     promptLength: 20,
@@ -187,3 +256,38 @@ test('预检生效：超限请求**不发网络请求**，而是返回可执行�
   expect(text).toContain('exceeds the configured limit')
   expect(text).toContain('/compact')
 }, 20_000)
+
+test('端到端（B1）：含大媒体的超限请求 ⇒ **降体积后成功发出**，body 降到限内', async () => {
+  // 尺寸设计（避开另外两层，只留发送前预检能救）：
+  // · 上限 1MB ⇒ 媒体预算 = 上限/2 = 512KB（`getApiRequestMediaBytesBudget`）⇒ 400KB 图**能活过** MediaBudget 层；
+  // · M1 会把**单条** >48KB 的 user 消息截断（`contextGovernance.ts:28`）⇒ 填充文字拆成 15 条
+  //   各 45KB 的消息（每条都低于 M1 阈值），总量 675KB；
+  // · 总量 ≈ 1.08MB > 触发阈值(28/32×1MB = 917KB) ⇒ 只有预检这层能动它。
+  const MAX = 1024 * 1024
+  const TRIGGER = Math.floor((MAX * 28) / 32)
+  const messages = [
+    createUserMessage({ content: [{ type: 'text', text: '先看这个' }] as never }),
+    createUserMessage({
+      content: [
+        {
+          type: 'image',
+          source: { type: 'base64', media_type: 'image/png', data: 'A'.repeat(400_000) },
+        },
+        { type: 'text', text: '这张图说了什么？' },
+      ] as never,
+    }),
+    ...Array.from({ length: 15 }, (_, i) =>
+      createUserMessage({ content: [{ type: 'text', text: `第${i}段：${'x'.repeat(45_000)}` }] as never }),
+    ),
+  ]
+
+  const r = await runQueryWithMessages(messages, { max: String(MAX), trigger: String(TRIGGER) })
+
+  // ← 关键断言：请求**发出去了**（旧形态下这里会是 0：候选恒空 ⇒ 直接抛错）
+  expect(r.receivedRequests).toBe(1)
+  // body 真的降到了限内
+  expect(r.sentBodyBytes).toBeLessThanOrEqual(MAX)
+  // 降体积手段确实是「媒体块换成标记」——而不是别的层替它干的
+  expect(r.sentBody).toContain('[image]')
+  expect(r.sentBody).not.toContain('"type":"image"')
+}, 30_000)

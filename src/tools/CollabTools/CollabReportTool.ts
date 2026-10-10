@@ -79,6 +79,16 @@ export const COLLAB_REPORT_EXCERPT_MAX_BYTES = 4 * 1024
  */
 const DEFAULT_REPORT_INLINE_MAX_BYTES = 32 * 1024
 
+/**
+ * P2（v1.7.5 返工）：`deliverables` 的内联上限（条数 + 单条字节）。
+ *
+ * 为什么：`summary` 有落盘/截断，`deliverables` 原先**无工具侧上限**（schema 无界）
+ * ⇒ 一次带上几百条超长路径就能把投递体顶到服务端 512KiB 兜底之外，汇报白失败一次
+ * （还要等超时才暴露）。策略与 summary **同一套**：超阈值时截断内联 + 全文落盘可查。
+ */
+export const COLLAB_REPORT_DELIVERABLES_MAX_INLINE = 50
+export const COLLAB_REPORT_DELIVERABLE_MAX_BYTES = 1024
+
 /** 正整数 env 解析（跟随 cronScheduler.resolveCronTaskTimeoutMs 的写法）：非法/缺失回退默认。 */
 function resolveReportInlineMaxBytes(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env[COLLAB_REPORT_INLINE_MAX_BYTES_ENV]?.trim()
@@ -220,6 +230,22 @@ export const CollabReportTool = buildTool({
       return spillResult
     }
 
+    /**
+     * 超阈值时的内联交付物：条数 + 单条字节双上限（未超阈值**不使用**，
+     * 保持逐字节原样）。全文（含被截掉的条目）在 `fullContent()` 落盘文件里。
+     */
+    const inlineDeliverables = (): string[] =>
+      deliverables
+        .slice(0, COLLAB_REPORT_DELIVERABLES_MAX_INLINE)
+        .map((item) => truncateToUtf8Bytes(item, COLLAB_REPORT_DELIVERABLE_MAX_BYTES))
+
+    /** 交付物内联上限说明（仅在有截断时出现）。 */
+    const deliverablesTruncationNote = (): string | null => {
+      const dropped = deliverables.length - COLLAB_REPORT_DELIVERABLES_MAX_INLINE
+      if (dropped <= 0) return null
+      return `（交付物过多：另有 ${dropped} 条未内联，完整清单见落盘文件）`
+    }
+
     /** 超阈值时投递体里的截断摘要（未超阈值不调用）。 */
     const buildExcerptLines = (): string[] => {
       const spilled = ensureSpilled()
@@ -227,7 +253,11 @@ export const CollabReportTool = buildTool({
       // 无论阈值取多小都仍 < 阈值，且当阈值被 env 调小时截断真的生效（不会退化成全文）。
       const excerptBytes = Math.min(COLLAB_REPORT_EXCERPT_MAX_BYTES, Math.floor(inlineMaxBytes / 2))
       const lines = [`【汇报】${truncateToUtf8Bytes(summary, excerptBytes)}`]
-      if (deliverables.length > 0) lines.push('交付物：', ...deliverables.map((item) => `- ${item}`))
+      if (deliverables.length > 0) {
+        lines.push('交付物：', ...inlineDeliverables().map((item) => `- ${item}`))
+        const note = deliverablesTruncationNote()
+        if (note) lines.push(note)
+      }
       if (spilled.ok && spilled.file) {
         lines.push(
           `（正文过长：${Buffer.byteLength(summary, 'utf8')} 字节已超过内联上限 ${inlineMaxBytes} 字节，上面为截断摘要）`,
@@ -245,9 +275,19 @@ export const CollabReportTool = buildTool({
      * 由工具侧无条件处理，员工无需自知写没写长汇报。
      */
     const buildContent = (): string => {
-      if (Buffer.byteLength(summary, 'utf8') <= inlineMaxBytes) return fullContent()
+      // 阈值按**整条投递体**算（含交付物段），而不是只看 summary——否则一堆
+      // 交付物能把总量顶穿上限而此处仍判"没超"（P2 的成因）。
+      if (Buffer.byteLength(fullContent(), 'utf8') <= inlineMaxBytes) return fullContent()
       return buildExcerptLines().join('\n')
     }
+
+    /** 是否处于「超内联阈值」形态（台账/信箱载荷的交付物按同一判断收口）。 */
+    const isOverInlineLimit = (): boolean =>
+      Buffer.byteLength(fullContent(), 'utf8') > inlineMaxBytes
+
+    /** 台账/信箱载荷用的交付物：超阈值才截断（未超阈值逐字节原样）。 */
+    const payloadDeliverables = (): string[] =>
+      isOverInlineLimit() ? inlineDeliverables() : deliverables
 
     /**
      * 台账里的 summary：**同一套阈值与截断**（v1.7.5 补齐）。
@@ -277,7 +317,7 @@ export const CollabReportTool = buildTool({
               report: {
                 taskId,
                 summary: buildLedgerSummary(),
-                ...(deliverables.length > 0 ? { deliverables } : {}),
+                ...(deliverables.length > 0 ? { deliverables: payloadDeliverables() } : {}),
               },
             }
           : {}),
@@ -401,7 +441,7 @@ export const CollabReportTool = buildTool({
     const reportBody = {
       // 超阈值 ⇒ 截断摘要 + 落盘路径（同一套阈值/同一个文件，见 buildLedgerSummary）
       summary: buildLedgerSummary(),
-      ...(deliverables.length > 0 ? { deliverables } : {}),
+      ...(deliverables.length > 0 ? { deliverables: payloadDeliverables() } : {}),
       callerSessionId: runtime.sessionId,
     }
     const postReport = () => requestWithReconnect(server, 'POST', reportPath, reportBody, deps)

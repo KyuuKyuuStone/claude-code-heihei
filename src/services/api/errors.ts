@@ -258,7 +258,11 @@ export function getRequestTooLargePreflightErrorMessage(
   measuredBytes: number,
   limitBytes: number,
 ): string {
-  const detail = `Request blocked before sending: the request body is ${formatFileSize(measuredBytes)} and exceeds the configured limit of ${formatFileSize(limitBytes)} (oversized attachments were already dropped).`
+  // B1 返工：原话 "oversized attachments were already dropped" 在**纯文本**超限时是
+  // 失实的（预检层没有任何媒体可剥，也没剥）。改为不预设前提的表述：含媒体时预检
+  // 确实已先剥（`requestSizeGuard` 的 wire 形态降体积），纯文本时如实说"剩下的都是
+  // 文本/system/tools 开销"。
+  const detail = `Request blocked before sending: the request body is ${formatFileSize(measuredBytes)} and exceeds the configured limit of ${formatFileSize(limitBytes)} (any media/attachments were already stripped; what remains is text, system prompt and tool definitions).`
   const actions = getIsNonInteractiveSession()
     ? 'Fix: start a new session (recommended), run /compact to shrink the context, or remove the large file/image from the conversation.'
     : 'Fix: start a new session (esc esc to go back, then /clear), run /compact to shrink the context, or remove the large file/image from the conversation. If the link in front of the API has a smaller body limit (e.g. a proxy), set CC_HEIHEI_API_REQUEST_MAX_BYTES to match it.'

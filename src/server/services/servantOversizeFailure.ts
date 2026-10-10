@@ -48,6 +48,11 @@ const OVERSIZE_ERROR_MARKERS = [
   // 我们自己的协作通道拒绝文案：`Field "summary" is too large: 600000 bytes (UTF-8)
   // exceeds the 524288 byte limit.`（servants.assertPayloadWithinLimit）——同样确定性，
   // 再发必败（内容没变小）。
+  // J1（返工，仅记录）：该标记偏宽——任何 `is too large:` 的文案都会被判成
+  // 「确定性超限」。当前唯一写入面是**我们自己的**协作通道拒绝文案
+  // （`messageSizeLimits.ts` 的 `Field "…" is too large: N bytes (UTF-8) exceeds …`，
+  // 见上方注释），输入面窄、误判风险可控；若将来有别的来源也吐出这句，需要收紧成
+  // 带字段名的完整前缀匹配。本次不动（避免改动判定口径引入新风险）。
   'is too large:',
 ] as const
 
@@ -76,6 +81,13 @@ export function getServantLastTurnError(sessionId: string): string | undefined {
 /** 成功轮/清理时调用：该会话不再有「未化解的失败」 */
 export function clearServantTurnError(sessionId: string): void {
   lastTurnErrorBySession.delete(sessionId)
+  // R-C 返工（P1）：**成功轮也必须清连续超限计数**。此前只在累加/解锁时清，
+  // 于是「连续 2 次」实际退化成「累计 2 次」——第 1 次超限自愈后隔几天偶发
+  // 第 2 次就会把健康会话直接锁死，违背本模块「连续」「避免一次抖动就熔断」的本意。
+  // 调用点：`conversationService.observeServantTurnResult` 成功分支（与
+  // `servantTurnErrorStreak` 同一处清理）。**只清计数、不解锁**：锁死态是显式
+  // 修复动作的对偶（修复路径 `unlockSessionPayload`），不能被一轮成功偷偷解除。
+  oversizeStreak.delete(sessionId)
 }
 
 /** 测试隔离 */

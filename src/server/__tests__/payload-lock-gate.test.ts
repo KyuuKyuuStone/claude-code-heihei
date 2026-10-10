@@ -5,6 +5,7 @@ import {
   setServantIncidentDeps,
 } from '../services/servantIncidentNotifier.js'
 import {
+  clearServantTurnError,
   getSessionPayloadLock,
   isSessionPayloadLocked,
   OVERSIZE_LOCK_THRESHOLD,
@@ -108,6 +109,31 @@ describe('R-C：连续超限 ⇒ 锁死', () => {
     expect(getSessionPayloadLock(EMP).streak).toBe(0)
     expect(deliverMock).toHaveBeenCalled()
     expect(escalationDeliverMock).not.toHaveBeenCalled()
+  })
+
+  test('P1 返工：超限 1 次 → 成功 1 轮 → 再超限 1 次 ⇒ **不得锁死**（连续 ≠ 累计）', async () => {
+    await onServantTurnError({ sessionId: EMP, streak: 1, summary: OVERSIZE })
+    expect(getSessionPayloadLock(EMP).streak).toBe(1)
+
+    // 成功轮：`conversationService.observeServantTurnResult` 的成功分支就是调这个
+    clearServantTurnError(EMP)
+    expect(getSessionPayloadLock(EMP).streak).toBe(0)
+
+    // 之后再偶发一次超限：应从 1 重新数起，而不是接着 2 ⇒ 不锁死
+    await onServantTurnError({ sessionId: EMP, streak: 1, summary: OVERSIZE })
+    expect(getSessionPayloadLock(EMP).streak).toBe(1)
+    expect(isSessionPayloadLocked(EMP)).toBe(false)
+  })
+
+  test('P1 对照：成功轮**不解锁**（锁死是显式修复的对偶）', async () => {
+    await onServantTurnError({ sessionId: EMP, streak: 1, summary: OVERSIZE })
+    await onServantTurnError({ sessionId: EMP, streak: 2, summary: OVERSIZE })
+    expect(isSessionPayloadLocked(EMP)).toBe(true)
+
+    clearServantTurnError(EMP)
+    expect(getSessionPayloadLock(EMP).streak).toBe(0)
+    // 仍然锁死：只能靠修复（unlockSessionPayload）解除
+    expect(isSessionPayloadLocked(EMP)).toBe(true)
   })
 
   test('修复后解锁 + 连续计数归零', async () => {

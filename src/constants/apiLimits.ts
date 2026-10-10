@@ -121,8 +121,9 @@ export const API_REQUEST_TRIGGER_BYTES = 28 * 1024 * 1024 // 28 MB
  *
  * 由来：`API_MAX_MEDIA_PER_REQUEST`(100) 只封**条数**不封**字节** ⇒ 100 张
  * 5MB 图片（≈33MB base64）可以撑爆 32MB 请求体而完全绕过条数上限。取上限的
- * 一半作预算，给 system/tools/历史文本留空间；超出即按**由大到小**丢弃媒体
- * （见 `mediaBudget.ts`）。
+ * 一半作预算，给 system/tools/历史文本留空间；超出即按**最旧优先**丢弃媒体
+ * （实现口径见 `mediaBudget.stripExcessMediaItems`：按消息/块出现顺序＝时间顺序依次
+ * 丢弃；发送前预检那层的**由大到小**只是"先剥哪条"的候选排序，与此不同）。
  */
 export const API_REQUEST_MEDIA_BYTES_BUDGET = Math.floor(
   API_REQUEST_MAX_BYTES / 2,

@@ -25,6 +25,7 @@
  * 是既有一等路径（裁决二十一④：deliver 本就会自动拉起未加载会话）。
  */
 
+import * as crypto from 'node:crypto'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import { ApiError } from '../middleware/errorHandler.js'
@@ -193,9 +194,18 @@ function shedContentBlocks(
   return changed
 }
 
-/** 备用文件名：`.jsonl` 之外的后缀，确保不被会话文件扫描器当成会话 read */
-function backupPathFor(filePath: string, stamp: number): string {
-  return `${filePath}.shed-${stamp}.bak`
+/**
+ * 备用文件名：`.jsonl` 之外的后缀，确保不被会话文件扫描器当成会话 read。
+ *
+ * J3a（返工）：除时间戳外再加一段随机 token —— 同一毫秒内并发两次修复（两台
+ * 桌面端/两个请求）时，只有时间戳会让 backupPath 与 spillPath 相撞，后写覆盖
+ * 前写、先写那份的占位引用可能悬空。token 只用于唯一性，不参与诊断口径。
+ */
+function uniqueToken(): string {
+  return crypto.randomBytes(4).toString('hex')
+}
+function backupPathFor(filePath: string, stamp: number, token: string): string {
+  return `${filePath}.shed-${stamp}-${token}.bak`
 }
 
 /**
@@ -220,7 +230,8 @@ export async function shedSessionPayload(sessionId: string): Promise<ShedPayload
   const spillDir = workDir
     ? path.join(workDir, SHED_SPILL_DIR)
     : path.join(path.dirname(found.filePath), 'shed')
-  const spillPath = path.join(spillDir, `${sessionId}-${stamp}.jsonl`)
+  const token = uniqueToken()
+  const spillPath = path.join(spillDir, `${sessionId}-${stamp}-${token}.jsonl`)
   const spillLabel = workDir ? `${SHED_SPILL_DIR}/${path.basename(spillPath)}` : spillPath
 
   const spillRecords: Array<ShedBlockRecord & { ref: string }> = []
@@ -299,7 +310,7 @@ export async function shedSessionPayload(sessionId: string): Promise<ShedPayload
   }
 
   // ── 备份（失败即中止，绝不带风险改盘）──────────────────────────────────
-  const backupPath = backupPathFor(found.filePath, stamp)
+  const backupPath = backupPathFor(found.filePath, stamp, token)
   try {
     await fs.copyFile(found.filePath, backupPath)
   } catch (error) {

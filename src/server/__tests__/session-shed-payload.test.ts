@@ -208,6 +208,21 @@ describe('POST /api/sessions/:id/shed-payload（R-A）', () => {
     expect((await shedApi(sessionId, 'GET')).status).toBe(405)
   })
 
+  test('J3a：备份/落盘名带唯一 token（同会话同毫秒重试也不相撞）', async () => {
+    // 为什么要 token：路径唯一性此前只靠毫秒时间戳 ⇒ 同会话同毫秒的两次写入
+    // （第一次在备份/落盘后失败、用户立刻重试）会指向同一路径、后写覆盖前写。
+    // 这里没去造"两次同会话修复"的场景（第二次会因已剥离而 409，撞不出来），
+    // 而是直接断言**唯一性机制在场**：两个路径都必须带一段随机 token。
+    const res = await shedApi(sessionId)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, string>
+    expect(body.backupPath).toMatch(/\.shed-\d+-[0-9a-f]{8}\.bak$/)
+    expect(body.spillPath).toMatch(/-\d+-[0-9a-f]{8}\.jsonl$/)
+    // 占位引用里的落盘文件必须与返回的 spillPath 同名（引用可查）
+    const transcript = await fs.readFile(transcriptPath, 'utf8')
+    expect(transcript).toContain(path.basename(body.spillPath))
+  })
+
   test('修复成功后自动解锁（R-C 联动）', async () => {
     lockSessionPayload(sessionId, 'test-lock')
     expect(isSessionPayloadLocked(sessionId)).toBe(true)
