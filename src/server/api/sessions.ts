@@ -22,6 +22,7 @@
 import * as path from 'node:path'
 import { sessionService } from '../services/sessionService.js'
 import { servantService } from '../services/servantService.js'
+import { notifySupervisorsOfRosterChange } from '../services/rosterChangeNotice.js'
 import { conversationService } from '../services/conversationService.js'
 import { getSessionSnapshot } from '../services/sessionRegistry.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
@@ -574,6 +575,9 @@ function isSessionNotFoundError(error: unknown): error is Error {
 
 async function deleteSession(sessionId: string): Promise<Response> {
   conversationService.markSessionDeleted(sessionId)
+  // v1.7.5：**删除前**快照 workDir——删除后 getSessionWorkDir 解析不到，
+  // 通知会被 rosterChangeNotice 的 no-workdir 保守闸门静默跳过（ServantEntry 不带 workDir）。
+  const workDir = await sessionService.getSessionWorkDir(sessionId).catch(() => null)
   try {
     await sessionService.deleteSession(sessionId)
   } catch (error) {
@@ -583,7 +587,19 @@ async function deleteSession(sessionId: string): Promise<Response> {
   closeSessionConnection(sessionId, 'session deleted')
   // v1.5.0 花名册高危修复：只有明确的会话删除才清理对应协作身份（含 N→0 兜底，
   // 见 servantService.pruneForDeletedSessions）。读路径不再做这件事。
-  await servantService.pruneForDeletedSessions([sessionId])
+  const removed = await servantService.pruneForDeletedSessions([sessionId])
+  // v1.7.5：会话被删＝花名册实际摘掉了条目 ⇒ 必须让同项目在册主管知情，
+  // 否则主管的 B2 摘要不更新、可能继续给已删除的会话派活（用户实测缺陷）。
+  // 只对**真的被摘掉**的条目发（prune 返回 [] ⇒ 非员工/被兜底拦截 ⇒ 不发）。
+  for (const entry of removed) {
+    void notifySupervisorsOfRosterChange({
+      sessionId: entry.sessionId,
+      kind: 'removed',
+      role: entry.role,
+      description: entry.description,
+      workDir, // 删除前快照（见上）
+    })
+  }
   recentProjectsCache = null
   return Response.json({ ok: true })
 }
@@ -598,6 +614,13 @@ async function batchDeleteSessions(req: Request): Promise<Response> {
 
   const sessionIds = normalizeSessionIds(body.sessionIds)
   conversationService.markSessionsDeleted(sessionIds)
+  // v1.7.5：删除前逐个快照 workDir（删除后解析不到 ⇒ 通知会被 no-workdir 跳过）
+  const workDirs = new Map<string, string | null>()
+  await Promise.all(
+    sessionIds.map(async (id) => {
+      workDirs.set(id, await sessionService.getSessionWorkDir(id).catch(() => null))
+    }),
+  )
   const result = await sessionService.deleteSessions(sessionIds)
 
   if (result.failures.length > 0) {
@@ -610,7 +633,17 @@ async function batchDeleteSessions(req: Request): Promise<Response> {
   if (result.successes.length > 0) {
     recentProjectsCache = null
     // 同 deleteSession：只清真正删成功的会话（批量 ≥2 条会被兜底防线拦截并记 warn）
-    await servantService.pruneForDeletedSessions(result.successes)
+    const removed = await servantService.pruneForDeletedSessions(result.successes)
+    // v1.7.5：逐条通知（同 deleteSession）；被兜底防线拦截时 removed=[] ⇒ 静默不发
+    for (const entry of removed) {
+      void notifySupervisorsOfRosterChange({
+        sessionId: entry.sessionId,
+        kind: 'removed',
+        role: entry.role,
+        description: entry.description,
+        workDir: workDirs.get(entry.sessionId) ?? null, // 删除前快照
+      })
+    }
   }
 
   return Response.json({

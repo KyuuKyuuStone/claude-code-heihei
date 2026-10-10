@@ -2,7 +2,7 @@
  * Unit tests for SessionService and Sessions API
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import * as path from 'node:path'
@@ -25,6 +25,8 @@ import {
   prepareSessionWorkspace,
 } from '../services/repositoryLaunchService.js'
 import { conversationService } from '../services/conversationService.js'
+import { servantService } from '../services/servantService.js'
+import { setRosterChangeNoticeDeps } from '../services/rosterChangeNotice.js'
 import { clearCommandsCache } from '../../commands.js'
 import { parseJSONL } from '../../utils/json.js'
 import { createSessionBranch } from '../../utils/sessionBranching.js'
@@ -3930,6 +3932,222 @@ describe('Sessions API', () => {
       conversationService.unmarkSessionDeleted(successSessionId)
       conversationService.unmarkSessionDeleted(failedSessionId)
     }
+  })
+
+  // ────────────────────────────────────────────────────────────────────────
+  // v1.7.5：删除会话 ⇒ 花名册变更通知主管（修复「删了新会话主管不知情」）
+  // ────────────────────────────────────────────────────────────────────────
+  describe('删除会话 ⇒ 通知在册主管（v1.7.5）', () => {
+    async function createSessionIn(workDir: string): Promise<string> {
+      const res = await fetch(`${baseUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workDir }),
+      })
+      expect(res.status).toBe(201)
+      return ((await res.json()) as { sessionId: string }).sessionId
+    }
+
+    async function waitForDeliver(m: ReturnType<typeof mock>, n: number): Promise<void> {
+      for (let i = 0; i < 60 && m.mock.calls.length < n; i++) {
+        await new Promise((r) => setTimeout(r, 10))
+      }
+    }
+
+    /** 装缝：listServants 固定返回给定的「主管 + 会话实时信息」视图。 */
+    function stubNotice(
+      supervisors: Array<{ sessionId: string; workDir: string }>,
+      events: Array<Record<string, unknown>>,
+    ) {
+      const deliver = mock(async (_t: string, _c: string, _h: string) => true)
+      setRosterChangeNoticeDeps({
+        listServants: (async () =>
+          supervisors.map((s) => ({
+            sessionId: s.sessionId,
+            enabled: true,
+            supervisor: true,
+            running: true,
+            workDir: s.workDir,
+            title: s.sessionId,
+            updatedAt: 0,
+          }))) as never,
+        // 关键：**删除后**解析必然失败。实现若依赖它（而非删除前快照），
+        // 会走 no-workdir 保守闸门 ⇒ 本组用例判红。
+        getSessionWorkDir: (async () => {
+          throw new Error('会话已删除：不应在删除后解析 workDir')
+        }) as never,
+        deliver: deliver as never,
+        getServerPort: () => 53100,
+        recordEvent: (input) => {
+          events.push(input as unknown as Record<string, unknown>)
+        },
+      })
+      return deliver
+    }
+
+    it('删员工会话 ⇒ 同项目在册主管收到 removed（workDir 用删除前快照，不被 no-workdir 跳过）', async () => {
+      const workDir = await fs.mkdtemp(path.join(tmpDir, 'del-notify-'))
+      const target = await createSessionIn(workDir)
+      // 花名册留第二个条目：避开 v1.5.0 mass-cleanup 兜底（doomed=1 且 remaining=0 会被跳过）
+      const bystander = await createSessionIn(workDir)
+      const resolved = (await sessionService.getSessionWorkDir(target)) as string
+      expect(typeof resolved).toBe('string')
+      await servantService.setServant(target, { enabled: true, role: '后端', description: '写服务端' })
+      await servantService.setServant(bystander, { enabled: true, role: '前端' })
+
+      const events: Array<Record<string, unknown>> = []
+      const deliver = stubNotice(
+        [
+          { sessionId: 'sup-same', workDir: resolved },
+          { sessionId: 'sup-other', workDir: path.join(tmpDir, 'elsewhere-project') },
+        ],
+        events,
+      )
+      try {
+        const res = await fetch(`${baseUrl}/api/sessions/${target}`, { method: 'DELETE' })
+        expect(res.status).toBe(200)
+        await waitForDeliver(deliver, 1)
+
+        // ① 通知到了「同项目」在册主管，且仅此一人（跨项目主管不通知 ⇒ 隔离）
+        expect(deliver).toHaveBeenCalledTimes(1)
+        expect(deliver.mock.calls[0][0]).toBe('sup-same')
+        expect(String(deliver.mock.calls[0][1])).toContain('已被移除')
+        expect(String(deliver.mock.calls[0][1])).toContain('后端')
+
+        // ② workDir 用的是删除前快照：没有被 no-workdir 闸门拦下
+        expect(events.some((e) => e.type === 'roster_change_notice_skipped')).toBe(false)
+
+        // ③ 花名册真的摘掉了该条目
+        expect((await servantService.listServants()).some((s) => s.sessionId === target)).toBe(false)
+
+        // ④ 幂等：会话已删，再删一次不会二次通知
+        const again = await fetch(`${baseUrl}/api/sessions/${target}`, { method: 'DELETE' })
+        expect(again.status).not.toBe(200)
+        await new Promise((r) => setTimeout(r, 50))
+        expect(deliver).toHaveBeenCalledTimes(1)
+      } finally {
+        setRosterChangeNoticeDeps(null)
+      }
+    })
+
+    it('删非员工会话 ⇒ 不通知（prune 摘不到 ⇒ 静默）', async () => {
+      const workDir = await fs.mkdtemp(path.join(tmpDir, 'del-notify-none-'))
+      const bystander = await createSessionIn(workDir)
+      await servantService.setServant(bystander, { enabled: true, role: '前端' })
+      // 目标会话不登记为员工
+      const target = await createSessionIn(workDir)
+
+      const events: Array<Record<string, unknown>> = []
+      const deliver = stubNotice(
+        [{ sessionId: 'sup-same', workDir: (await sessionService.getSessionWorkDir(target)) as string }],
+        events,
+      )
+      try {
+        expect((await fetch(`${baseUrl}/api/sessions/${target}`, { method: 'DELETE' })).status).toBe(200)
+        await new Promise((r) => setTimeout(r, 50))
+        expect(deliver).not.toHaveBeenCalled()
+      } finally {
+        setRosterChangeNoticeDeps(null)
+      }
+    })
+
+    it('仅跨项目主管 ⇒ 不通知（项目隔离），但花名册仍被摘除', async () => {
+      const workDir = await fs.mkdtemp(path.join(tmpDir, 'del-notify-iso-'))
+      const target = await createSessionIn(workDir)
+      const bystander = await createSessionIn(workDir)
+      await servantService.setServant(target, { enabled: true, role: '后端' })
+      await servantService.setServant(bystander, { enabled: true, role: '前端' })
+
+      const events: Array<Record<string, unknown>> = []
+      const deliver = stubNotice(
+        [{ sessionId: 'sup-other', workDir: path.join(tmpDir, 'another-project') }],
+        events,
+      )
+      try {
+        expect((await fetch(`${baseUrl}/api/sessions/${target}`, { method: 'DELETE' })).status).toBe(200)
+        await new Promise((r) => setTimeout(r, 50))
+        expect(deliver).not.toHaveBeenCalled()
+        expect((await servantService.listServants()).some((s) => s.sessionId === target)).toBe(false)
+      } finally {
+        setRosterChangeNoticeDeps(null)
+      }
+    })
+
+    it('批量删除：逐条通知（1 员工 + 1 非员工 ⇒ 只对员工那条通知一次）', async () => {
+      const workDir = await fs.mkdtemp(path.join(tmpDir, 'del-notify-batch-'))
+      const emp = await createSessionIn(workDir)
+      const plain = await createSessionIn(workDir)
+      const keep = await createSessionIn(workDir)
+      const resolved = (await sessionService.getSessionWorkDir(emp)) as string
+      await servantService.setServant(emp, { enabled: true, role: '后端' })
+      await servantService.setServant(keep, { enabled: true, role: '测试' })
+
+      const events: Array<Record<string, unknown>> = []
+      const deliver = stubNotice([{ sessionId: 'sup-same', workDir: resolved }], events)
+      try {
+        // doomed=1（只有 emp 在花名册）+ remaining>0 ⇒ 不被 mass-cleanup 兜底拦截 ⇒ 走通知
+        const res = await fetch(`${baseUrl}/api/sessions/batch-delete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionIds: [emp, plain] }),
+        })
+        expect(res.status).toBe(200)
+        await waitForDeliver(deliver, 1)
+        expect(deliver).toHaveBeenCalledTimes(1)
+        expect(deliver.mock.calls[0][0]).toBe('sup-same')
+        expect(String(deliver.mock.calls[0][1])).toContain('后端')
+        expect(events.some((e) => e.type === 'roster_change_notice_skipped')).toBe(false)
+      } finally {
+        setRosterChangeNoticeDeps(null)
+      }
+    })
+
+    it('一次删 2 个员工会话 ⇒ mass-cleanup 兜底整批跳过：不摘除、不通知（v1.5.0 防线，待裁决）', async () => {
+      const workDir = await fs.mkdtemp(path.join(tmpDir, 'del-notify-massguard-'))
+      const a = await createSessionIn(workDir)
+      const b = await createSessionIn(workDir)
+      const resolved = (await sessionService.getSessionWorkDir(a)) as string
+      await servantService.setServant(a, { enabled: true, role: '后端' })
+      await servantService.setServant(b, { enabled: true, role: '前端' })
+
+      const events: Array<Record<string, unknown>> = []
+      const deliver = stubNotice([{ sessionId: 'sup-same', workDir: resolved }], events)
+      try {
+        const res = await fetch(`${baseUrl}/api/sessions/batch-delete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionIds: [a, b] }),
+        })
+        expect(res.status).toBe(200)
+        await new Promise((r) => setTimeout(r, 50))
+        expect(deliver).not.toHaveBeenCalled()
+        // 兜底生效：条目仍在（宁可留脏条目也不静默清空）
+        const remaining = (await servantService.listServants()).map((s) => s.sessionId)
+        expect(remaining).toContain(a)
+        expect(remaining).toContain(b)
+      } finally {
+        setRosterChangeNoticeDeps(null)
+      }
+    })
+
+    it('删唯一员工会话 ⇒ 触发 remaining===0 兜底：不摘除、不通知（v1.5.0 防线，待裁决）', async () => {
+      const workDir = await fs.mkdtemp(path.join(tmpDir, 'del-notify-last-'))
+      const only = await createSessionIn(workDir)
+      const resolved = (await sessionService.getSessionWorkDir(only)) as string
+      await servantService.setServant(only, { enabled: true, role: '后端' })
+
+      const events: Array<Record<string, unknown>> = []
+      const deliver = stubNotice([{ sessionId: 'sup-same', workDir: resolved }], events)
+      try {
+        expect((await fetch(`${baseUrl}/api/sessions/${only}`, { method: 'DELETE' })).status).toBe(200)
+        await new Promise((r) => setTimeout(r, 50))
+        expect(deliver).not.toHaveBeenCalled()
+        // 兜底生效 ⇒ 花名册留下脏条目（会话已不存在）
+        expect((await servantService.listServants()).some((s) => s.sessionId === only)).toBe(true)
+      } finally {
+        setRosterChangeNoticeDeps(null)
+      }
+    })
   })
 
   it('PATCH /api/sessions/:id should rename the session', async () => {
