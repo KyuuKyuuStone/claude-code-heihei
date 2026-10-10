@@ -1911,6 +1911,69 @@ describe('Session Messages API', () => {
     expect(resp.status).toBe(201)
     expect(deliverMock).toHaveBeenCalledTimes(1)
   })
+
+  // ─── P-B1：正文长度总闸（防任何客户端绕过工具侧的 413 根因）──────────────
+
+  async function postRawContent(body: Record<string, unknown>): Promise<Response> {
+    const req = new Request('http://localhost/api/session-messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    return handleSessionMessagesApi(req, new URL(req.url), ['api', 'session-messages'])
+  }
+
+  it('P-B1：content 超上限 ⇒ 413 结构化拒绝（可读、带实测/上限），且不投递', async () => {
+    const { resolveSessionMessageMaxBytes } = await import('../api/servants.js')
+    // 默认兜底总闸是 512KiB；这里用 env 覆盖成小值，既验覆盖也省事
+    expect(resolveSessionMessageMaxBytes({} as NodeJS.ProcessEnv)).toBe(512 * 1024)
+    process.env.CC_HEIHEI_SESSION_MESSAGE_MAX_BYTES = '1024'
+    try {
+      const limit = resolveSessionMessageMaxBytes()
+      expect(limit).toBe(1024)
+
+      const target = await registerRosterWorker()
+      const sender = await registerRealSender()
+      deliverMock.mockClear()
+
+      const resp = await postRawContent({
+        targetSessionId: target,
+        fromSessionId: sender,
+        content: 'x'.repeat(limit + 1),
+      })
+      // 结构化拒绝：413 + {error,message}，明确可读、带实测（limit+1）与上限（limit）
+      expect(resp.status).toBe(413)
+      const body = (await resp.json()) as { error?: string; message?: string }
+      expect(body.error).toBe('PAYLOAD_TOO_LARGE')
+      expect(String(body.message)).toContain(`${limit + 1} bytes`)
+      expect(String(body.message)).toContain(`${limit} byte limit`)
+      // 未静默截断、未 500、未投递、未留回执
+      expect(deliverMock).not.toHaveBeenCalled()
+    } finally {
+      delete process.env.CC_HEIHEI_SESSION_MESSAGE_MAX_BYTES
+    }
+  })
+
+  it('P-B1：恰好等于上限的 content 照常投递（总闸不误伤正常消息）', async () => {
+    const { resolveSessionMessageMaxBytes } = await import('../api/servants.js')
+    process.env.CC_HEIHEI_SESSION_MESSAGE_MAX_BYTES = '1024'
+    try {
+      const limit = resolveSessionMessageMaxBytes()
+      const target = await registerRosterWorker()
+      const sender = await registerRealSender()
+      deliverMock.mockClear()
+
+      const resp = await postRawContent({
+        targetSessionId: target,
+        fromSessionId: sender,
+        content: 'x'.repeat(limit),
+      })
+      expect(resp.status).toBe(201)
+      expect(deliverMock).toHaveBeenCalledTimes(1)
+    } finally {
+      delete process.env.CC_HEIHEI_SESSION_MESSAGE_MAX_BYTES
+    }
+  })
 })
 
 // ─── SessionMessenger validation tests ─────────────────────────────────────

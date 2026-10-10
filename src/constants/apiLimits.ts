@@ -92,3 +92,72 @@ export const PDF_AT_MENTION_INLINE_THRESHOLD = 10
  * We validate client-side to provide a clear error message.
  */
 export const API_MAX_MEDIA_PER_REQUEST = 100
+
+// =============================================================================
+// REQUEST BODY BYTE LIMITS (v1.7.5：发送前字节级预检)
+// =============================================================================
+
+/**
+ * 整个请求体（messages + system + tools 的 JSON 字节数）的服务端上限。
+ *
+ * 32MB 是**官方网关**公布的量级（此前只写在 `PDF_TARGET_RAW_SIZE` 的注释里，
+ * 未成为可执行常量 ⇒ 出 413 时只能猜）。**注意：客户真实链路经中转时上限可能
+ * 远小**（nginx 默认 `client_max_body_size 1m` 是经典元凶），因此该值**必须可
+ * 配置**：见 `getApiRequestMaxBytes()` 的 env 覆盖。
+ */
+export const API_REQUEST_MAX_BYTES = 32 * 1024 * 1024 // 32 MB
+
+/**
+ * 触发「发送前降体积 pass」的阈值（留 ~12.5% 余量）。
+ *
+ * 为什么留余量：测量点与实际发送之间存在少量增长（`stream: true` 等字段、
+ * body 序列化差异、中转侧按不同口径计数），且降体积本身有成本——只在该阈值
+ * 以上才动。低于阈值时**行为与不做预检逐字节一致**。
+ */
+export const API_REQUEST_TRIGGER_BYTES = 28 * 1024 * 1024 // 28 MB
+
+/**
+ * 单次请求里**媒体块（image/document）**允许占用的字节上限。
+ *
+ * 由来：`API_MAX_MEDIA_PER_REQUEST`(100) 只封**条数**不封**字节** ⇒ 100 张
+ * 5MB 图片（≈33MB base64）可以撑爆 32MB 请求体而完全绕过条数上限。取上限的
+ * 一半作预算，给 system/tools/历史文本留空间；超出即按**由大到小**丢弃媒体
+ * （见 `mediaBudget.ts`）。
+ */
+export const API_REQUEST_MEDIA_BYTES_BUDGET = Math.floor(
+  API_REQUEST_MAX_BYTES / 2,
+) // 16 MB
+
+/** 读取整数型 env 覆盖（非正整数/非法一律忽略，回落默认值） */
+function positiveIntFromEnv(name: string): number | null {
+  const raw = process.env[name]
+  if (!raw) return null
+  const value = Number.parseInt(raw, 10)
+  return Number.isFinite(value) && value > 0 ? value : null
+}
+
+/**
+ * 生效的请求体上限（字节）。env `CC_HEIHEI_API_REQUEST_MAX_BYTES` 覆盖，
+ * 用于客户机确认为「中转小上限」时把阈值调小——**改配置不改代码**。
+ */
+export function getApiRequestMaxBytes(): number {
+  return positiveIntFromEnv('CC_HEIHEI_API_REQUEST_MAX_BYTES') ?? API_REQUEST_MAX_BYTES
+}
+
+/**
+ * 生效的触发阈值（字节）。env `CC_HEIHEI_API_REQUEST_TRIGGER_BYTES` 覆盖；
+ * 未覆盖时 = 上限 × (API_REQUEST_TRIGGER_BYTES / API_REQUEST_MAX_BYTES)
+ * ——跟着上限等比缩放，保证覆盖上限后余量比例仍成立。
+ */
+export function getApiRequestTriggerBytes(): number {
+  const explicit = positiveIntFromEnv('CC_HEIHEI_API_REQUEST_TRIGGER_BYTES')
+  if (explicit !== null) return explicit
+  const max = getApiRequestMaxBytes()
+  return Math.floor((max * API_REQUEST_TRIGGER_BYTES) / API_REQUEST_MAX_BYTES)
+}
+
+/** 生效的媒体字节预算（env 覆盖上限时按同比例缩放） */
+export function getApiRequestMediaBytesBudget(): number {
+  const max = getApiRequestMaxBytes()
+  return Math.floor((max * API_REQUEST_MEDIA_BYTES_BUDGET) / API_REQUEST_MAX_BYTES)
+}

@@ -52,6 +52,7 @@ import {
 } from '../claudeAiLimits.js'
 import { shouldProcessRateLimits } from '../rateLimitMocking.js' // Used for /mock-limits command
 import { getLastRequestBodyProfile } from './contextGovernance.js'
+import { RequestTooLargePreflightError } from './requestSizeGuard.js'
 import { extractConnectionErrorDetails, formatAPIError } from './errorUtils.js'
 import { StreamWatchdogTimeoutError } from './streamWatchdog.js'
 
@@ -245,6 +246,23 @@ export function getRequestTooLargeErrorMessage(): string {
   return getIsNonInteractiveSession()
     ? 'Request too large: the request body exceeds the server-side size limit. Oversized attachments are dropped on retry; if this repeats, remove the large file/image from the conversation or start a new session.'
     : 'Request too large (the request body exceeds the server-side size limit). Double press esc to go back, then remove the large file/image or start a new session.'
+}
+
+/**
+ * v1.7.5 P-A：**发送前**预检判定超限的文案（请求未发出）。
+ * 必须**可执行**：给出实测/上限数值、已做过的降体积动作、以及三条明确出路
+ * （开新会话 / 压缩上下文 / 若链路上限已知则用 env 调整阈值）。不再说
+ * 「换个更小的文件」——用户无从知道多小才够。
+ */
+export function getRequestTooLargePreflightErrorMessage(
+  measuredBytes: number,
+  limitBytes: number,
+): string {
+  const detail = `Request blocked before sending: the request body is ${formatFileSize(measuredBytes)} and exceeds the configured limit of ${formatFileSize(limitBytes)} (oversized attachments were already dropped).`
+  const actions = getIsNonInteractiveSession()
+    ? 'Fix: start a new session (recommended), run /compact to shrink the context, or remove the large file/image from the conversation.'
+    : 'Fix: start a new session (esc esc to go back, then /clear), run /compact to shrink the context, or remove the large file/image from the conversation. If the link in front of the API has a smaller body limit (e.g. a proxy), set CC_HEIHEI_API_REQUEST_MAX_BYTES to match it.'
+  return `${detail} ${actions}`
 }
 export const OAUTH_ORG_NOT_ALLOWED_ERROR_MESSAGE =
   'Your account does not have access to Claude Code. Please run /login.'
@@ -533,6 +551,21 @@ export function getAssistantMessageFromError(
     return createAssistantAPIErrorMessage({
       content: API_TIMEOUT_ERROR_MESSAGE,
       error: 'unknown',
+    })
+  }
+
+  // v1.7.5 P-A：发送前字节级预检判定超限（**请求根本没发出去**）。
+  // 与真 413 同为 REQUEST_TOO_LARGE：一方面文案可执行（带实测/上限数值），
+  // 另一方面复用了「媒体剥离」这条自愈通道（messages.ts 按 businessErrorCode
+  // 映射 document/image），后续请求会继续尝试降体积。
+  if (error instanceof RequestTooLargePreflightError) {
+    return createAssistantAPIErrorMessage({
+      content: getRequestTooLargePreflightErrorMessage(
+        error.measuredBytes,
+        error.limitBytes,
+      ),
+      error: 'invalid_request',
+      businessErrorCode: BUSINESS_ERROR_CODES.REQUEST_TOO_LARGE,
     })
   }
 

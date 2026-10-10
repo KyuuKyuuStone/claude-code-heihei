@@ -8,6 +8,8 @@
  * 台账推进失败时不伪造状态：照样投递消息 + warnings:['ledger_not_updated']。
  */
 
+import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { buildTool, type ToolDef } from '../../Tool.js'
 import { lazySchema } from '../../utils/lazySchema.js'
@@ -26,6 +28,7 @@ import {
 import {
   collabRequest,
   collabToolDeps,
+  collabWorkDir,
   getCollabServer,
   supportsCollabTasks,
   writeMailboxFile,
@@ -41,6 +44,62 @@ import {
   renderCollabOutput,
   requestWithReconnect,
 } from './shared.js'
+
+// ── 大正文落盘（P-B1 协作通道限长）────────────────────────────────────────────
+//
+// 为什么：某个协作会话反复 HTTP 413「Request too large」并卡死——根因之一是工具
+// 把超大汇报正文整段塞进 session-messages 的 content，把请求体顶到链路上限。
+// 解法必须**优雅**：工具侧无条件处理，不需要用户/主管叮嘱员工别写长汇报。
+//
+// 落盘目录复用仓库既有的信箱约定（COLLAB_MAILBOX_DIR = '.heihei/dispatch' 的父
+// 目录 .heihei/ 之下）。**没有**可直接复用的落盘函数——CollabTools 目录下没有
+// diskOutput.ts，通用落盘在 utils/task/diskOutput.ts（按 taskId 追加写、语义是
+// 后台任务输出，直接借用会与真实任务文件重名冲突）；因此本文件沿用
+// collabToolClient.writeMailboxFile 的**目录约定 + 原子落地风格**（mkdir 递归 →
+// 写 .tmp → rename），并把这一点记在此处。文件名沿用其命名风格
+// <前缀>-<时间戳>-<随机8位>.<后缀>；后缀故意**不是** .json——否则会被信箱
+// watcher 的 isDispatchPayloadName 当成待处理 payload 消费掉。
+const COLLAB_REPORT_SPILL_DIR = '.heihei/reports'
+const COLLAB_REPORT_SPILL_PREFIX = 'report-'
+
+/** 工具侧内联阈值（UTF-8 字节）env 名；见下方 resolveReportInlineMaxBytes 的取值依据。 */
+export const COLLAB_REPORT_INLINE_MAX_BYTES_ENV = 'CC_HEIHEI_COLLAB_REPORT_INLINE_MAX_BYTES'
+/** 截断摘要的安全长度（UTF-8 字节）。取值依据见 resolveReportInlineMaxBytes。 */
+export const COLLAB_REPORT_EXCERPT_MAX_BYTES = 4 * 1024
+
+/**
+ * 工具侧内联阈值默认值：summary 的 UTF-8 字节超过它才落盘。
+ *
+ * 取值依据：
+ * - 服务端兜底总闸（servants.ts 的 DEFAULT_SESSION_MESSAGE_MAX_BYTES）默认 512KiB；
+ * - 工具侧必须保证「截断摘要（≤4KiB）+ 路径 + 提示 + 交付物」的投递体，在服务端
+ *   追加页脚之后仍**远小于**该总闸与链路常见 413 门槛——约 5KiB 量级，留 ≈100×
+ *   余量，正常消息绝不会被误伤；
+ * - 32KiB 又足够大，几 KB 的正常汇报/派活完全不受影响（未超阈值时逐字节不变）。
+ */
+const DEFAULT_REPORT_INLINE_MAX_BYTES = 32 * 1024
+
+/** 正整数 env 解析（跟随 cronScheduler.resolveCronTaskTimeoutMs 的写法）：非法/缺失回退默认。 */
+function resolveReportInlineMaxBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[COLLAB_REPORT_INLINE_MAX_BYTES_ENV]?.trim()
+  if (!raw) return DEFAULT_REPORT_INLINE_MAX_BYTES
+  const parsed = Number(raw)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_REPORT_INLINE_MAX_BYTES
+}
+
+/** 按 UTF-8 字节截断，且不切碎多字节字符。 */
+function truncateToUtf8Bytes(text: string, maxBytes: number): string {
+  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text
+  let bytes = 0
+  let out = ''
+  for (const ch of text) {
+    const size = Buffer.byteLength(ch, 'utf8')
+    if (bytes + size > maxBytes) break
+    out += ch
+    bytes += size
+  }
+  return out
+}
 
 const DESCRIPTION = '汇报任务完工（先推台账 delivered，再投递汇报给主管）'
 
@@ -118,9 +177,65 @@ export const CollabReportTool = buildTool({
     if (!runtime) return fail(COLLAB_ERROR_CODES.notCollabSession, '当前会话不是协作会话。')
     if (!summary) return fail(COLLAB_ERROR_CODES.badRequest, 'summary 不能为空。')
 
-    const buildContent = (): string => {
+    /** 未截断的完整投递体（未超阈值时就是最终投递内容，逐字节不变）。 */
+    const fullContent = (): string => {
       const lines = [`【汇报】${summary}`]
       if (deliverables.length > 0) lines.push('交付物：', ...deliverables.map((item) => `- ${item}`))
+      return lines.join('\n')
+    }
+
+    const inlineMaxBytes = resolveReportInlineMaxBytes(deps.env)
+
+    /**
+     * 全文写盘（原子落地：先写 .tmp 再 rename，与 writeMailboxFile 同一风格）。
+     * 返回 {ok,file} 或 {ok:false,error}；失败时**绝不**回退成「整段拼进 content」——
+     * 那正是要根治的 413 根因。
+     */
+    const spillReportBody = (body: string): { ok: boolean; file?: string; error?: string } => {
+      const dir = join(collabWorkDir(deps), COLLAB_REPORT_SPILL_DIR)
+      const name = `${COLLAB_REPORT_SPILL_PREFIX}${deps.now()}-${deps.randomId().slice(0, 8)}.md`
+      const target = join(dir, name)
+      const tmp = `${target}.tmp`
+      try {
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(tmp, body, 'utf8')
+        renameSync(tmp, target)
+        return { ok: true, file: target }
+      } catch (error) {
+        try {
+          rmSync(tmp, { force: true })
+        } catch {
+          // 清理失败不影响主错误上报
+        }
+        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      }
+    }
+
+    /** 落盘结果惰性求值且只求值一次：buildContent 在多个分支被调用，不能重复落盘。 */
+    let spillResult: { ok: boolean; file?: string; error?: string } | undefined
+
+    /**
+     * 投递内容：未超阈值 ⇒ 原样（逐字节不变）；超阈值 ⇒ 截断摘要 + 落盘路径引用。
+     * 由工具侧无条件处理，员工无需自知写没写长汇报。
+     */
+    const buildContent = (): string => {
+      if (Buffer.byteLength(summary, 'utf8') <= inlineMaxBytes) return fullContent()
+
+      if (!spillResult) spillResult = spillReportBody(fullContent())
+      // 截断长度同时受「绝对上限」与「阈值的一半」约束：保证投递体（摘要+路径+提示）
+      // 无论阈值取多小都仍 < 阈值，且当阈值被 env 调小时截断真的生效（不会退化成全文）。
+      const excerptBytes = Math.min(COLLAB_REPORT_EXCERPT_MAX_BYTES, Math.floor(inlineMaxBytes / 2))
+      const lines = [`【汇报】${truncateToUtf8Bytes(summary, excerptBytes)}`]
+      if (deliverables.length > 0) lines.push('交付物：', ...deliverables.map((item) => `- ${item}`))
+      if (spillResult.ok && spillResult.file) {
+        lines.push(
+          `（正文过长：${Buffer.byteLength(summary, 'utf8')} 字节已超过内联上限 ${inlineMaxBytes} 字节，上面为截断摘要）`,
+          `完整汇报已落盘：${spillResult.file}`,
+          '请用 Read 工具读取该文件获取全文。',
+        )
+      } else {
+        lines.push(`（正文过长，落盘失败：${spillResult.error ?? 'unknown'}；以上仅为截断摘要）`)
+      }
       return lines.join('\n')
     }
 

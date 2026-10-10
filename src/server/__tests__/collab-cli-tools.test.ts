@@ -232,6 +232,15 @@ function mailboxFiles(): string[] {
   }
 }
 
+/** 汇报落盘目录内容（目录不存在 = 没落盘）——大正文落盘专用 */
+function spillFiles(): string[] {
+  try {
+    return readdirSync(join(workDir, '.heihei', 'reports'))
+  } catch {
+    return []
+  }
+}
+
 beforeEach(() => {
   workDir = mkdtempSync(join(tmpdir(), 'collab-tool-work-'))
   portFileDir = mkdtempSync(join(tmpdir(), 'collab-tool-portfile-'))
@@ -687,6 +696,83 @@ describe('CollabReport（员工）', () => {
     expect(data).toMatchObject({ ok: false, error: 'ledger_unsupported' })
     expect(stub.received.some((item) => item.method === 'POST')).toBe(false)
     expect(mailboxFiles()).toHaveLength(0)
+  })
+
+  // ─── P-B1 协作通道限长：大汇报只发「摘要 + 落盘路径」，小汇报逐字节不变 ───
+  it('P-B1：大汇报 ⇒ 只投「截断摘要 + 落盘路径」，全文写盘且完整', async () => {
+    const stub = startStub({ tasks: [makeTask({ status: 'in_progress' })] })
+    stopServer = stub.stop
+    useEnv({ CC_HEIHEI_DESKTOP_SERVER_URL: stub.baseUrl })
+
+    // 默认阈值 32KiB：正文 40000 字节（> 阈值），末尾放独有标记证明「全文没被拼进投递体」
+    const TAIL = '-TAIL-全文独有标记-END'
+    const summary = 'A'.repeat(40_000) + TAIL
+    const { data } = await callTool(CollabReportTool, { taskId: 'task-1', summary })
+    const output = data as Record<string, unknown>
+    expect(output.ok).toBe(true)
+
+    const message = stub.received.find((item) => item.path === '/api/session-messages')
+    const content = String(message?.body?.content)
+    // ① 投递体不含大正文全文（末尾标记必须缺席）
+    expect(content).not.toContain(TAIL)
+    // ② 含落盘路径引用 + 可读取提示
+    expect(content).toContain('.heihei')
+    expect(content).toContain('完整汇报已落盘')
+    expect(content).toContain('Read')
+    // ③ 大小降到内联阈值内（远小于它）
+    expect(Buffer.byteLength(content, 'utf8')).toBeLessThan(32 * 1024)
+
+    // ④ 文件确实被写入，且内容是完整全文（别只信返回值）
+    const files = spillFiles()
+    expect(files).toHaveLength(1)
+    expect(files[0]!.startsWith('report-')).toBe(true)
+    expect(files[0]!.endsWith('.md')).toBe(true)
+    const spilled = readFileSync(join(workDir, '.heihei', 'reports', files[0]!), 'utf8')
+    expect(spilled).toBe(`【汇报】${summary}`)
+    expect(spilled).toContain(TAIL)
+    expect(spilled.length).toBe(`【汇报】${summary}`.length)
+  })
+
+  it('P-B1：内联阈值可被 env 覆盖（小正文也能触发落盘）', async () => {
+    const stub = startStub({ tasks: [makeTask({ status: 'in_progress' })] })
+    stopServer = stub.stop
+    useEnv({
+      CC_HEIHEI_DESKTOP_SERVER_URL: stub.baseUrl,
+      CC_HEIHEI_COLLAB_REPORT_INLINE_MAX_BYTES: '512',
+    })
+
+    const TAIL = '-TAIL-OVER-512'
+    const summary = 'B'.repeat(1_000) + TAIL
+    const { data } = await callTool(CollabReportTool, { taskId: 'task-1', summary })
+    expect((data as Record<string, unknown>).ok).toBe(true)
+
+    const content = String(stub.received.find((item) => item.path === '/api/session-messages')?.body?.content)
+    expect(content).not.toContain(TAIL)
+    expect(content).toContain('完整汇报已落盘')
+    // 截断真正生效：投递体比原文短得多（路径与提示是固定开销，故不比 512 那个极小阈值）
+    expect(Buffer.byteLength(content, 'utf8')).toBeLessThan(Buffer.byteLength(summary, 'utf8'))
+    expect(Buffer.byteLength(content, 'utf8')).toBeLessThan(2 * 1024)
+    expect(spillFiles()).toHaveLength(1)
+    expect(readFileSync(join(workDir, '.heihei', 'reports', spillFiles()[0]!), 'utf8')).toBe(`【汇报】${summary}`)
+  })
+
+  it('P-B1 回归：小汇报投递内容逐字节不变，且不落盘', async () => {
+    const stub = startStub({ tasks: [makeTask({ status: 'in_progress' })] })
+    stopServer = stub.stop
+    useEnv({ CC_HEIHEI_DESKTOP_SERVER_URL: stub.baseUrl })
+
+    const { data } = await callTool(CollabReportTool, {
+      taskId: 'task-1',
+      summary: '已实现',
+      deliverables: ['src/a.ts'],
+    })
+    expect((data as Record<string, unknown>).ok).toBe(true)
+
+    const content = String(stub.received.find((item) => item.path === '/api/session-messages')?.body?.content)
+    // 与旧实现的拼装结果**逐字节相同**
+    expect(content).toBe('【汇报】已实现\n交付物：\n- src/a.ts')
+    // 未超阈值 ⇒ 不落盘
+    expect(spillFiles()).toHaveLength(0)
   })
 })
 

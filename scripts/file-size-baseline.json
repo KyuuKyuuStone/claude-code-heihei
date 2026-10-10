@@ -26,7 +26,7 @@
       "kind": "upstream"
     },
     "src/services/api/claude.ts": {
-      "lines": 3827,
+      "lines": 3762,
       "kind": "upstream"
     },
     "src/services/mcp/client.ts": {

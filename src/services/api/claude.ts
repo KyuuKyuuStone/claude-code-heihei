@@ -1,18 +1,14 @@
 ﻿import type {
   BetaContentBlock,
-  BetaContentBlockParam,
-  BetaImageBlockParam,
   BetaJSONOutputFormat,
   BetaMessage,
   BetaMessageDeltaUsage,
   BetaMessageStreamParams,
   BetaOutputConfig,
   BetaRawMessageStreamEvent,
-  BetaRequestDocumentBlock,
   BetaStopReason,
   BetaToolChoiceAuto,
   BetaToolChoiceTool,
-  BetaToolResultBlockParam,
   BetaToolUnion,
   BetaUsage,
   BetaMessageParam as MessageParam,
@@ -198,7 +194,10 @@ import {
   isDeferredToolsDeltaEnabled,
   isToolSearchEnabled,
 } from "src/utils/toolSearch.js";
-import { API_MAX_MEDIA_PER_REQUEST } from "../../constants/apiLimits.js";
+import {
+  API_MAX_MEDIA_PER_REQUEST,
+  getApiRequestMediaBytesBudget,
+} from "../../constants/apiLimits.js";
 import { ADVISOR_BETA_HEADER } from "../../constants/betas.js";
 import {
   formatDeferredToolLine,
@@ -230,6 +229,8 @@ import {
   recordRequestBodySize,
   truncateOversizedMessages,
 } from "./contextGovernance.js";
+import { enforceRequestSizeLimit } from "./requestSizeGuard.js";
+import { stripExcessMediaItems } from "./mediaBudget.js";
 import { getContextWindowForModel } from "../../utils/context.js";
 import {
   isBetaTracingEnabled,
@@ -1016,83 +1017,6 @@ function getPreviousRequestIdFromMessages(
   return undefined;
 }
 
-function isMedia(
-  block: BetaContentBlockParam,
-): block is BetaImageBlockParam | BetaRequestDocumentBlock {
-  return block.type === "image" || block.type === "document";
-}
-
-function isToolResult(
-  block: BetaContentBlockParam,
-): block is BetaToolResultBlockParam {
-  return block.type === "tool_result";
-}
-
-/**
- * Ensures messages contain at most `limit` media items (images + documents).
- * Strips oldest media first to preserve the most recent.
- */
-export function stripExcessMediaItems(
-  messages: (UserMessage | AssistantMessage)[],
-  limit: number,
-): (UserMessage | AssistantMessage)[] {
-  let toRemove = 0;
-  for (const msg of messages) {
-    if (!Array.isArray(msg.message.content)) continue;
-    for (const block of msg.message.content) {
-      if (isMedia(block)) toRemove++;
-      if (isToolResult(block) && Array.isArray(block.content)) {
-        for (const nested of block.content) {
-          if (isMedia(nested)) toRemove++;
-        }
-      }
-    }
-  }
-  toRemove -= limit;
-  if (toRemove <= 0) return messages;
-
-  return messages.map((msg) => {
-    if (toRemove <= 0) return msg;
-    const content = msg.message.content;
-    if (!Array.isArray(content)) return msg;
-
-    const before = toRemove;
-    const stripped = content
-      .map((block) => {
-        if (
-          toRemove <= 0 ||
-          !isToolResult(block) ||
-          !Array.isArray(block.content)
-        )
-          return block;
-        const filtered = block.content.filter((n) => {
-          if (toRemove > 0 && isMedia(n)) {
-            toRemove--;
-            return false;
-          }
-          return true;
-        });
-        return filtered.length === block.content.length
-          ? block
-          : { ...block, content: filtered };
-      })
-      .filter((block) => {
-        if (toRemove > 0 && isMedia(block)) {
-          toRemove--;
-          return false;
-        }
-        return true;
-      });
-
-    return before === toRemove
-      ? msg
-      : {
-          ...msg,
-          message: { ...msg.message, content: stripped },
-        };
-  }) as (UserMessage | AssistantMessage)[];
-}
-
 async function* queryModel(
   messages: Message[],
   systemPrompt: SystemPrompt,
@@ -1435,9 +1359,11 @@ async function* queryModel(
   // The API rejects requests with >100 media items but returns a confusing error.
   // Rather than erroring (which is hard to recover from in Cowork/CCD), we
   // silently drop the oldest media items to stay within the limit.
+  // v1.7.5：加**字节预算**（此前只封条数 ⇒ 100 张图可撑爆请求体，见 mediaBudget.ts）
   messagesForAPI = stripExcessMediaItems(
     messagesForAPI,
     API_MAX_MEDIA_PER_REQUEST,
+    getApiRequestMediaBytesBudget(),
   );
 
   // Instrumentation: Track message count after normalization
@@ -1890,6 +1816,13 @@ async function* queryModel(
     };
   };
 
+  // v1.7.5 P-A：**所有发送路径**（流式 + 非流式回退）经此包装做发送前字节级预检；
+  // 仅用于日志/捕获的调用仍走裸 paramsFromContext（避免多付一次序列化）。
+  const guardedParamsFromContext = (retryContext: RetryContext) =>
+    enforceRequestSizeLimit(paramsFromContext(retryContext), {
+      querySource: options.querySource,
+    });
+
   // Compute log scalars synchronously so the fire-and-forget .then() closure
   // captures only primitives instead of paramsFromContext's full closure scope
   // (messagesForAPI, system, allTools, betas — the entire request-building
@@ -1957,7 +1890,9 @@ async function* queryModel(
         // client_creation_start is meaningful on attempt 1.
         queryCheckpoint("query_client_creation_end");
 
-        const params = paramsFromContext(context);
+        // v1.7.5 P-A：发送前**字节级预检**——超阈值先降体积（媒体剥离）再发；
+        // 降不动仍超限则不发网络请求、抛可执行错误（见 requestSizeGuard.ts）
+        const params = guardedParamsFromContext(context);
         captureAPIRequest(params, options.querySource); // Capture for bug reports
 
         maxOutputTokens = params.max_tokens;
@@ -2951,7 +2886,7 @@ async function* queryModel(
           initialConsecutive529Errors: is529Error(streamingError) ? 1 : 0,
           querySource: options.querySource,
         },
-        paramsFromContext,
+        guardedParamsFromContext,
         (attempt, _startTime, tokens) => {
           attemptNumber = attempt;
           maxOutputTokens = tokens;
@@ -3058,7 +2993,7 @@ async function* queryModel(
             ...(isFastModeEnabled() && { fastMode: isFastMode }),
             signal,
           },
-          paramsFromContext,
+          guardedParamsFromContext,
           (attempt, _startTime, tokens) => {
             attemptNumber = attempt;
             maxOutputTokens = tokens;
