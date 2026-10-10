@@ -64,21 +64,49 @@ function getUtteranceCtor(): UtteranceCtor | null {
   return typeof ctor === 'function' ? ctor : null
 }
 
-/** CJK（含假名/谚文）判定：决定优先挑 zh 还是 en voice。 */
-export function containsCjk(text: string): boolean {
-  return /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]/.test(text)
+/** 朗读文本所属的书写系统（决定挑哪个语言的 voice）。 */
+export type SpeechScript = 'ja' | 'ko' | 'zh' | 'en'
+
+/** 假名（平假名/片假名）。 */
+const KANA_RE = /[\u3040-\u309f\u30a0-\u30ff]/
+/** 谚文（jamo + 兼容字母 + 音节）。 */
+const HANGUL_RE = /[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]/
+/** 汉字（扩展 A + 基本区 + 兼容表意）。 */
+const HAN_RE = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/
+
+/**
+ * 按书写系统分流：含假名 → ja；含谚文 → ko；否则含汉字 → zh；其余 → en。
+ *
+ * 取代旧口径「CJK 一律按 zh」——假名/谚文被当成中文会让 ja/ko voice 挑成 zh，
+ * 读出来是错的（日文汉字与韩文汉字词虽同源，但整句读法不同）。
+ * 混排优先级：假名 > 谚文 > 汉字（`你好、こんにちは` 走 ja）。
+ */
+export function detectSpeechScript(text: string): SpeechScript {
+  if (KANA_RE.test(text)) return 'ja'
+  if (HANGUL_RE.test(text)) return 'ko'
+  if (HAN_RE.test(text)) return 'zh'
+  return 'en'
 }
 
-/** 按文本语种挑 voice；挑不到（含无中文 voice）返回 null ⇒ 用系统默认 voice 读。 */
+/**
+ * 按文本书写系统挑 voice；目标语言 voice 不存在（含只有引擎没有该语种）返回 null
+ * ⇒ 用系统默认 voice 读（不隐藏喇叭、不报错）。
+ */
 export function pickVoice(
   text: string,
   voices: readonly SpeechSynthesisVoice[],
 ): SpeechSynthesisVoice | null {
   if (voices.length === 0) return null
-  const preferred = containsCjk(text)
-    ? voices.find((voice) => /^zh/i.test(voice.lang ?? ''))
-    : voices.find((voice) => /^en/i.test(voice.lang ?? ''))
-  return preferred ?? null
+  const script = detectSpeechScript(text)
+  const langOf = (voice: SpeechSynthesisVoice) => voice.lang ?? ''
+  if (script === 'zh') {
+    // 简体优先：zh-CN 优先，其次任意 zh（zh-TW / zh-HK 等）。
+    return voices.find((voice) => /^zh-CN/i.test(langOf(voice)))
+      ?? voices.find((voice) => /^zh/i.test(langOf(voice)))
+      ?? null
+  }
+  const prefix = script === 'ja' ? /^ja/i : script === 'ko' ? /^ko/i : /^en/i
+  return voices.find((voice) => prefix.test(langOf(voice))) ?? null
 }
 
 /** 单段看门狗时长：基础 + 每字增量，再按 rate 放大（慢速朗读耗时更长）。 */
@@ -290,6 +318,10 @@ export class SpeechService {
       this.watchdogTimer = null
       // 该段迟迟没有 onend（部分引擎长段静默中断）⇒ 跳下一段，别把整条卡死。
       if (this.utterance !== utterance) return
+      // 必须先 cancel：Web Speech 的 speak() 是排队制，而看门狗触发的前提正是
+      // 「这一段既没 onend、又仍是引擎的当前项」——不取消就直接派下一段，新段会
+      // 排在它后面永不轮播，余下段全部静默（与 pause/setRate 路径同款写法）。
+      this.cancelEngine()
       this.advance()
     }, watchdogMsFor(segment, this.rate))
   }

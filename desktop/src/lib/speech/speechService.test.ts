@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CANCEL_RESTART_DELAY_MS,
   SpeechService,
-  containsCjk,
+  detectSpeechScript,
   pickVoice,
   watchdogMsFor,
 } from './speechService'
@@ -96,18 +96,33 @@ describe('speechService 可用性与降级', () => {
     expect(spoken[0]!.voice).toBeNull()
   })
 
-  it('pickVoice：含 CJK 挑 zh，否则挑 en，挑不到为 null', () => {
-    expect(pickVoice('你好世界', [voice('en-US')])).toBeNull()
-    expect(pickVoice('你好世界', [voice('en-US'), voice('zh-CN')])?.lang).toBe('zh-CN')
-    expect(pickVoice('hello world', [voice('zh-CN'), voice('en-GB')])?.lang).toBe('en-GB')
-    expect(pickVoice('hello', [])).toBeNull()
+  it('detectSpeechScript：假名→ja、谚文→ko、汉字→zh、其余→en（混排按 假名>谚文>汉字）', () => {
+    expect(detectSpeechScript('こんにちは')).toBe('ja')
+    expect(detectSpeechScript('カタカナ')).toBe('ja')
+    expect(detectSpeechScript('안녕하세요')).toBe('ko')
+    expect(detectSpeechScript('中文句子')).toBe('zh')
+    expect(detectSpeechScript('plain ascii')).toBe('en')
+    expect(detectSpeechScript('你好、こんにちは')).toBe('ja')
+    expect(detectSpeechScript('你好、안녕')).toBe('ko')
   })
 
-  it('containsCjk：中日韩为真，英文为假', () => {
-    expect(containsCjk('中文')).toBe(true)
-    expect(containsCjk('かな')).toBe(true)
-    expect(containsCjk('한글')).toBe(true)
-    expect(containsCjk('plain ascii')).toBe(false)
+  it('pickVoice：按书写系统挑 voice（日文不再被当成中文读）', () => {
+    const all = [voice('en-US'), voice('zh-CN'), voice('ja-JP'), voice('ko-KR')]
+    expect(pickVoice('こんにちは', all)?.lang).toBe('ja-JP')
+    expect(pickVoice('안녕하세요', all)?.lang).toBe('ko-KR')
+    expect(pickVoice('你好世界', all)?.lang).toBe('zh-CN')
+    expect(pickVoice('hello world', all)?.lang).toBe('en-US')
+    // 中日混排：含假名 ⇒ 走日文。
+    expect(pickVoice('你好、こんにちは', all)?.lang).toBe('ja-JP')
+  })
+
+  it('pickVoice：中文优先 zh-CN，其次任意 zh；目标语言缺失回退 null（用默认 voice）', () => {
+    expect(pickVoice('你好', [voice('zh-TW'), voice('zh-CN')])?.lang).toBe('zh-CN')
+    expect(pickVoice('你好', [voice('en-US'), voice('zh-TW')])?.lang).toBe('zh-TW')
+    // 有引擎但缺该语种 voice ⇒ null（不隐藏、不报错，交给默认 voice）。
+    expect(pickVoice('こんにちは', [voice('en-US'), voice('zh-CN')])).toBeNull()
+    expect(pickVoice('안녕하세요', [voice('zh-CN')])).toBeNull()
+    expect(pickVoice('hello', [])).toBeNull()
   })
 })
 
@@ -184,6 +199,46 @@ describe('speechService 状态机', () => {
     expect(spoken.map((u) => u.text)).toEqual(['S1'])
     vi.advanceTimersByTime(watchdogMsFor('S1', 1))
     expect(spoken.map((u) => u.text)).toEqual(['S1', 'S2'])
+  })
+
+  it('看门狗跳段前必须先 cancel：否则新段排队等待 ⇒ 余下段级联静默', () => {
+    // 排队制模型：speak 只入队；当前项未结束（本例永不 onend）就不播下一项；cancel 清队。
+    const queue: FakeUtterance[] = []
+    let current: FakeUtterance | null = null
+    const played: string[] = []
+    const pump = () => {
+      if (current !== null) return
+      const next = queue.shift()
+      if (!next) return
+      current = next
+      played.push(next.text)
+    }
+    ;(window as unknown as { speechSynthesis?: unknown }).speechSynthesis = {
+      speak: (utterance: FakeUtterance) => {
+        queue.push(utterance)
+        pump()
+      },
+      cancel: () => {
+        queue.length = 0
+        current = null
+      },
+      getVoices: () => voices,
+      addEventListener: vi.fn(),
+    }
+
+    const service = new SpeechService()
+    service.play('m1', ['S1', 'S2', 'S3'])
+    vi.advanceTimersByTime(CANCEL_RESTART_DELAY_MS)
+    expect(played).toEqual(['S1']) // S1 既无 onend 又仍占着引擎当前项
+
+    vi.advanceTimersByTime(watchdogMsFor('S1', 1))
+    // 看门狗若不先 cancel，S2 只会进队等待、played 停在 ['S1']——正是被修的级联静默。
+    expect(played).toEqual(['S1', 'S2'])
+
+    // 后续段同样能继续推进（不是只救回一段）。
+    vi.advanceTimersByTime(watchdogMsFor('S2', 1))
+    expect(played).toEqual(['S1', 'S2', 'S3'])
+    expect(service.getSnapshot().status).toBe('speaking')
   })
 
   it('旧 utterance 的迟到回调被归属校验丢弃（不误跳段）', () => {

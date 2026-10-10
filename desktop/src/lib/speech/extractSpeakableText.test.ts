@@ -59,6 +59,18 @@ describe('extractSpeakableText', () => {
     expect(text).toContain('结束。')
   })
 
+  it('纯代码块消息 ⇒ 无正文可读（喇叭不出现，不念占位语）', () => {
+    expect(extract('```ts\nconst a = 1\nfunction f() {}\n```').segments).toEqual([])
+    expect(extract(['```', 'a', '```', '', '```', 'b', '```'].join('\n')).segments).toEqual([])
+    expect(extract('```\n下面没有闭合\n').segments).toEqual([])
+    expect(extract('```ts\nconst a = 1\n```').truncated).toBe(false)
+  })
+
+  it('既有正文又有代码块 ⇒ 正文保留，代码块只留一句占位语', () => {
+    const raw = ['先说明一下。', '```ts', 'const a = 1', '```', '再说一句。'].join('\n')
+    expect(extract(raw).segments).toEqual(['先说明一下。', PLACEHOLDER, '再说一句。'])
+  })
+
   it('空串与纯空白 → 无段可读', () => {
     expect(extract('').segments).toEqual([])
     expect(extract('   \n\t ').segments).toEqual([])

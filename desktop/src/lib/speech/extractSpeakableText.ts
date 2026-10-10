@@ -6,7 +6,8 @@
  * 经 `codeBlockPlaceholder` 传入。
  *
  * 规则（设计裁定 §3）：
- *   1) 围栏代码块（``` 或 ~~~）整块替换为一句占位语（每块一句）；
+ *   1) 围栏代码块（``` 或 ~~~）整块替换为一句占位语（每块一句）；整条消息若除了代码块
+ *      再无正文（例如纯代码块）⇒ 结果为空，喇叭不渲染；
  *   2) 行内 `code` 去反引号留文字；图片语法整条剔除；链接 [t](u) → t；HTML 标签剥离；
  *   3) 去标题 #、列表符、引用 >、表格管道 |、加粗星号 *（**保留下划线**，避免破坏
  *      `foo_bar` 这类标识符）；
@@ -109,6 +110,7 @@ export function extractSpeakableText(
 ): SpeakableExtraction {
   if (!raw || raw.trim() === '') return { segments: [], truncated: false }
 
+  const placeholder = options.codeBlockPlaceholder.trim()
   const withoutFences = replaceFencedBlocks(raw, options.codeBlockPlaceholder)
   const flattened = withoutFences.split('\n').map(stripInlineMarkdown).join('\n')
 
@@ -137,6 +139,11 @@ export function extractSpeakableText(
     segments.push(sentence)
     total += sentence.length
   }
+
+  // 无可读正文（只有代码块占位语/空白，例如纯代码块消息）⇒ 返回空 ⇒ 喇叭不渲染。
+  // 占位语只在「既有正文又有代码块」时才有意义（正文里念一句「代码块省略」）。
+  const hasReadableBody = segments.some((segment) => segment !== placeholder)
+  if (!hasReadableBody) return { segments: [], truncated: false }
 
   return { segments, truncated }
 }

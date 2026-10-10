@@ -66,8 +66,8 @@ export function useSpeech(options: UseSpeechOptions): MessageSpeechState {
       speechService.resume()
       return
     }
-    // 点另一条 = 停旧读新（play 内部先 cancel）。变速取当前设置值。
-    speechService.setRate(rate)
+    // 点另一条 = 停旧读新（play 内部先 cancel，并直接带上当前 rate）。
+    // 不要再单独调 setRate：play 已带 rate，多一次中间派发会白重建一次队列。
     speechService.play(messageId, segments, rate)
   }, [messageId, isMine, status, rate, segments])
 

@@ -17,13 +17,17 @@ class StubUtterance {
 }
 
 let voices: Array<{ lang: string; name: string }> = []
+/** service 订阅时注册的 voiceschanged 回调（模拟浏览器在 voice 列表变化时的广播）。 */
+let voicesChangedListener: (() => void) | null = null
 
 function installEngine() {
   ;(window as unknown as { speechSynthesis?: unknown }).speechSynthesis = {
     speak: vi.fn(),
     cancel: vi.fn(),
     getVoices: () => voices,
-    addEventListener: vi.fn(),
+    addEventListener: (type: string, listener: () => void) => {
+      if (type === 'voiceschanged') voicesChangedListener = listener
+    },
   }
   ;(globalThis as unknown as { SpeechSynthesisUtterance?: unknown }).SpeechSynthesisUtterance =
     StubUtterance
@@ -41,6 +45,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.restoreAllMocks()
   // 组件可能仍挂着订阅：复位单例要包在 act 里，否则 stop() 的通知会打 React 警告。
   act(() => {
     speechService.stop()
@@ -115,5 +120,63 @@ describe('MessageActionBar 朗读键（渲染与降级）', () => {
 
     act(() => screen.getByLabelText('朗读本条消息').click())
     expect(screen.getByText('内容较长，仅朗读前一部分')).toBeTruthy()
+  })
+
+  it('暂停态 chip 同样常驻可见（操作条不落 opacity-0 分支）', () => {
+    installEngine()
+    const { container } = render(<MessageActionBar copyText="一句话。" copyLabel="复制" messageId="m1" />)
+    const bar = () => container.querySelector('[data-message-actions]') as HTMLElement
+
+    expect(bar().className).toContain('opacity-0')
+    act(() => screen.getByLabelText('朗读本条消息').click())
+    expect(bar().className).not.toContain('opacity-0')
+    expect(bar().getAttribute('data-tts-state')).toBe('speaking')
+
+    act(() => screen.getByLabelText('暂停朗读').click())
+    expect(bar().getAttribute('data-tts-state')).toBe('paused')
+    expect(bar().className).not.toContain('opacity-0')
+    expect(bar().className).toContain('opacity-100')
+  })
+
+  it('播放中 voices 全部消失 ⇒ chip 仍在可暂停（不因 canSpeak 变假而消失）', () => {
+    installEngine()
+    render(<MessageActionBar copyText="一句话。" copyLabel="复制" messageId="m1" />)
+    act(() => screen.getByLabelText('朗读本条消息').click())
+    expect(screen.getByLabelText('暂停朗读')).toBeTruthy()
+
+    // 模拟引擎在朗读期间广播 voiceschanged 且 voice 列表已空 ⇒ canSpeak 变假。
+    voices = []
+    act(() => voicesChangedListener?.())
+
+    expect(speechService.getSnapshot().canSpeak).toBe(false)
+    expect(speechService.getSnapshot().status).toBe('speaking')
+    // 旧实现此处 chip 连同暂停出口一起消失（service 仍在读）⇒ 用户无法停下。
+    expect(screen.getByLabelText('暂停朗读')).toBeTruthy()
+    act(() => screen.getByLabelText('暂停朗读').click())
+    expect(speechService.getSnapshot().status).toBe('paused')
+  })
+
+  it('点另一条消息只重建一次队列（toggle 不再多调一次 setRate）', () => {
+    installEngine()
+    const setRateSpy = vi.spyOn(speechService, 'setRate')
+    const playSpy = vi.spyOn(speechService, 'play')
+    render(
+      <>
+        <MessageActionBar copyText="第一条消息。" copyLabel="复制" messageId="m1" />
+        <MessageActionBar copyText="第二条消息。" copyLabel="复制" messageId="m2" />
+      </>,
+    )
+
+    act(() => screen.getAllByLabelText('朗读本条消息')[0]!.click())
+    const setRateCallsAtFirstPlay = setRateSpy.mock.calls.length
+    const playCallsAtFirstPlay = playSpy.mock.calls.length
+
+    act(() => screen.getByLabelText('朗读本条消息').click())
+    expect(playSpy.mock.calls.length).toBe(playCallsAtFirstPlay + 1)
+    // toggle 路径不得再单独调 setRate（play 已带 rate）；只有挂载/改档的 effect 会调。
+    expect(setRateSpy.mock.calls.length).toBe(setRateCallsAtFirstPlay)
+
+    setRateSpy.mockRestore()
+    playSpy.mockRestore()
   })
 })

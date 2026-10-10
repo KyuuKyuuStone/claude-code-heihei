@@ -62,7 +62,9 @@ export function MessageActionBar({
     rate: speechRate,
     codeBlockPlaceholder: t('speech.codeBlockPlaceholder'),
   })
-  const showTts = hasCopy && Boolean(messageId) && speech.visible
+  // 一旦在播就保持可见（即使 voices 中途消失导致 canSpeak 变假）——否则 chip 连同
+  // 暂停出口一起消失，service 仍在朗读、本体描边还在，用户无法停。
+  const showTts = hasCopy && Boolean(messageId) && (speech.visible || speech.status !== 'idle')
   const ttsStatus = showTts ? speech.status : 'idle'
 
   // aria-live 只播「状态切换事件」文案，不做常驻状态区；续播与首播分别播报。
@@ -92,9 +94,10 @@ export function MessageActionBar({
       data-message-actions
       data-align={align}
       data-tts-state={ttsStatus}
-      // 朗读中的消息：chip 常驻可见（覆盖操作条自身的 hover 显现规则）。
+      // 朗读中/已暂停的消息：chip 常驻可见（覆盖操作条自身的 hover 显现规则）。
+      // 暂停态同样常驻——暂停是把播放入口变成继续入口，藏起来就找不回播放位置。
       className={`mt-2 flex h-7 w-full transition-opacity duration-150 ${
-        ttsStatus === 'speaking'
+        ttsStatus !== 'idle'
           ? 'pointer-events-auto opacity-100'
           : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100'
       } ${

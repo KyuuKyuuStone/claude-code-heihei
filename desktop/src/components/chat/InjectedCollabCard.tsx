@@ -158,7 +158,8 @@ export const InjectedCollabCard = memo(function InjectedCollabCard({
   const t = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const speechRate = useSettingsStore((state) => state.speechRate)
-  // 朗读中的消息本体提示：协作卡为左对齐卡，用左侧 inset 描边（playing/paused 都保留）。
+  // 朗读中的消息本体提示：本卡左缘已有常驻 3px brand 身份条（见下方 absolute span），
+  // 描边故走**右缘**——左=identity 常驻、右=state 暂态，二者可区分（playing/paused 都保留）。
   const speech = useSpeech({
     messageId,
     text: content,
@@ -179,7 +180,7 @@ export const InjectedCollabCard = memo(function InjectedCollabCard({
       <div
         data-collab-notice={expanded ? 'expanded' : 'collapsed'}
         className={`relative min-w-0 w-full max-w-[720px] overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] ${
-          speech.status === 'idle' ? '' : 'shadow-[inset_3px_0_0_var(--color-brand)]'
+          speech.status === 'idle' ? '' : 'shadow-[inset_-3px_0_0_var(--color-brand)]'
         }`}
       >
         <span aria-hidden="true" className="absolute inset-y-0 left-0 w-[3px] bg-[var(--color-brand)]" />
