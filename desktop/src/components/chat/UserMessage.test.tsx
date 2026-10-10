@@ -158,8 +158,11 @@ describe('UserMessage system notice', () => {
 
     const strip = stripOf(container)
     expect(strip).toBeTruthy()
-    // 撞色根因：不再使用用户气泡底色 / 右对齐。
-    expect(strip?.className).toContain('bg-[var(--color-info-container)]')
+    // 撞色根因：不再使用用户气泡底色 / 右对齐；也不再是「告警感」的 info 砖红
+    // （设计规范 2db6903d：中性填充 + 近黑正文）。
+    expect(strip?.className).toContain('bg-[var(--color-surface-container-highest)]')
+    expect(strip?.className).not.toContain('--color-info-container')
+    expect(strip?.className).not.toContain('--color-on-info-container')
     expect(strip?.className).not.toContain('--color-surface-user-msg')
     expect(container.querySelector('[data-message-shell="user"]')).toBeNull()
     // 容器居中、内容自适应宽度带上限、无边框、圆角与内边距。
@@ -172,14 +175,14 @@ describe('UserMessage system notice', () => {
     expect(strip?.className).toContain('px-3')
     expect(strip?.className).toContain('py-1.5')
     expect(strip?.className).toContain('text-[13px]')
-    expect(strip?.className).toContain('text-[var(--color-on-info-container)]')
+    expect(strip?.className).toContain('text-[var(--color-text-primary)]')
     // 正文 + 图标 + 时间戳。
     const body = strip?.querySelector<HTMLElement>('[data-message-body="system-notice"]')
     expect(body?.textContent).toBe(content)
     expect(body?.style.overflowWrap).toBe('anywhere')
     const icon = strip?.querySelector<HTMLElement>('.material-symbols-outlined')
     expect(icon?.textContent).toBe('info')
-    expect(icon?.className).toContain('text-[var(--color-info)]')
+    expect(icon?.className).toContain('text-[var(--color-text-secondary)]')
     expect(strip?.textContent).toContain('just now')
   })
 

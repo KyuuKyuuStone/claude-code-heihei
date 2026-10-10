@@ -153,6 +153,11 @@ const STATUS_PAIRS = [
   // or darker (ink themes) face than the two above. Celadon clears it by only
   // ~0.2, so this is the pair most likely to regress on a palette tweak.
   { name: 'tertiary-on-popover', fill: '--color-surface-container-lowest', text: '--color-text-tertiary' },
+  // 系统通知内条（UserMessage 的 isSystemNotice 分支，设计规范 2db6903d）：中性填充
+  // `--cc-bd` + 正文 `--cc-t1`。原为 info 砖红配色，观感像「告警/出错了」故改中性；
+  // 这里把新方案纳入棘轮，防将来调色回归。图标弱半档用 t2，**不**入表：非文本图标
+  // 按 WCAG 1.4.11 只需 3.0，按本表的 4.5 断言是错的。
+  { name: 'system-notice', fill: '--color-surface-container-highest', text: '--color-text-primary' },
 ] as const
 
 describe('status palette contrast', () => {

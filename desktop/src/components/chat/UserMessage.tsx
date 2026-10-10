@@ -126,11 +126,11 @@ export const UserMessage = memo(function UserMessage({ content, attachments, bra
       <div className="mb-5 flex justify-center">
         <div
           data-message-shell="system-notice"
-          className="flex w-fit min-w-0 max-w-[85%] items-start gap-2 rounded-[var(--radius-md)] bg-[var(--color-info-container)] px-3 py-1.5 text-[13px] leading-5 text-[var(--color-on-info-container)]"
+          className="flex w-fit min-w-0 max-w-[85%] items-start gap-2 rounded-[var(--radius-md)] bg-[var(--color-surface-container-highest)] px-3 py-1.5 text-[13px] leading-5 text-[var(--color-text-primary)]"
         >
           <span
             aria-hidden="true"
-            className="material-symbols-outlined shrink-0 text-[14px] leading-5 text-[var(--color-info)]"
+            className="material-symbols-outlined shrink-0 text-[14px] leading-5 text-[var(--color-text-secondary)]"
           >
             info
           </span>
