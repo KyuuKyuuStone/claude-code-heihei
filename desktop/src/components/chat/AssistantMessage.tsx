@@ -14,6 +14,8 @@ import { AssistantOutputTargetCard } from './AssistantOutputTargetCard'
 import { openPreviewLink } from '../../lib/openPreviewLink'
 import { extractAssistantOutputTargets } from '../../lib/assistantOutputTargets'
 import { useWorkspacePanelStore } from '../../stores/workspacePanelStore'
+import { useSettingsStore } from '../../stores/settingsStore'
+import { useSpeech } from '../../lib/speech/useSpeech'
 import { useTranslation, type TranslationKey } from '../../i18n'
 
 type Props = {
@@ -22,6 +24,8 @@ type Props = {
   branchAction?: MessageBranchAction
   sessionId?: string
   timestamp?: number
+  /** 消息 id：用于朗读绑定（与操作条的朗读键同一 id）。 */
+  messageId?: string
   /** This turn's real changed files (absolute), used to anchor output chips onto
    *  files that were actually written instead of guessing from the prose. */
   turnChangedFiles?: string[]
@@ -31,9 +35,17 @@ type Props = {
 
 const MAX_CARDS = 3
 
-export const AssistantMessage = memo(function AssistantMessage({ content, isStreaming, branchAction, sessionId, timestamp, turnChangedFiles, turnCompletion }: Props) {
+export const AssistantMessage = memo(function AssistantMessage({ content, isStreaming, branchAction, sessionId, timestamp, messageId, turnChangedFiles, turnCompletion }: Props) {
   const t = useTranslation()
   const workDir = useWorkspacePanelStore((s) => (sessionId ? s.statusBySession[sessionId]?.workDir : undefined))
+  const speechRate = useSettingsStore((state) => state.speechRate)
+  // 朗读中的消息本体提示：左对齐卡用 inset 左侧描边（边承重教义；不用软填充铺底）。
+  const speech = useSpeech({
+    messageId,
+    text: content,
+    rate: speechRate,
+    codeBlockPlaceholder: t('speech.codeBlockPlaceholder'),
+  })
 
   const [openWith, setOpenWith] = useState<{ items: OpenWithItem[]; anchor: DOMRect } | null>(null)
 
@@ -103,7 +115,12 @@ export const AssistantMessage = memo(function AssistantMessage({ content, isStre
       >
         <div
           onContextMenu={sessionId ? handleContextMenu : undefined}
-          className={`rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] px-5 py-4 text-[14.5px] text-[var(--color-text-primary)] shadow-[var(--shadow-card)] ${
+          data-tts={speech.status === 'idle' ? undefined : speech.status}
+          className={`rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] px-5 py-4 text-[14.5px] text-[var(--color-text-primary)] ${
+            speech.status === 'idle'
+              ? 'shadow-[var(--shadow-card)]'
+              : 'shadow-[inset_3px_0_0_var(--color-brand),var(--shadow-card)]'
+          } ${
             documentLayout ? 'w-full' : 'max-w-full'
           }`}
         >
@@ -146,6 +163,7 @@ export const AssistantMessage = memo(function AssistantMessage({ content, isStre
         <MessageActionBar
           copyText={isStreaming ? undefined : content}
           copyLabel={t('chat.copyReply')}
+          messageId={messageId}
           branchAction={branchAction}
           align="start"
           // The stamp above already carries this turn's end time; a hover chip

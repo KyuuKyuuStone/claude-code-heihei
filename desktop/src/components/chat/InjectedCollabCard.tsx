@@ -8,6 +8,8 @@ import type { KeyboardEvent, ReactNode } from 'react'
 import { useTranslation } from '../../i18n'
 import type { TranslationKey } from '../../i18n/locales/en'
 import { copyTextToClipboard } from '../../lib/clipboard'
+import { useSpeech } from '../../lib/speech/useSpeech'
+import { useSettingsStore } from '../../stores/settingsStore'
 import { Badge } from '@/components/ui/Badge'
 import { MessageActionBar, type MessageBranchAction } from './MessageActionBar'
 
@@ -141,6 +143,8 @@ type InjectedCollabCardProps = {
   timestamp?: number
   branchAction?: MessageBranchAction
   children: ReactNode
+  /** 消息 id：用于朗读绑定（与操作条的朗读键同一 id）。 */
+  messageId?: string
 }
 
 export const InjectedCollabCard = memo(function InjectedCollabCard({
@@ -148,10 +152,19 @@ export const InjectedCollabCard = memo(function InjectedCollabCard({
   content,
   timestamp,
   branchAction,
+  messageId,
   children,
 }: InjectedCollabCardProps) {
   const t = useTranslation()
   const [expanded, setExpanded] = useState(false)
+  const speechRate = useSettingsStore((state) => state.speechRate)
+  // 朗读中的消息本体提示：协作卡为左对齐卡，用左侧 inset 描边（playing/paused 都保留）。
+  const speech = useSpeech({
+    messageId,
+    text: content,
+    rate: speechRate,
+    codeBlockPlaceholder: t('speech.codeBlockPlaceholder'),
+  })
 
   const dirLabel = notice.role
     ? notice.kind === 'dispatch'
@@ -165,7 +178,9 @@ export const InjectedCollabCard = memo(function InjectedCollabCard({
     <div className="mb-5 flex justify-start">
       <div
         data-collab-notice={expanded ? 'expanded' : 'collapsed'}
-        className="relative min-w-0 w-full max-w-[720px] overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)]"
+        className={`relative min-w-0 w-full max-w-[720px] overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] ${
+          speech.status === 'idle' ? '' : 'shadow-[inset_3px_0_0_var(--color-brand)]'
+        }`}
       >
         <span aria-hidden="true" className="absolute inset-y-0 left-0 w-[3px] bg-[var(--color-brand)]" />
         <NoticeHeader notice={notice} expanded={expanded} meta={meta} onToggle={() => setExpanded((value) => !value)} />
@@ -178,6 +193,7 @@ export const InjectedCollabCard = memo(function InjectedCollabCard({
               <MessageActionBar
                 copyText={content}
                 copyLabel={t('chat.copyPrompt')}
+                messageId={messageId}
                 branchAction={branchAction}
                 align="start"
                 timestamp={timestamp}

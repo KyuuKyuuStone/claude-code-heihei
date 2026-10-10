@@ -77,6 +77,7 @@ import { useTabStore } from '../../stores/tabStore'
 import { useTeamStore } from '../../stores/teamStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useTranslation } from '../../i18n'
+import { speechService } from '../../lib/speech/speechService'
 import { AssistantMessage } from './AssistantMessage'
 import { ToolCallGroup } from './ToolCallGroup'
 import { StreamingIndicator } from './StreamingIndicator'
@@ -420,6 +421,11 @@ export function MessageList({ sessionId, compact = false, mobileLayout = false }
       earlierHistoryPrependAnchorRef.current = null
     }
   }, [earlierHistoryStatus])
+
+  // 朗读：切换会话 tab 即停（消息组件卸载不停，service 在模块层；应用失焦也不停）。
+  useEffect(() => {
+    speechService.stop()
+  }, [resolvedSessionId])
 
   // prepend 提交后恢复视口：scrollTop += 新增内容高度，用户看到的消息保持原位。
   useLayoutEffect(() => {

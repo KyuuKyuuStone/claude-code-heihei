@@ -1,6 +1,10 @@
-import { Check, Copy, GitFork } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import type { PointerEvent as ReactPointerEvent } from 'react'
+import { Check, Copy, GitFork, Pause, Play, Volume2 } from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { useTranslation } from '../../i18n'
 import { formatExactMessageTimestamp, formatMessageHoverTime } from '../../lib/formatMessageTimestamp'
+import { useSpeech } from '../../lib/speech/useSpeech'
 import { CopyButton } from '@/components/ui/CopyButton'
 import { IconButton } from '@/components/ui/IconButton'
 
@@ -28,6 +32,8 @@ type Props = {
   branchAction?: MessageBranchAction
   align?: 'start' | 'end'
   timestamp?: number
+  /** 消息 id：有它才挂朗读键（朗读源与 copyText 同源）。 */
+  messageId?: string
 }
 
 export function MessageActionBar({
@@ -36,8 +42,11 @@ export function MessageActionBar({
   branchAction,
   align = 'start',
   timestamp,
+  messageId,
 }: Props) {
   const locale = useSettingsStore((state) => state.locale)
+  const speechRate = useSettingsStore((state) => state.speechRate)
+  const t = useTranslation()
   const hasCopy = Boolean(copyText?.trim())
   const hoverTimeLabel = typeof timestamp === 'number'
     ? formatMessageHoverTime(timestamp, locale)
@@ -46,13 +55,49 @@ export function MessageActionBar({
     ? formatExactMessageTimestamp(timestamp, locale)
     : ''
 
+  // 朗读（TTS）：一处实现，三调用点生效（助手/用户/协作卡都从这里拿 chip）。
+  const speech = useSpeech({
+    messageId,
+    text: copyText ?? '',
+    rate: speechRate,
+    codeBlockPlaceholder: t('speech.codeBlockPlaceholder'),
+  })
+  const showTts = hasCopy && Boolean(messageId) && speech.visible
+  const ttsStatus = showTts ? speech.status : 'idle'
+
+  // aria-live 只播「状态切换事件」文案，不做常驻状态区；续播与首播分别播报。
+  const [liveText, setLiveText] = useState('')
+  const previousStatus = useRef<'idle' | 'speaking' | 'paused'>('idle')
+  useEffect(() => {
+    const previous = previousStatus.current
+    previousStatus.current = ttsStatus
+    if (previous === ttsStatus) return
+    if (ttsStatus === 'speaking') {
+      setLiveText(previous === 'paused' ? t('speech.liveResumed') : t('speech.liveStart'))
+      return
+    }
+    setLiveText(ttsStatus === 'paused' ? t('speech.livePaused') : '')
+  }, [ttsStatus, t])
+
   if (!hasCopy && !branchAction) return null
+
+  const ttsLabel = ttsStatus === 'speaking'
+    ? t('speech.pause')
+    : ttsStatus === 'paused'
+      ? t('speech.resume')
+      : t('speech.play')
 
   return (
     <div
       data-message-actions
       data-align={align}
-      className={`pointer-events-none mt-2 flex h-7 w-full opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 ${
+      data-tts-state={ttsStatus}
+      // 朗读中的消息：chip 常驻可见（覆盖操作条自身的 hover 显现规则）。
+      className={`mt-2 flex h-7 w-full transition-opacity duration-150 ${
+        ttsStatus === 'speaking'
+          ? 'pointer-events-auto opacity-100'
+          : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100'
+      } ${
         align === 'end' ? 'justify-end' : 'justify-start'
       }`}
     >
@@ -79,6 +124,27 @@ export function MessageActionBar({
             onPointerUp={(event) => event.currentTarget.blur()}
           />
         ) : null}
+        {showTts ? (
+          // 严禁用 IconButton 的 pressed：其常驻填充 --color-surface-selected 与用户气泡同底色。
+          <IconButton
+            icon={
+              ttsStatus === 'speaking'
+                ? <Pause size={13} strokeWidth={2.2} aria-hidden="true" />
+                : ttsStatus === 'paused'
+                  ? <Play size={13} strokeWidth={2.2} aria-hidden="true" />
+                  : <Volume2 size={13} strokeWidth={2.2} aria-hidden="true" />
+            }
+            label={ttsLabel}
+            size="sm"
+            tone={ttsStatus === 'speaking' ? 'brand' : ttsStatus === 'paused' ? 'secondary' : 'muted'}
+            shape="circle"
+            onClick={speech.toggle}
+            onPointerUp={(event: ReactPointerEvent<HTMLButtonElement>) => event.currentTarget.blur()}
+          />
+        ) : null}
+        {showTts && speech.truncated && ttsStatus !== 'idle' ? (
+          <span className="text-[11px] text-[var(--color-text-tertiary)]">{t('speech.truncated')}</span>
+        ) : null}
         {hoverTimeLabel ? (
           <span
             className="ml-1 inline-flex items-center text-[11px] font-medium tabular-nums text-[var(--color-text-tertiary)]"
@@ -86,6 +152,9 @@ export function MessageActionBar({
           >
             {hoverTimeLabel}
           </span>
+        ) : null}
+        {showTts ? (
+          <span className="sr-only" aria-live="polite">{liveText}</span>
         ) : null}
       </div>
     </div>

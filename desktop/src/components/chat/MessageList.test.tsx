@@ -22,6 +22,7 @@ import { useSessionStore } from '../../stores/sessionStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
 import { formatExactMessageTimestamp, formatMessageHoverTime } from '../../lib/formatMessageTimestamp'
+import { speechService } from '../../lib/speech/speechService'
 import type { UIMessage } from '../../types/chat'
 import type { PerSessionState } from '../../stores/chatStore'
 import { FindInPageModal } from '../search/FindInPageModal'
@@ -286,6 +287,37 @@ describe('MessageList nested tool calls', () => {
     for (const item of container.querySelectorAll('[data-virtual-message-item]')) {
       expect((item as HTMLElement).className).not.toContain('chat-render-item--cv')
     }
+  })
+
+  // 朗读：切换会话 tab 即停（消息组件卸载不停、应用失焦不停——service 在模块层）。
+  it('stops message reading when the active session changes', () => {
+    class StubUtterance {
+      text: string
+      rate = 1
+      voice: unknown = null
+      onend: (() => void) | null = null
+      onerror: (() => void) | null = null
+      constructor(text: string) {
+        this.text = text
+      }
+    }
+    vi.stubGlobal('speechSynthesis', {
+      speak: vi.fn(),
+      cancel: vi.fn(),
+      getVoices: () => [{ lang: 'zh-CN', name: 'zh' }],
+      addEventListener: vi.fn(),
+    })
+    vi.stubGlobal('SpeechSynthesisUtterance', StubUtterance)
+
+    const { rerender } = render(<MessageList sessionId="session-a" />)
+    act(() => {
+      speechService.play('m1', ['一句话。'], 1)
+    })
+    expect(speechService.getSnapshot().status).not.toBe('idle')
+
+    rerender(<MessageList sessionId="session-b" />)
+    expect(speechService.getSnapshot().status).toBe('idle')
+    expect(speechService.getSnapshot().currentMessageId).toBeNull()
   })
 
   it('finds, mounts, navigates, and highlights matches outside a 120-item virtual window', async () => {

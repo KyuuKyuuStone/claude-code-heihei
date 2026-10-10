@@ -31,6 +31,11 @@ import {
   normalizeAppZoomLevel,
   readStoredAppZoomLevel,
 } from '../lib/appZoom'
+import {
+  normalizeSpeechRate,
+  persistSpeechRate,
+  readStoredSpeechRate,
+} from '../lib/speech/speechRate'
 import { useUIStore } from './uiStore'
 import {
   applyDocumentLocale,
@@ -75,6 +80,8 @@ type SettingsStore = {
   traceCapture: TraceCaptureSettings
   responseLanguage: string
   uiZoom: number
+  /** 消息朗读语速（0.5–2.0，纯 localStorage 偏好，不走服务端 updateUser）。 */
+  speechRate: number
   isLoading: boolean
   error: string | null
 
@@ -104,6 +111,7 @@ type SettingsStore = {
   fetchAppMode: () => Promise<void>
   setAppMode: (mode: AppMode, portableDir?: string | null) => Promise<void>
   setUiZoom: (zoom: number) => void
+  setSpeechRate: (rate: number) => void
 }
 
 type NetworkSettingsInput = Partial<Omit<NetworkSettings, 'proxy'>> & {
@@ -175,6 +183,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   traceCapture: DEFAULT_TRACE_CAPTURE_SETTINGS,
   responseLanguage: '',
   uiZoom: readStoredAppZoomLevel(),
+  speechRate: readStoredSpeechRate(),
   isLoading: false,
   error: null,
 
@@ -189,6 +198,11 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     const level = normalizeAppZoomLevel(zoom)
     set({ uiZoom: level })
     void applyAppZoomLevel(level)
+  },
+  setSpeechRate: (rate: number) => {
+    const level = normalizeSpeechRate(rate)
+    set({ speechRate: level })
+    persistSpeechRate(level)
   },
 
   fetchAll: async () => {

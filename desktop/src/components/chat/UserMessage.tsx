@@ -4,6 +4,8 @@ import type { UIAttachment } from '../../types/chat'
 import { useTranslation } from '../../i18n'
 import type { TranslationKey } from '../../i18n/locales/en'
 import { openPreviewLink } from '../../lib/openPreviewLink'
+import { useSpeech } from '../../lib/speech/useSpeech'
+import { useSettingsStore } from '../../stores/settingsStore'
 import { splitTextByUrls } from '../../lib/urlBoundary'
 import { AttachmentGallery } from './AttachmentGallery'
 import { MessageActionBar, type MessageBranchAction } from './MessageActionBar'
@@ -39,11 +41,22 @@ type Props = {
   sessionId?: string
   /** v1.7.1 协作通知折叠：流式写入中的消息不折叠（设计稿 §1.3/§7.4）。 */
   pending?: boolean
+  /** 消息 id：用于朗读绑定（与操作条的朗读键同一 id）。 */
+  messageId?: string
 }
 
-export const UserMessage = memo(function UserMessage({ content, attachments, branchAction, timestamp, sessionId, pending }: Props) {
+export const UserMessage = memo(function UserMessage({ content, attachments, branchAction, timestamp, sessionId, pending, messageId }: Props) {
   const t = useTranslation()
   const hasText = content.trim().length > 0
+  const speechRate = useSettingsStore((state) => state.speechRate)
+  // 朗读中的消息本体提示：用户气泡右对齐，镜像到右缘（-3px）。
+  const speech = useSpeech({
+    messageId,
+    text: content,
+    rate: speechRate,
+    codeBlockPlaceholder: t('speech.codeBlockPlaceholder'),
+  })
+  const ttsInset = speech.status === 'idle' ? '' : 'shadow-[inset_-3px_0_0_var(--color-brand)]'
 
   // The prompt is literal text, NOT markdown — `**`, `#` and file paths have to
   // stay exactly as the user typed them. So instead of running it through the
@@ -113,6 +126,7 @@ export const UserMessage = memo(function UserMessage({ content, attachments, bra
         content={content}
         timestamp={timestamp}
         branchAction={branchAction}
+        messageId={messageId}
       >
         {promptBody}
       </InjectedCollabCard>
@@ -164,7 +178,7 @@ export const UserMessage = memo(function UserMessage({ content, attachments, bra
           )}
 
           {promptBody && (
-            <div className="min-w-0 max-w-full rounded-[var(--radius-lg)] bg-[var(--color-surface-user-msg)] px-[18px] py-[13px] text-[14.5px] leading-relaxed text-[var(--color-text-primary)]">
+            <div className={`min-w-0 max-w-full rounded-[var(--radius-lg)] bg-[var(--color-surface-user-msg)] px-[18px] py-[13px] text-[14.5px] leading-relaxed text-[var(--color-text-primary)] ${ttsInset}`}>
               {promptBody}
             </div>
           )}
@@ -174,6 +188,7 @@ export const UserMessage = memo(function UserMessage({ content, attachments, bra
           <MessageActionBar
             copyText={content}
             copyLabel={t('chat.copyPrompt')}
+            messageId={messageId}
             branchAction={branchAction}
             align="end"
             timestamp={timestamp}
