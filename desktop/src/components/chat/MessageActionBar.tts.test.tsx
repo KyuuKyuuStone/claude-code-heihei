@@ -156,6 +156,49 @@ describe('MessageActionBar 朗读键（渲染与降级）', () => {
     expect(speechService.getSnapshot().status).toBe('paused')
   })
 
+  it('播放中 voices 丢失后进入 paused ⇒ chip 仍常驻，「继续朗读」仍可点', () => {
+    installEngine()
+    const { container } = render(<MessageActionBar copyText="一句话。" copyLabel="复制" messageId="m1" />)
+    const bar = () => container.querySelector('[data-message-actions]') as HTMLElement
+
+    act(() => screen.getByLabelText('朗读本条消息').click())
+    act(() => screen.getByLabelText('暂停朗读').click())
+    expect(speechService.getSnapshot().status).toBe('paused')
+
+    // 暂停期间引擎广播 voiceschanged 且列表已空 ⇒ canSpeak 变假（引擎判为不可用）。
+    voices = []
+    act(() => voicesChangedListener?.())
+    expect(speechService.getSnapshot().canSpeak).toBe(false)
+    expect(speechService.getSnapshot().status).toBe('paused')
+
+    // 承重组合：paused + canSpeak 假 —— chip 与「继续朗读」入口都不得消失。
+    expect(bar().getAttribute('data-tts-state')).toBe('paused')
+    expect(bar().className).not.toContain('opacity-0')
+    expect(bar().className).toContain('opacity-100')
+
+    const resumeChip = screen.getByLabelText('继续朗读') as HTMLButtonElement
+    expect(resumeChip.disabled).toBe(false)
+    act(() => resumeChip.click())
+    expect(speechService.getSnapshot().status).toBe('speaking')
+  })
+
+  it('voices 已丢失时才暂停同样常驻（先丢后暂停的顺序变体）', () => {
+    installEngine()
+    const { container } = render(<MessageActionBar copyText="一句话。" copyLabel="复制" messageId="m1" />)
+    const bar = () => container.querySelector('[data-message-actions]') as HTMLElement
+
+    act(() => screen.getByLabelText('朗读本条消息').click())
+    voices = []
+    act(() => voicesChangedListener?.())
+    expect(speechService.getSnapshot().canSpeak).toBe(false)
+
+    // canSpeak 已假时仍能暂停（chip 还在），随后 paused 态继续常驻。
+    act(() => screen.getByLabelText('暂停朗读').click())
+    expect(speechService.getSnapshot().status).toBe('paused')
+    expect(bar().className).not.toContain('opacity-0')
+    expect(screen.getByLabelText('继续朗读')).toBeTruthy()
+  })
+
   it('点另一条消息只重建一次队列（toggle 不再多调一次 setRate）', () => {
     installEngine()
     const setRateSpy = vi.spyOn(speechService, 'setRate')
