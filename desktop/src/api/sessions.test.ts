@@ -8,6 +8,36 @@ describe('sessionsApi', () => {
     vi.restoreAllMocks()
   })
 
+  // v1.7.5：413 自愈端点。URL 与空对象体均由契约定死，别再改。
+  it('posts an empty body to the shed-payload endpoint', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      ok: true,
+      sessionId: 'oversized-session',
+      bytesBefore: 8_388_608,
+      bytesAfter: 1_048_576,
+      mediaBlocksRemoved: 3,
+      textBlocksTruncated: 1,
+      messagesTouched: 4,
+      backupPath: '/tmp/backup.jsonl',
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+    setBaseUrl('http://127.0.0.1:49237')
+    const result = await sessionsApi.shedPayload('oversized-session')
+
+    expect(result.bytesBefore).toBe(8_388_608)
+    expect(result.mediaBlocksRemoved).toBe(3)
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(url).toBe('http://127.0.0.1:49237/api/sessions/oversized-session/shed-payload')
+    expect(init).toMatchObject({
+      method: 'POST',
+      body: JSON.stringify({}),
+    })
+  })
+
   it('posts branch requests to the session branch endpoint', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch')
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({

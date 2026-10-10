@@ -33,6 +33,10 @@ export const kr: Record<TranslationKey, string> = {
   'chat.loadingEarlier': '이전 메시지 불러오는 중…',
   'chat.copyPrompt': '프롬프트 복사',
   'chat.copyPath': '경로 복사',
+  'chat.shedPayload.action': '세션 복구',
+  'chat.shedPayload.running': '세션 복구 중…',
+  'chat.shedPayload.done': '{mb} MB를 확보했습니다. 다시 보낼 수 있습니다',
+  'chat.shedPayload.failed': '복구 실패: {message}',
   'common.dismissNotification': '알림 닫기',
 
   // ─── Sidebar ──────────────────────────────────────

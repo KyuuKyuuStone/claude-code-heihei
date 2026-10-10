@@ -23,6 +23,7 @@ import {
   MemoryEventCard,
   SelectableChatMessage,
 } from './cards'
+import { ShedPayloadAction } from './ShedPayloadAction'
 
 export const MessageBlock = memo(function MessageBlock({
   sessionId,
@@ -163,6 +164,11 @@ export const MessageBlock = memo(function MessageBlock({
               {message.message}
             </div>
           )}
+          {/* v1.7.5：仅请求体超限（413）这一类错误条给「修复会话」按钮——它会反复刷
+              同一条红错把会话卡死，必须给出可直接执行的出口（纯增量，其它错误条不渲染）。 */}
+          {message.businessErrorCode === 'request_too_large' && sessionId ? (
+            <ShedPayloadAction sessionId={sessionId} />
+          ) : null}
         </div>
       )
     }

@@ -31,6 +31,10 @@ export const en = {
   'chat.loadingEarlier': 'Loading earlier messages…',
   'chat.copyPrompt': 'Copy prompt',
   'chat.copyPath': 'Copy path',
+  'chat.shedPayload.action': 'Repair session',
+  'chat.shedPayload.running': 'Repairing session…',
+  'chat.shedPayload.done': 'Freed {mb} MB — you can resend now',
+  'chat.shedPayload.failed': 'Repair failed: {message}',
   'common.dismissNotification': 'Dismiss notification',
 
   // ─── Sidebar ──────────────────────────────────────

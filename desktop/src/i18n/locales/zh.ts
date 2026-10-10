@@ -33,6 +33,10 @@ export const zh: Record<TranslationKey, string> = {
   'chat.loadingEarlier': '正在加载更早的消息…',
   'chat.copyPrompt': '复制提示词',
   'chat.copyPath': '复制路径',
+  'chat.shedPayload.action': '修复会话',
+  'chat.shedPayload.running': '正在修复会话…',
+  'chat.shedPayload.done': '已释放 {mb} MB，可重新发送',
+  'chat.shedPayload.failed': '修复失败：{message}',
   'common.dismissNotification': '关闭通知',
 
   // ─── Sidebar ──────────────────────────────────────

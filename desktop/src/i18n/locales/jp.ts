@@ -33,6 +33,10 @@ export const jp: Record<TranslationKey, string> = {
   'chat.loadingEarlier': '以前のメッセージを読み込み中…',
   'chat.copyPrompt': 'プロンプトをコピー',
   'chat.copyPath': 'パスをコピー',
+  'chat.shedPayload.action': 'セッションを修復',
+  'chat.shedPayload.running': 'セッションを修復中…',
+  'chat.shedPayload.done': '{mb} MB を解放しました。再送信できます',
+  'chat.shedPayload.failed': '修復に失敗しました：{message}',
   'common.dismissNotification': '通知を閉じる',
 
   // ─── Sidebar ──────────────────────────────────────

@@ -66,6 +66,22 @@ export type BranchSessionResponse = {
   sourceSessionId: string
   targetMessageId: string
 }
+/**
+ * v1.7.5：请求体超限（413 / businessErrorCode=request_too_large）会话的自愈入口。
+ * 服务端按需剔除媒体块 / 截断文本块，返回可释放字节的账目。
+ * 409 = NOTHING_TO_SHED（无可清理内容）；404 = 会话不存在（均按 ApiError 抛出）。
+ */
+export type ShedPayloadResponse = {
+  ok: true
+  sessionId: string
+  bytesBefore: number
+  bytesAfter: number
+  mediaBlocksRemoved: number
+  textBlocksTruncated: number
+  messagesTouched: number
+  /** 改前 transcript 的备份路径（服务端总会落一份，故非 null）。 */
+  backupPath: string
+}
 export type RepositoryBranchInfo = {
   name: string
   current: boolean
@@ -462,5 +478,17 @@ export const sessionsApi = {
     return api.post<SessionRewindResponse>(`/api/sessions/${sessionId}/rewind`, body, {
       timeout: 60_000,
     })
+  },
+
+  /**
+   * v1.7.5 413 自愈：请求体超限时按需清理该会话的历史负载（契约见 ShedPayloadResponse）。
+   * 空对象体（契约定死）；超时与 rewind 同档（要重写转录并落备份）。
+   */
+  shedPayload(sessionId: string) {
+    return api.post<ShedPayloadResponse>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/shed-payload`,
+      {},
+      { timeout: 60_000 },
+    )
   },
 }
