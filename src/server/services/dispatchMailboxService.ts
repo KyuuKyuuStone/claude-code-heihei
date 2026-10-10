@@ -62,6 +62,18 @@ const PROCESS_DELAY_MS = 200
 /** Write 工具写大文件非原子：读到半截 JSON 时按此延迟重试 */
 const READ_RETRY_DELAYS_MS = [100, 250, 400]
 const MAX_FILE_BYTES = 256 * 1024
+/**
+ * v1.7.5 专项复核（413 类「请求体过大」）：**本通道不需要接 HTTP 总闸**，理由与证据：
+ * ① 信箱投递走进程内缝 `deps.deliver`（`sessionDelivery.ts` → `sessionMessenger.deliver`），
+ *    **不构造任何 HTTP 请求体** ⇒ 不可能是 413 的来源；
+ * ② 进入本通道的载荷已被两道结构上限界住：整文件 `MAX_FILE_BYTES`(256KiB，见
+ *    `readPayloadWithRetry`：超限即 markFailed) 与 `content` 的 `MAX_CONTENT_LENGTH`
+ *    (64K 字符，`parsePayload` 超限即报错)。
+ * ③ 最终落入目标会话正文的 `content`（唯一会间接进模型请求的部分）因此 ≤64K 字符
+ *    （CJK 最坏 ≈192KB 字节）—— 远低于 `resolveSessionMessageMaxBytes()` 的 512KiB 总闸，
+ *    更远低于发送前预检的 28MB 触发阈值。
+ * 结论：**显式豁免**（非默认放过）；若将来本通道改为 HTTP 投递，必须同时接上该总闸。
+ */
 const MAX_CONTENT_LENGTH = 64 * 1024
 /**
  * 周期兜底扫描间隔（30–60s 区间取中值）。watcher 未建立/事后失效/漏事件

@@ -6,6 +6,12 @@ import {
   type ServantStallWatcherDeps,
   type StallServantInfo,
 } from '../services/servantStallWatcher.js'
+import {
+  getServantLastTurnError,
+  recordServantTurnError,
+  resetServantTurnErrorsForTests,
+  setOversizeFailureDepsForTests,
+} from '../services/servantOversizeFailure.js'
 
 /**
  * 假死自动重推（批次 3 实施①）。
@@ -24,6 +30,8 @@ const sdkConnected = new Set<string>()
 /** 会话 → 未被消费的派活条数（告警二期的触发条件） */
 const pendingDispatches = new Map<string, number>()
 const deliverMock = mock(async (_target: string, _content: string, _host: string) => true)
+/** C-B：升级通知专用投递 mock（与假死重推分开计数） */
+const escalationDeliverMock = mock(async (_target: string, _content: string, _host: string) => true)
 const listServantsMock = mock(
   async (_options: { includeAll: boolean; forSessionId?: string }): Promise<StallServantInfo[]> => [],
 )
@@ -101,6 +109,17 @@ beforeEach(() => {
   recordEventMock.mockClear()
   deliverMock.mockImplementation(async () => true)
   listServantsMock.mockImplementation(async () => [])
+  // C-B：清空「上一回合错误」登记（跨用例隔离）+ 注入升级通知缝
+  resetServantTurnErrorsForTests()
+  escalationDeliverMock.mockClear()
+  escalationDeliverMock.mockImplementation(async () => true)
+  setOversizeFailureDepsForTests({
+    deliver: escalationDeliverMock,
+    listServants: async () => [],
+    getSessionWorkDir: async () => '/proj/emp',
+    getServerPort: () => 61694,
+    recordEvent: recordEventMock,
+  } as never)
 })
 
 describe('ServantStallWatcher', () => {
@@ -125,6 +144,58 @@ describe('ServantStallWatcher', () => {
     expect(STALL_THRESHOLD_MS).toBe(10 * MIN)
   })
 
+  // ── C-B（v1.7.5）：确定性超限失败不重推，改升级通知主管 ──────────────────
+
+  test('C-B：上一回合是确定性超限失败 ⇒ 零重推 + 升级通知主管', async () => {
+    const last = nowMs
+    nowMs = last + 11 * MIN
+    listServantsMock.mockImplementation(
+      (async () =>
+        roster({ lastActivityAt: iso(last) }).map((item) =>
+          item.sessionId === SUP ? { ...item, workDir: '/proj/emp' } : item,
+        )) as never,
+    )
+    setOversizeFailureDepsForTests({
+      listServants: async () =>
+        roster({ lastActivityAt: iso(last) }).map((item) =>
+          item.sessionId === SUP ? { ...item, workDir: '/proj/emp' } : item,
+        ),
+    } as never)
+    recordServantTurnError(EMP, 'Request too large: the request body exceeds the server-side size limit.')
+    expect(getServantLastTurnError(EMP)).toContain('Request too large')
+
+    const watcher = makeWatcher()
+    await watcher.watch()
+
+    // ① 零重推：不再往必败的会话里注入假死提示
+    expect(deliveredTo(EMP)).toHaveLength(0)
+    // ② 诊断如实记一条
+    expect(actionsLogged()).toContain('deterministic-oversize-repush-skipped')
+    // ③ 升级通知主管确实发出（走系统通知通道，不是注入员工会话）
+    expect(escalationDeliverMock).toHaveBeenCalledTimes(1)
+    expect(escalationDeliverMock.mock.calls[0][0]).toBe(SUP)
+    expect(String(escalationDeliverMock.mock.calls[0][1])).toContain('请求体超限')
+
+    // ④ 同 episode 不再重复升级
+    await watcher.watch()
+    expect(escalationDeliverMock).toHaveBeenCalledTimes(1)
+    expect(deliveredTo(EMP)).toHaveLength(0)
+  })
+
+  test('C-B 反向用例：可恢复错误（429/网络）上一回合 ⇒ 仍照常重推（不误杀）', async () => {
+    const last = nowMs
+    nowMs = last + 11 * MIN
+    listServantsMock.mockImplementation(async () => roster({ lastActivityAt: iso(last) }))
+    recordServantTurnError(EMP, 'Rate limited (429): too many requests')
+
+    await makeWatcher().watch()
+
+    const toEmp = deliveredTo(EMP)
+    expect(toEmp).toHaveLength(1)
+    expect(toEmp[0]).toContain(`自动重推 1/${MAX_AUTO_REPUSH}`)
+    expect(actionsLogged()).not.toContain('deterministic-oversize-repush-skipped')
+    expect(escalationDeliverMock).not.toHaveBeenCalled()
+  })
   test('escalates to the supervisor after the maximum number of repushes', async () => {
     const last = nowMs
     nowMs = last + 11 * MIN

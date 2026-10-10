@@ -774,6 +774,29 @@ describe('CollabReport（员工）', () => {
     // 未超阈值 ⇒ 不落盘
     expect(spillFiles()).toHaveLength(0)
   })
+
+  it('P-B1 补充：超阈值时**报到台账的 summary** 也被截断，且只落一次盘', async () => {
+    const stub = startStub({ tasks: [makeTask({ status: 'in_progress' })] })
+    stopServer = stub.stop
+    useEnv({ CC_HEIHEI_DESKTOP_SERVER_URL: stub.baseUrl })
+
+    const TAIL = '-TAIL-台账独有标记-END'
+    const summary = 'B'.repeat(40_000) + TAIL
+    const { data } = await callTool(CollabReportTool, { taskId: 'task-1', summary })
+    expect((data as Record<string, unknown>).ok).toBe(true)
+
+    // 台账端点（/api/collab-tasks/:id/report）同样承载 summary ⇒ 必须一并截断
+    const reportReq = stub.received.find((item) => item.path === '/api/collab-tasks/task-1/report')
+    const ledgerSummary = String(reportReq?.body?.summary)
+    expect(ledgerSummary).not.toContain(TAIL)
+    expect(ledgerSummary).toContain('完整汇报已落盘')
+    expect(Buffer.byteLength(ledgerSummary, 'utf8')).toBeLessThan(32 * 1024)
+
+    // 全文只落一次盘（两个通道共用同一个文件，不重复写）
+    expect(spillFiles()).toHaveLength(1)
+    const spilled = readFileSync(join(workDir, '.heihei', 'reports', spillFiles()[0]!), 'utf8')
+    expect(spilled).toContain(TAIL)
+  })
 })
 
 describe('CollabReview（主管）', () => {

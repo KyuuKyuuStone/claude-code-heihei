@@ -211,8 +211,34 @@ export const CollabReportTool = buildTool({
       }
     }
 
-    /** 落盘结果惰性求值且只求值一次：buildContent 在多个分支被调用，不能重复落盘。 */
+    /** 落盘结果惰性求值且只求值一次：buildContent / buildLedgerSummary 都会调用，不能重复落盘。 */
     let spillResult: { ok: boolean; file?: string; error?: string } | undefined
+
+    /** 只在超阈值时才真正落盘；全程至多一次。 */
+    const ensureSpilled = (): { ok: boolean; file?: string; error?: string } => {
+      if (!spillResult) spillResult = spillReportBody(fullContent())
+      return spillResult
+    }
+
+    /** 超阈值时投递体里的截断摘要（未超阈值不调用）。 */
+    const buildExcerptLines = (): string[] => {
+      const spilled = ensureSpilled()
+      // 截断长度同时受「绝对上限」与「阈值的一半」约束：保证投递体（摘要+路径+提示）
+      // 无论阈值取多小都仍 < 阈值，且当阈值被 env 调小时截断真的生效（不会退化成全文）。
+      const excerptBytes = Math.min(COLLAB_REPORT_EXCERPT_MAX_BYTES, Math.floor(inlineMaxBytes / 2))
+      const lines = [`【汇报】${truncateToUtf8Bytes(summary, excerptBytes)}`]
+      if (deliverables.length > 0) lines.push('交付物：', ...deliverables.map((item) => `- ${item}`))
+      if (spilled.ok && spilled.file) {
+        lines.push(
+          `（正文过长：${Buffer.byteLength(summary, 'utf8')} 字节已超过内联上限 ${inlineMaxBytes} 字节，上面为截断摘要）`,
+          `完整汇报已落盘：${spilled.file}`,
+          '请用 Read 工具读取该文件获取全文。',
+        )
+      } else {
+        lines.push(`（正文过长，落盘失败：${spilled.error ?? 'unknown'}；以上仅为截断摘要）`)
+      }
+      return lines
+    }
 
     /**
      * 投递内容：未超阈值 ⇒ 原样（逐字节不变）；超阈值 ⇒ 截断摘要 + 落盘路径引用。
@@ -220,23 +246,19 @@ export const CollabReportTool = buildTool({
      */
     const buildContent = (): string => {
       if (Buffer.byteLength(summary, 'utf8') <= inlineMaxBytes) return fullContent()
+      return buildExcerptLines().join('\n')
+    }
 
-      if (!spillResult) spillResult = spillReportBody(fullContent())
-      // 截断长度同时受「绝对上限」与「阈值的一半」约束：保证投递体（摘要+路径+提示）
-      // 无论阈值取多小都仍 < 阈值，且当阈值被 env 调小时截断真的生效（不会退化成全文）。
-      const excerptBytes = Math.min(COLLAB_REPORT_EXCERPT_MAX_BYTES, Math.floor(inlineMaxBytes / 2))
-      const lines = [`【汇报】${truncateToUtf8Bytes(summary, excerptBytes)}`]
-      if (deliverables.length > 0) lines.push('交付物：', ...deliverables.map((item) => `- ${item}`))
-      if (spillResult.ok && spillResult.file) {
-        lines.push(
-          `（正文过长：${Buffer.byteLength(summary, 'utf8')} 字节已超过内联上限 ${inlineMaxBytes} 字节，上面为截断摘要）`,
-          `完整汇报已落盘：${spillResult.file}`,
-          '请用 Read 工具读取该文件获取全文。',
-        )
-      } else {
-        lines.push(`（正文过长，落盘失败：${spillResult.error ?? 'unknown'}；以上仅为截断摘要）`)
-      }
-      return lines.join('\n')
+    /**
+     * 台账里的 summary：**同一套阈值与截断**（v1.7.5 补齐）。
+     * 为什么：工具会把 summary 原文 POST 到 `/api/collab-tasks/:id/report`（与
+     * session-messages 同族的通道）⇒ 不截断则同样的 413 根因只是换了个端点。
+     * 全文已落盘（与投递体共用**同一个**文件），此处只留截断摘要 + 路径引用；
+     * 未超阈值时逐字节原样，台账看到的与从前完全一致。
+     */
+    const buildLedgerSummary = (): string => {
+      if (Buffer.byteLength(summary, 'utf8') <= inlineMaxBytes) return summary
+      return buildExcerptLines().join('\n')
     }
 
     /** 写 report 信箱（第一步失败或投递失败时的降级）。 */
@@ -254,7 +276,7 @@ export const CollabReportTool = buildTool({
           ? {
               report: {
                 taskId,
-                summary,
+                summary: buildLedgerSummary(),
                 ...(deliverables.length > 0 ? { deliverables } : {}),
               },
             }
@@ -377,7 +399,8 @@ export const CollabReportTool = buildTool({
 
     const reportPath = `${COLLAB_API_PATHS.collabTasks}/${encodeURIComponent(taskId)}/report`
     const reportBody = {
-      summary,
+      // 超阈值 ⇒ 截断摘要 + 落盘路径（同一套阈值/同一个文件，见 buildLedgerSummary）
+      summary: buildLedgerSummary(),
       ...(deliverables.length > 0 ? { deliverables } : {}),
       callerSessionId: runtime.sessionId,
     }

@@ -40,6 +40,7 @@ import {
 } from '../services/reportTargetResolver.js'
 import { sameProject } from '../../collaboration/projectPath.js'
 import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
+import { assertPayloadWithinLimit } from '../services/messageSizeLimits.js'
 
 // ── session-messages 正文长度总闸（P-B1 协作通道限长）────────────────────────
 //
@@ -47,37 +48,17 @@ import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 // 工具侧直接 POST 巨型 content 把请求体顶到链路上限（HTTP 413）。这里是**兜底
 // 总闸**：超限一律结构化拒绝（413），不静默截断、不 500。
 //
-// 取值依据：工具侧内联阈值默认 32KiB，其落盘后的投递体（截断摘要 ≤4KiB + 路径 +
-// 提示 + 交付物）约 5KiB 量级，服务端再追加页脚也就 +几百字节。总闸取 512KiB，
-// 相对该投递体留 ≈100× 余量 —— 足够大，正常派活/汇报（几 KB~几十 KB）绝
-// 不会被误伤；又足够小，能挡住把链路顶爆的巨型正文。可用 CC_HEIHEI_SESSION_MESSAGE_MAX_BYTES 覆盖。
-export const SESSION_MESSAGE_MAX_BYTES_ENV = 'CC_HEIHEI_SESSION_MESSAGE_MAX_BYTES'
-const DEFAULT_SESSION_MESSAGE_MAX_BYTES = 512 * 1024
-
-/** 正整数 env 解析（跟随 cronScheduler.resolveCronTaskTimeoutMs 写法）：非法/缺失回退默认。 */
-export function resolveSessionMessageMaxBytes(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env[SESSION_MESSAGE_MAX_BYTES_ENV]?.trim()
-  if (!raw) return DEFAULT_SESSION_MESSAGE_MAX_BYTES
-  const parsed = Number(raw)
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_SESSION_MESSAGE_MAX_BYTES
-}
+// 实现落在 L2 `services/messageSizeLimits.ts` 并**与 report 端点共用**——L4 内部
+// 禁止同层互依（layer-L4-no-same-layer），阈值只能向下放；这样两处就不会各写一套。
+// 阈值（默认 512KiB，env `CC_HEIHEI_SESSION_MESSAGE_MAX_BYTES` 可覆盖）与取值依据
+// 见该模块。
 
 /**
- * 正文长度校验：超限 ⇒ ApiError(413)（结构化 {error,message}，带实测/上限数值）。
- * 在校验阶段就拒绝，早于 recordDelivery/deliver —— 超限消息绝不投递、也不留回执。
+ * session-messages 正文校验：超限 ⇒ ApiError(413)。在校验阶段就拒绝，早于
+ * recordDelivery/deliver —— 超限消息绝不投递、也不留回执。
  */
 function assertSessionMessageWithinLimit(rawContent: unknown): void {
-  const content = typeof rawContent === 'string' ? rawContent : String(rawContent ?? '')
-  const bytes = Buffer.byteLength(content, 'utf8')
-  const limit = resolveSessionMessageMaxBytes()
-  if (bytes > limit) {
-    throw new ApiError(
-      413,
-      `Field "content" is too large: ${bytes} bytes (UTF-8) exceeds the ${limit} byte limit. ` +
-        '大正文请先落盘，只发送「摘要 + 文件路径」，不要把全文塞进消息正文。',
-      'PAYLOAD_TOO_LARGE',
-    )
-  }
+  assertPayloadWithinLimit(rawContent, 'content')
 }
 
 export async function handleServantsApi(

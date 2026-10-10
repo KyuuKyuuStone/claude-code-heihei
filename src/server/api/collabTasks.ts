@@ -15,6 +15,7 @@
 
 import * as path from 'path'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
+import { assertPayloadWithinLimit } from '../services/messageSizeLimits.js'
 import { collabTaskService, isTaskStatus, type Task } from '../services/collabTaskService.js'
 import { servantService } from '../services/servantService.js'
 import { sessionService } from '../services/sessionService.js'
@@ -132,6 +133,11 @@ export async function handleCollabTasksApi(
       const deliverables = Array.isArray(body.deliverables)
         ? body.deliverables.filter((item): item is string => typeof item === 'string')
         : undefined
+      // v1.7.5 补齐：report 端点同样承载大正文（summary/deliverables 都会进请求体），
+      // 此前只有 session-messages 有总闸 ⇒ 这里是绕过面。复用**同一套**阈值与错误形态，
+      // 拦在 reportTask 之前（超限不推进台账、不改任何状态）。
+      assertPayloadWithinLimit(summary, 'summary')
+      if (deliverables) assertPayloadWithinLimit(deliverables.join('\n'), 'deliverables')
       const id = decodeURIComponent(taskId)
       // v1.6.0 CLI 契约 §三：带 callerSessionId 时校验调用方身份，闭合审查「低 1」。
       // 不带时维持现状（兼容旧调用方），v1.7 再改成必填。

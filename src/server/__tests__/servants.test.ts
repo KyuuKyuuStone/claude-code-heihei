@@ -1924,7 +1924,7 @@ describe('Session Messages API', () => {
   }
 
   it('P-B1：content 超上限 ⇒ 413 结构化拒绝（可读、带实测/上限），且不投递', async () => {
-    const { resolveSessionMessageMaxBytes } = await import('../api/servants.js')
+    const { resolveSessionMessageMaxBytes } = await import('../services/messageSizeLimits.js')
     // 默认兜底总闸是 512KiB；这里用 env 覆盖成小值，既验覆盖也省事
     expect(resolveSessionMessageMaxBytes({} as NodeJS.ProcessEnv)).toBe(512 * 1024)
     process.env.CC_HEIHEI_SESSION_MESSAGE_MAX_BYTES = '1024'
@@ -1955,7 +1955,7 @@ describe('Session Messages API', () => {
   })
 
   it('P-B1：恰好等于上限的 content 照常投递（总闸不误伤正常消息）', async () => {
-    const { resolveSessionMessageMaxBytes } = await import('../api/servants.js')
+    const { resolveSessionMessageMaxBytes } = await import('../services/messageSizeLimits.js')
     process.env.CC_HEIHEI_SESSION_MESSAGE_MAX_BYTES = '1024'
     try {
       const limit = resolveSessionMessageMaxBytes()

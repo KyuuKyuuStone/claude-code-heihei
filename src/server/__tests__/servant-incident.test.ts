@@ -11,13 +11,20 @@ import {
 } from '../services/servantIncidentNotifier.js'
 import { markCrashed, markStarting, registerSession } from '../services/sessionRegistry.js'
 import { resetSessionEventsForTests } from '../services/sessionEvents.js'
+import {
+  isDeterministicOversizeError,
+  resetServantTurnErrorsForTests,
+  setOversizeFailureDepsForTests,
+} from '../services/servantOversizeFailure.js'
 
 let tmpDir: string
 const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
 /** R1 活性自检专用会话（independent of 用例；自检后处于 crashed 态无副作用） */
 const CRASH_LIVENESS_PROBE = 'crash-liveness-probe'
 
-const deliverMock = mock(async () => true)
+const deliverMock = mock(async (_target: string, _content: string, _host: string) => true)
+/** C-B：升级通知专用投递 mock（与员工续跑注入分开计数） */
+const escalationDeliverMock = mock(async (_target: string, _content: string, _host: string) => true)
 const getServantMock = mock(async (id: string) => null)
 const listServantsMock = mock(async () => [])
 const recordEventMock = mock((_input: {
@@ -46,6 +53,19 @@ beforeEach(async () => {
     recordEvent: recordEventMock,
   })
   resetServantIncidentState()
+  resetServantTurnErrorsForTests()
+  // C-B：升级通知走独立缝（不复用 incident 的 deliver）——这样能分辨
+  // 「是否给死掉的员工会话注入了续跑」与「是否通知了主管」两件事
+  escalationDeliverMock.mockClear()
+  escalationDeliverMock.mockImplementation(async () => true)
+  // 整体 as never：注入缝的迁移常用写法（同 roster-change-notice 测试）
+  setOversizeFailureDepsForTests({
+    deliver: escalationDeliverMock,
+    listServants: async () => [],
+    getSessionWorkDir: async () => '/proj/emp',
+    getServerPort: () => 61694,
+    recordEvent: recordEventMock,
+  } as never)
 
   // R1 活性自检：崩溃观察者必须可达——先跑的测试文件可能已调
   // resetSessionEventsForTests() 清空总线，subscribe（ensure 模式）重注册后
@@ -74,7 +94,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   setServantIncidentDeps(null)
+  setOversizeFailureDepsForTests(null)
   resetServantIncidentState()
+  resetServantTurnErrorsForTests()
   if (originalConfigDir) process.env.CLAUDE_CONFIG_DIR = originalConfigDir
   else delete process.env.CLAUDE_CONFIG_DIR
   mock.restore()
@@ -121,6 +143,107 @@ describe('onServantTurnError', () => {
   test('non-servant sessions are not auto-nudged', async () => {
     await onServantTurnError({ sessionId: 'interactive-1', streak: 1, summary: 'API 超时' })
     expect(deliverMock).not.toHaveBeenCalled()
+  })
+
+  // ── C-B（v1.7.5）：确定性超限失败不续跑，改升级通知主管 ──────────────────
+
+  test('413 类错误：不注入续跑提示，改为通知主管（零注入 + 一条升级）', async () => {
+    getServantMock.mockImplementation(
+      (async (id: string) =>
+        id === 'emp-1'
+          ? { sessionId: 'emp-1', role: '前端', description: '前端', enabled: true }
+          : null) as never,
+    )
+    setOversizeFailureDepsForTests({
+      listServants: async () => [
+        { sessionId: 'sup-1', supervisor: true, enabled: true, workDir: '/proj/emp' },
+      ],
+    } as never)
+
+    await onServantTurnError({
+      sessionId: 'emp-1',
+      streak: 1,
+      summary: 'Request too large: the request body exceeds the server-side size limit.',
+    })
+
+    // ① 零注入：不再往（可能已死的）员工会话里塞续跑提示
+    expect(deliverMock).not.toHaveBeenCalled()
+    // ② 升级：给主管投了一条可读通知
+    expect(escalationDeliverMock).toHaveBeenCalledTimes(1)
+    expect(escalationDeliverMock.mock.calls[0][0]).toBe('sup-1')
+    const notice = String(escalationDeliverMock.mock.calls[0][1])
+    expect(notice).toContain('请求体超限')
+    expect(notice).toContain('/compact')
+    expect(notice).toContain('emp-1')
+    // ③ 诊断如实记一条（error 级）
+    expect(recordEventMock).toHaveBeenCalledTimes(1)
+    expect(recordEventMock.mock.calls[0][0]).toMatchObject({
+      type: 'servant_turn_error_deterministic_oversize',
+      severity: 'error',
+      sessionId: 'emp-1',
+    })
+
+    // ④ 同一 episode 反复报错不再重复升级、也绝不注入
+    await onServantTurnError({ sessionId: 'emp-1', streak: 2, summary: 'Request too large' })
+    expect(deliverMock).not.toHaveBeenCalled()
+    expect(escalationDeliverMock).toHaveBeenCalledTimes(1)
+  })
+
+  test('反向用例：429/网络类**可恢复**错误仍照常自动续跑（C-B 不误杀）', async () => {
+    getServantMock.mockImplementation(
+      (async (id: string) =>
+        id === 'emp-1' ? { sessionId: 'emp-1', role: '前端', enabled: true } : null) as never,
+    )
+    setOversizeFailureDepsForTests({
+      listServants: async () => [
+        { sessionId: 'sup-1', supervisor: true, enabled: true, workDir: '/proj/emp' },
+      ],
+    } as never)
+
+    for (const summary of [
+      'Rate limited (429): too many requests',
+      'Connection error: ECONNRESET',
+      'Overloaded (529)',
+      'API Error: Connection error.',
+    ]) {
+      await onServantTurnError({ sessionId: 'emp-1', streak: 1, summary })
+    }
+
+    // 四次都可恢复 ⇒ 四次续跑注入，零升级通知
+    expect(deliverMock).toHaveBeenCalledTimes(4)
+    expect(String(deliverMock.mock.calls[0][1])).toContain('自动续跑 1/2')
+    expect(escalationDeliverMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('isDeterministicOversizeError（C-B 判定口径）', () => {
+  test('命中：我们自己的两类文案 + 结构化错误码 + 网关/官方 413 措辞', () => {
+    for (const text of [
+      'Request too large: the request body exceeds the server-side size limit.',
+      'Request blocked before sending: the request body is 30 MB and exceeds the configured limit of 32 MB',
+      'businessErrorCode: request_too_large',
+      'PAYLOAD_TOO_LARGE',
+      '413 Request Entity Too Large',
+      'Field "content" is too large: 600000 bytes (UTF-8) exceeds the 524288 byte limit.',
+    ]) {
+      expect(isDeterministicOversizeError(text)).toBe(true)
+    }
+  })
+
+  test('不命中：可恢复错误与空值（防把正常自愈打死）', () => {
+    for (const text of [
+      'Rate limited (429)',
+      'ECONNRESET',
+      'socket hang up',
+      'Request timed out after 60000ms',
+      'Overloaded (529)',
+      'Internal server error (500)',
+      '',
+      undefined,
+      null,
+    ]) {
+      expect(isDeterministicOversizeError(text as string)).toBe(false)
+    }
   })
 })
 

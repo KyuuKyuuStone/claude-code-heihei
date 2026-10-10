@@ -22,6 +22,12 @@ import { countUnconsumedReceipts, isSessionTurnInProgress } from './dispatchRece
 import { servantService } from './servantService.js'
 import { ProviderService } from './providerService.js'
 import { requireSessionDelivery } from './sessionDelivery.js'
+// C-B（v1.7.5）：重推前先看「上一回合错误」——确定性超限失败再推必败
+import {
+  getServantLastTurnError,
+  isDeterministicOversizeError,
+  notifySupervisorsOfOversizeFailure,
+} from './servantOversizeFailure.js'
 
 const WATCH_INTERVAL_MS = 60_000
 /** 运行中但无活动超过该阈值 = 假死 */
@@ -275,6 +281,45 @@ export class ServantStallWatcher {
         this.stallStates.set(key, current)
       }
       if (current.escalated) continue
+
+      // ── C-B（v1.7.5）：确定性超限失败**不重推** ─────────────────────────
+      // 会话上一回合若以「请求体超限（413/request_too_large）」结束，说明它卡在
+      // 内容太大上：再推一条消息只会再撞一次同样的确定性失败（刷屏 + 烧配额）。
+      // 停手并升级通知主管（走系统通知通道）。边界：只拦这一类——429/网络抖动
+      // 等可恢复错误继续照常重推（判定口径见 servantOversizeFailure）。
+      const lastTurnError = getServantLastTurnError(servant.sessionId)
+      if (isDeterministicOversizeError(lastTurnError)) {
+        current.escalated = true
+        this.stallStates.set(key, current)
+        this.report(
+          'error',
+          'deterministic-oversize-repush-skipped',
+          `跳过假死重推：该会话上一回合以确定性超限失败（413/request_too_large）结束，再推必败，已升级通知主管：${servant.role ? `${servant.role}（${servant.title}）` : servant.title}（会话 ID：${servant.sessionId}）`,
+          servant.sessionId,
+          {
+            staleForMs: staleFor,
+            running: true,
+            nudges: current.nudges,
+            lastTurnError: (lastTurnError ?? '').slice(0, 200),
+          },
+        )
+        await notifySupervisorsOfOversizeFailure({
+          sessionId: servant.sessionId,
+          source: 'stall_repush',
+          ...(servant.role ? { role: servant.role } : {}),
+          ...(servant.title ? { description: servant.title } : {}),
+          attempts: current.nudges,
+          ...(lastTurnError ? { errorSummary: lastTurnError } : {}),
+        }).catch((error) => {
+          console.warn(
+            `[StallWatcher] Failed to escalate deterministic oversize failure: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          )
+        })
+        continue
+      }
+
       if (current.nudges >= MAX_AUTO_REPUSH) {
         current.escalated = true
         await this.notifySupervisor(servant, staleFor)

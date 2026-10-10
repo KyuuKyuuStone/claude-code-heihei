@@ -137,6 +137,59 @@ describe('POST /api/collab-tasks/:id/report — callerSessionId 校验', () => {
     })
     expect(res.status).toBe(404)
   })
+
+  // ── v1.7.5 补齐：report 端点也接同一套正文总闸（此前是 413 绕过面）──────
+
+  it('P-B1 补充：summary 超上限 ⇒ 413 结构化拒绝，且台账不被推进', async () => {
+    const { resolveSessionMessageMaxBytes } = await import('../services/messageSizeLimits.js')
+    const supervisor = await registerWorker({ role: '主管', supervisor: true })
+    const worker = await registerWorker({ role: '后端' })
+    const taskId = await makeTask({ from: supervisor, to: worker })
+
+    process.env.CC_HEIHEI_SESSION_MESSAGE_MAX_BYTES = '1024'
+    try {
+      const limit = resolveSessionMessageMaxBytes()
+      const res = await callApi('POST', `/api/collab-tasks/${taskId}/report`, {
+        summary: 'x'.repeat(limit + 1),
+        callerSessionId: worker,
+      })
+      expect(res.status).toBe(413)
+      const body = (await res.json()) as { error?: string; message?: string }
+      expect(body.error).toBe('PAYLOAD_TOO_LARGE')
+      expect(String(body.message)).toContain('summary')
+      expect(String(body.message)).toContain(`${limit + 1} bytes`)
+      // 未推进台账：状态仍停在派活态，也没有留下 report 正文
+      const task = await collabTaskService.getTask(taskId)
+      expect(task?.status).not.toBe('delivered')
+      expect(String(task?.report ?? '')).not.toContain('x'.repeat(100))
+    } finally {
+      delete process.env.CC_HEIHEI_SESSION_MESSAGE_MAX_BYTES
+    }
+  })
+
+  it('P-B1 补充：deliverables 超上限同样被拒；恰好等于上限照常 200（不误伤）', async () => {
+    const supervisor = await registerWorker({ role: '主管', supervisor: true })
+    const worker = await registerWorker({ role: '后端' })
+    const taskId = await makeTask({ from: supervisor, to: worker })
+    process.env.CC_HEIHEI_SESSION_MESSAGE_MAX_BYTES = '1024'
+    try {
+      const tooBig = await callApi('POST', `/api/collab-tasks/${taskId}/report`, {
+        summary: 'ok',
+        deliverables: ['a'.repeat(2000)],
+        callerSessionId: worker,
+      })
+      expect(tooBig.status).toBe(413)
+      expect(((await tooBig.json()) as { error?: string }).error).toBe('PAYLOAD_TOO_LARGE')
+
+      const ok = await callApi('POST', `/api/collab-tasks/${taskId}/report`, {
+        summary: 'x'.repeat(1024),
+        callerSessionId: worker,
+      })
+      expect(ok.status).toBe(200)
+    } finally {
+      delete process.env.CC_HEIHEI_SESSION_MESSAGE_MAX_BYTES
+    }
+  })
 })
 
 // ── review：callerSessionId 必须是派活人或该项目现任主管 ──────────────────

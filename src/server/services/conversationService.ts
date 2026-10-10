@@ -33,6 +33,12 @@ import {
   emitServantTurnErrorsCleared,
   emitServantUnknownToolStreakReset,
 } from './servantIncidentSignals.js'
+// C-B（v1.7.5）：登记「上一回合错误」，供 servantStallWatcher 的周期扫描读取
+// （扫描式拿不到轮次事件入参）；同模块提供确定性超限失败的判定口径。
+import {
+  clearServantTurnError,
+  recordServantTurnError,
+} from './servantOversizeFailure.js'
 import { diagnosticsService } from './diagnosticsService.js'
 import {
   isMaterializedWorktreeLaunch,
@@ -1707,11 +1713,17 @@ export class ConversationService {
       const streak = (this.servantTurnErrorStreak.get(sessionId) ?? 0) + 1
       this.servantTurnErrorStreak.set(sessionId, streak)
       const summary = typeof msg.result === 'string' ? msg.result.slice(0, 300) : ''
+      // C-B：登记错误摘要（唯一写入方）。周期扫描的 servantStallWatcher 据此
+      // 判定「上一回合是不是确定性超限失败」，避免再重推一次必败的请求。
+      recordServantTurnError(sessionId, summary)
       // G2 B-d 批：改走事件总线（原先动态 import notifier；吞错留痕由 bus 的 fanout
       // 按同一诊断事件名/字段兜底，见 servantIncidentSignals）。
       emitServantTurnError({ sessionId, streak, summary })
       return
     }
+    // C-B：成功轮 ⇒ 该会话不再有「未化解的失败」，清掉登记（否则一轮成功前的
+    // 旧错误会永久影响后续重推判定）。
+    clearServantTurnError(sessionId)
     if (this.servantTurnErrorStreak.has(sessionId)) {
       this.servantTurnErrorStreak.delete(sessionId)
       emitServantTurnErrorsCleared(sessionId)

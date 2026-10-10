@@ -18,6 +18,10 @@ import { onSessionEvent, type SessionEvent } from './sessionEvents.js'
 import { subscribeServantTurnIncidents } from './servantIncidentSignals.js'
 import { ProviderService } from './providerService.js'
 import { servantService } from './servantService.js'
+import {
+  isDeterministicOversizeError,
+  notifySupervisorsOfOversizeFailure,
+} from './servantOversizeFailure.js'
 
 export type ServantCrashInput = {
   sessionId: string
@@ -263,6 +267,46 @@ export async function onServantTurnError(input: {
   const entry = await incidentDeps.getServant(input.sessionId).catch(() => null)
   if (!entry?.enabled) {
     clearServantTurnErrors(input.sessionId)
+    return
+  }
+
+  // ── C-B（v1.7.5）：确定性「请求体超限」失败**不续跑** ──────────────────────
+  // 413 / request_too_large 是确定性失败：请求内容没变，再发一次必然再失败 ⇒
+  // 自动续跑只会刷屏 + 烧配额，还把真正的卡点（上下文/附件太大）埋掉。
+  // 这里停手并**升级通知主管**（走系统通知通道，不往那个已死的会话里投）。
+  // 边界：只拦这一类；429 / 网络抖动等**可恢复**错误继续照常续跑（否则会把
+  // 正常自愈打死）——判定口径集中在 servantOversizeFailure.isDeterministicOversizeError。
+  if (isDeterministicOversizeError(input.summary)) {
+    if (!turnErrorEscalated.has(input.sessionId)) {
+      turnErrorEscalated.add(input.sessionId)
+      incidentDeps.recordEvent({
+        type: 'servant_turn_error_deterministic_oversize',
+        severity: 'error',
+        summary: `员工会话出现确定性超限失败（413/request_too_large），已停止自动续跑并通知主管：${
+          entry.role ? `${entry.role}（${entry.description || '未填写特性'}）` : '未命名角色'
+        }`,
+        sessionId: input.sessionId,
+        details: {
+          sessionId: input.sessionId,
+          streak: input.streak,
+          summary: input.summary,
+          action: 'stop_nudge_and_notify_supervisor',
+        },
+      })
+      await notifySupervisorsOfOversizeFailure({
+        sessionId: input.sessionId,
+        source: 'turn_error',
+        ...(entry.role ? { role: entry.role } : {}),
+        ...(entry.description ? { description: entry.description } : {}),
+        attempts: input.streak,
+        errorSummary: input.summary,
+      }).catch((error) => {
+        logForDiagnosticsNoPII('warn', 'oversize_failure_notice_threw', {
+          sessionId: input.sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
+    }
     return
   }
 
