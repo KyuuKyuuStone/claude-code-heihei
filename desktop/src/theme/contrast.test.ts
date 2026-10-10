@@ -201,6 +201,47 @@ describe('control boundary contrast', () => {
   }
 })
 
+/**
+ * System-notice strip border (UserMessage's `isSystemNotice` branch, design spec e2a7c9d6).
+ *
+ * The user reported "the system notice background is still the same as the
+ * conversation": the neutral fill sits at just 1.04–1.36:1 against the page and
+ * the user bubble across all six palettes — a property of a soft palette, not a
+ * bad token, exactly as with the reveal line above. The load-bearing part is
+ * therefore the 1px border, and this block pins it down.
+ *
+ * Threshold 2.4 — NOT this file's 4.5 (text) and NOT 3.0 (1.4.11 control
+ * boundary): this edge is a decorative separator, not a control outline (that
+ * duty still belongs to the 3.0 `control boundary contrast` block). 2.4 is the
+ * "visibly distinct" product floor for a 1px separator, and every ground the
+ * strip can sit on clears it: fill 2.48–2.69, page 3.23–3.40, user bubble
+ * 2.71–2.90 — dark, the tightest, clears it by 0.08.
+ */
+const AA_NOTICE_BORDER = 2.4
+
+describe('system notice border contrast', () => {
+  /** Every ground the strip can straddle: its own fill, the page, an adjacent user bubble. */
+  const GROUNDS = [
+    '--color-surface-container-highest',
+    '--color-surface',
+    '--color-surface-user-msg',
+  ] as const
+
+  for (const [theme, selectors] of Object.entries(THEME_BLOCKS)) {
+    it(`keeps the system-notice border visible in ${theme}`, () => {
+      const surface = parseColor(resolve('--color-surface', selectors))
+      for (const groundToken of GROUNDS) {
+        const ground = flatten(parseColor(resolve(groundToken, selectors)), surface)
+        const border = flatten(parseColor(resolve('--color-border-strong', selectors)), ground)
+        expect(
+          Number(contrast(border, ground).toFixed(2)),
+          `${theme}: --color-border-strong on ${groundToken}`,
+        ).toBeGreaterThanOrEqual(AA_NOTICE_BORDER)
+      }
+    })
+  }
+})
+
 describe('primary action contrast', () => {
   for (const [theme, selectors] of Object.entries(THEME_BLOCKS)) {
     it(`keeps the accent chip readable in ${theme}`, () => {

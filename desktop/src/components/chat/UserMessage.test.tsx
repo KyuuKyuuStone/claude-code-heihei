@@ -165,12 +165,18 @@ describe('UserMessage system notice', () => {
     expect(strip?.className).not.toContain('--color-on-info-container')
     expect(strip?.className).not.toContain('--color-surface-user-msg')
     expect(container.querySelector('[data-message-shell="user"]')).toBeNull()
-    // 容器居中、内容自适应宽度带上限、无边框、圆角与内边距。
+    // 容器居中、内容自适应宽度带上限、圆角与内边距。
     expect(container.firstElementChild?.className).toContain('justify-center')
     expect(container.firstElementChild?.className).toContain('mb-5')
     expect(strip?.className).toContain('w-fit')
     expect(strip?.className).toContain('max-w-[85%]')
-    expect(strip?.className).not.toContain('border')
+    // 可分辨性由「边」承重（设计规范 e2a7c9d6）：填充与对话底/用户气泡在暖色主题下
+    // 肉眼难分，故加 1px --color-border-strong 边框（软色板里靠边不靠底，同 reveal-line/tab 判例）。
+    expect(strip?.className).toContain('border')
+    expect(strip?.className).toContain('border-[var(--color-border-strong)]')
+    // 别另加 outline/ring（规范明令）。
+    expect(strip?.className).not.toContain('outline')
+    expect(strip?.className).not.toContain('ring-')
     expect(strip?.className).toContain('rounded-[var(--radius-md)]')
     expect(strip?.className).toContain('px-3')
     expect(strip?.className).toContain('py-1.5')
