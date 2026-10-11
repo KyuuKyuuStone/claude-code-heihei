@@ -154,6 +154,23 @@ describe('SpeechSettingsSection 音色选择器', () => {
     expect(speechService.getVoiceURI()).toBe('')
   })
 
+  it('组内按择优分降序排列（乱序输入也排回来），且每组第一行带「推荐」徽标', () => {
+    // 故意乱序：Huihui（-80）排在 Xiaoxiao Online (Natural)（+130）之前。
+    installEngine([EN_ARIA, ZH_HUIHUI, ZH_NATURAL])
+    render(<SpeechSettingsSection />)
+    fireEvent.click(screen.getByTestId('speech-voice-trigger'))
+
+    const options = screen.getAllByRole('option')
+    // [0]=自动；[1..2]=ZH 组（降序后 Natural 在前）；[3]=EN 组首。
+    expect(options[1]).toHaveTextContent('Xiaoxiao · Chinese (Mainland)')
+    expect(options[2]).toHaveTextContent('Huihui · Chinese (Simplified)')
+    // 组首带「推荐」，组内其余行不带。
+    expect(options[1]).toHaveTextContent('推荐')
+    expect(options[2]).not.toHaveTextContent('推荐')
+    expect(options[3]).toHaveTextContent('Aria · English (United States)')
+    expect(options[3]).toHaveTextContent('推荐')
+  })
+
   it('副标题给原 lang 码与本地/在线徽标', () => {
     installEngine([ZH_HUIHUI, EN_ARIA])
     render(<SpeechSettingsSection />)

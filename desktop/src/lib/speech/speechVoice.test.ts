@@ -142,6 +142,15 @@ describe('speechVoice 分组', () => {
     expect(groups.map((group) => group.voices.length)).toEqual([2, 1, 1])
   })
 
+  it('组内按择优分降序（乱序输入也排回来，首名即自动会选的那条）', () => {
+    const huihui = voice({ name: 'Microsoft Huihui - Chinese (Simplified)', lang: 'zh-CN' })
+    const natural = voice({ name: 'Microsoft Xiaoxiao Online (Natural) - Chinese (Mainland)', lang: 'zh-CN' })
+    const groups = groupVoices([huihui, natural], 'ZH')
+    expect(groups[0]!.voices.map((v) => v.name)).toEqual([natural.name, huihui.name])
+    // 与择优结果同源：组首 == bestVoice 在同池上的选择。
+    expect(bestVoiceIn('你好', groups[0]!.voices)?.name).toBe(groups[0]!.voices[0]!.name)
+  })
+
   it('无偏好时纯字母序', () => {
     const voices = [voice({ name: 'a', lang: 'ko-KR' }), voice({ name: 'b', lang: 'en-US' })]
     expect(groupVoices(voices).map((group) => group.code)).toEqual(['EN', 'KO'])

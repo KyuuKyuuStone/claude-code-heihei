@@ -187,7 +187,7 @@ export function SpeechVoicePicker({ voices, value, onChange, locale }: Props) {
     }
   }
 
-  const renderOption = (row: Row, index: number) => {
+  const renderOption = (row: Row, index: number, recommended = false) => {
     const isAuto = row.kind === 'auto'
     const isSelected = index === selectedIndex
     const voice = row.kind === 'voice' ? row.voice : null
@@ -220,7 +220,7 @@ export function SpeechVoicePicker({ voices, value, onChange, locale }: Props) {
             <span className="truncate text-xs font-medium" title={isAuto ? title : voice!.name}>
               {title}
             </span>
-            {isAuto ? (
+            {isAuto || recommended ? (
               <span className="shrink-0 rounded-full border border-[var(--color-border)] px-1.5 text-[10px] text-[var(--color-text-tertiary)]">
                 {t('speech.voiceRecommended')}
               </span>
@@ -300,7 +300,14 @@ export function SpeechVoicePicker({ voices, value, onChange, locale }: Props) {
                   <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
                     {`${group.code} · ${group.voices.length}`}
                   </div>
-                  {group.voices.map((voice) => renderOption({ kind: 'voice', voice }, indexByURI.get(voice.voiceURI) ?? 1))}
+                  {group.voices.map((voice, voiceIndex) =>
+                    renderOption(
+                      { kind: 'voice', voice },
+                      indexByURI.get(voice.voiceURI) ?? 1,
+                      // 组内已按择优分降序 ⇒ 第一名就是该语言的「推荐」。
+                      voiceIndex === 0,
+                    ),
+                  )}
                 </div>
               ))}
               {filtered.length === 0 ? (

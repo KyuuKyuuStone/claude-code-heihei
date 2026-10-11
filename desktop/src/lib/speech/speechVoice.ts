@@ -152,6 +152,25 @@ export function scoreVoiceTiebreak(voice: SpeechSynthesisVoice): number {
     + (voice.default === true ? SPEECH_VOICE_DEFAULT_BONUS : 0)
 }
 
+/**
+ * 排序比较器：主分降序 → 裁决分降序（与 bestVoiceIn 同一规则）。列表按它排，则**组内
+ * 第一名恒等于该语言下自动择优会选的那条** —— 这正是「推荐」徽标的依据。
+ */
+export function compareVoicesByScore(
+  a: SpeechSynthesisVoice,
+  b: SpeechSynthesisVoice,
+  script: SpeechScript,
+): number {
+  const byScore = scoreVoice(b, script) - scoreVoice(a, script)
+  if (byScore !== 0) return byScore
+  return scoreVoiceTiebreak(b) - scoreVoiceTiebreak(a)
+}
+
+/** 语言码 → 书写系统（组内排序用它打分；认不出按 en）。 */
+export function scriptForLangCode(code: string): SpeechScript {
+  return sampleScriptForLang(code)
+}
+
 /** 池内择优：主分最高；主分相同看裁决分；仍同保持原顺序（稳定）。 */
 export function bestVoiceIn(text: string, voices: readonly SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
   if (voices.length === 0) return null
@@ -248,7 +267,8 @@ export type VoiceGroup = {
 }
 
 /**
- * 按主语言码分组：**界面语言匹配的组置顶**，其余按码字母序（稳定保持组内原顺序）。
+ * 按主语言码分组：**界面语言匹配的组置顶**，其余按码字母序；**组内按择优分降序**
+ * （架构师方案 §三：组内第一名打「推荐」徽标，不排序该徽标就没有依据）。
  */
 export function groupVoices(
   voices: readonly SpeechSynthesisVoice[],
@@ -262,7 +282,11 @@ export function groupVoices(
     else byCode.set(code, [voice])
   }
   const preferred = (preferredCode ?? '').trim().toUpperCase()
-  return Array.from(byCode, ([code, list]) => ({ code, voices: list })).sort((a, b) => {
+  const sortedGroups = Array.from(byCode, ([code, list]) => {
+    const script = scriptForLangCode(code)
+    return { code, voices: [...list].sort((a, b) => compareVoicesByScore(a, b, script)) }
+  })
+  return sortedGroups.sort((a, b) => {
     if (preferred) {
       if (a.code === preferred && b.code !== preferred) return -1
       if (b.code === preferred && a.code !== preferred) return 1
