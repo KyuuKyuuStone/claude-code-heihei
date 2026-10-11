@@ -8,24 +8,33 @@ import { kr } from './locales/kr'
 // 朗读（TTS）文案单开一个模块：五个 locale 主表已到 2495–2497 行，再加键会越过
 // file-size 门禁（LIMIT=2500）且基线表不许新增条目。此处合并进各语言的翻译表。
 import { speechEn, speechJp, speechKr, speechZh, speechZhTW, type SpeechKey } from './locales/speech'
+// 上下文用量「数据基准」文案（实测/估算徽标、基准说明、Output 不计入上下文）同理单开模块。
+import {
+  contextSourceEn,
+  contextSourceJp,
+  contextSourceKr,
+  contextSourceZh,
+  contextSourceZhTW,
+  type ContextSourceKey,
+} from './locales/contextSource'
 import type { Locale } from './locale'
 
 const translations: Record<Locale, Record<string, string>> = {
-  en: { ...en, ...speechEn },
-  zh: { ...zh, ...speechZh },
-  'zh-TW': { ...zhTW, ...speechZhTW },
-  jp: { ...jp, ...speechJp },
-  kr: { ...kr, ...speechKr },
+  en: { ...en, ...speechEn, ...contextSourceEn },
+  zh: { ...zh, ...speechZh, ...contextSourceZh },
+  'zh-TW': { ...zhTW, ...speechZhTW, ...contextSourceZhTW },
+  jp: { ...jp, ...speechJp, ...contextSourceJp },
+  kr: { ...kr, ...speechKr, ...contextSourceKr },
 }
 
 /**
- * 翻译键 = locale 主表键 ∪ 朗读文案模块键。
+ * 翻译键 = locale 主表键 ∪ 朗读文案模块键 ∪ 上下文基准文案模块键。
  *
- * 朗读键**不并进** `TranslationKey`（那是 `keyof typeof en`，五个 locale 文件都以
+ * 这些边表键**不并进** `TranslationKey`（那是 `keyof typeof en`，五个 locale 文件都以
  * `Record<TranslationKey, string>` 声明自身，一旦扩键它们全体报缺失），改在这里做
  * 调用面并集：`t()` 的参数类型放宽，调用点仍写平铺字面量。
  */
-export type TextKey = TranslationKey | SpeechKey
+export type TextKey = TranslationKey | SpeechKey | ContextSourceKey
 
 /**
  * Translate a key with optional interpolation params.

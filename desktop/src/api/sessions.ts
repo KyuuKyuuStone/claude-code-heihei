@@ -178,6 +178,15 @@ export type SessionContextSnapshot = {
   maxTokens: number
   rawMaxTokens: number
   percentage: number
+  /**
+   * 主标与明细的数据基准（后端冻结接口）：
+   * · `'provider_usage'` ⇒ 基于上一轮 API 调用的实测 usage（明细四类：
+   *   Input tokens / Cache read / Cache write / Output tokens，其中 Output 是
+   *   上一轮输出、**不计入上下文**）；
+   * · `'estimate'` ⇒ 基于转写粗估（明细单条 Estimated context = totalTokens）；
+   * · **缺省一律当 `'estimate'`**（live `context` 路径的明细本就是粗估分解）。
+   */
+  source?: 'provider_usage' | 'estimate'
   /** Token level at which the CLI will auto-compact (effective window − buffer). */
   autoCompactThreshold?: number
   /** Whether the CLI has auto-compact enabled for this session's provider. */

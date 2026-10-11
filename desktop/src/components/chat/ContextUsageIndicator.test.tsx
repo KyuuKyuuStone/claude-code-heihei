@@ -47,6 +47,7 @@ vi.mock('../../api/sessions', async (importOriginal) => {
 
 import { ContextUsageIndicator } from './ContextUsageIndicator'
 import { useSettingsStore } from '../../stores/settingsStore'
+import type { SessionContextSnapshot } from '../../api/sessions'
 
 const baseInspection = {
   active: true,
@@ -473,6 +474,136 @@ describe('ContextUsageIndicator window ruler', () => {
     await waitFor(() => {
       expect(screen.getByText('Estimate')).toBeInTheDocument()
     })
+  })
+})
+
+describe('ContextUsageIndicator data source basis', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useSettingsStore.setState({ locale: 'en' })
+  })
+
+  afterEach(() => {
+    cleanup()
+    runtimeMocks.isMobileViewport = false
+    runtimeMocks.isDesktopRuntime = false
+  })
+
+  // provider_usage：明细四类，其中 Output tokens 是上一轮输出、不计入上下文。
+  const providerUsageContext = {
+    ...baseInspection.context,
+    source: 'provider_usage' as const,
+    categories: [
+      { name: 'Input tokens', tokens: 120_000, color: '#1' },
+      { name: 'Cache read', tokens: 40_000, color: '#2' },
+      { name: 'Cache write', tokens: 10_000, color: '#3' },
+      { name: 'Output tokens', tokens: 3_000, color: '#4' },
+    ],
+    totalTokens: 170_000,
+    percentage: 85,
+  }
+
+  function renderWith(
+    context: SessionContextSnapshot,
+    options: { compact?: boolean } = {},
+  ) {
+    sessionsApiMock.getInspection.mockResolvedValue({ ...baseInspection, context })
+    return render(
+      <ContextUsageIndicator
+        sessionId="session-1"
+        chatState="idle"
+        messageCount={1}
+        compact={options.compact}
+      />,
+    )
+  }
+
+  it('badge 按 source 二分：provider_usage → Measured', async () => {
+    renderWith(providerUsageContext)
+    await waitFor(() => {
+      expect(screen.getByTestId('context-source-badge')).toHaveTextContent('Measured')
+    })
+    expect(screen.getByTestId('context-source-badge')).not.toHaveTextContent('Estimate')
+  })
+
+  it('badge：estimate → Estimate', async () => {
+    renderWith({ ...baseInspection.context, source: 'estimate' })
+    await waitFor(() => {
+      expect(screen.getByTestId('context-source-badge')).toHaveTextContent('Estimate')
+    })
+  })
+
+  it('badge：缺省 source（live context 路径）也当 Estimate', async () => {
+    renderWith(baseInspection.context)
+    await waitFor(() => {
+      expect(screen.getByTestId('context-source-badge')).toHaveTextContent('Estimate')
+    })
+  })
+
+  it('基准说明行随 source 切换文案', async () => {
+    renderWith(providerUsageContext)
+    await waitFor(() => {
+      expect(screen.getByTestId('context-source-basis')).toHaveTextContent(
+        'Based on the measured usage of the last API call',
+      )
+    })
+
+    cleanup()
+    renderWith({ ...baseInspection.context, source: 'estimate' })
+    await waitFor(() => {
+      expect(screen.getByTestId('context-source-basis')).toHaveTextContent('Estimated from the transcript')
+    })
+  })
+
+  it('Output tokens 行标注「不计入上下文」，且不按上下文占用画条', async () => {
+    renderWith(providerUsageContext)
+
+    await waitFor(() => {
+      expect(screen.getByText('Previous turn output — not counted in context')).toBeInTheDocument()
+    })
+    const rows = screen.getAllByTestId('context-detail-row')
+    expect(rows).toHaveLength(4)
+    const outputRow = rows.find((row) => row.textContent?.includes('Output tokens'))
+    expect(outputRow).toBeDefined()
+    // 该行不得有占用条（否则会被读成上下文的一部分）；其余三类仍各有一条。
+    expect(outputRow?.querySelector('[data-testid="context-detail-bar"]')).toBeNull()
+    expect(screen.getAllByTestId('context-detail-bar')).toHaveLength(3)
+  })
+
+  it('移动端 bottom sheet 用同一套徽标/基准说明', async () => {
+    renderWith(providerUsageContext, { compact: true })
+    await waitFor(() => {
+      expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('85%')
+    })
+
+    fireEvent.click(screen.getByTestId('context-usage-indicator'))
+
+    await waitFor(() => {
+      // 桌面弹层（compact 时隐藏但仍在 DOM）+ 移动 sheet = 两处徽标。
+      const badges = screen.getAllByTestId('context-source-badge')
+      expect(badges.length).toBeGreaterThanOrEqual(2)
+      for (const badge of badges) expect(badge).toHaveTextContent('Measured')
+      expect(screen.getAllByTestId('context-source-basis').length).toBeGreaterThanOrEqual(2)
+    })
+  })
+
+  it('≥ 窗口 口径不受 provider_usage 影响，Output 行仍印精确值', async () => {
+    renderWith({
+      ...providerUsageContext,
+      categories: [
+        { name: 'Input tokens', tokens: 1_200_000, color: '#1' },
+        { name: 'Output tokens', tokens: 3_000, color: '#4' },
+      ],
+      totalTokens: 1_000_000,
+      maxTokens: 1_000_000,
+      rawMaxTokens: 1_000_000,
+      percentage: 100,
+    })
+
+    await waitFor(() => {
+      expect(screen.getAllByText('≥ 1,000,000').length).toBeGreaterThanOrEqual(1)
+    })
+    expect(screen.getByText('3,000')).toBeInTheDocument()
   })
 })
 

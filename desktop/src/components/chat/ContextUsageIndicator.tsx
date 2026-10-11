@@ -61,6 +61,11 @@ function pickUsedContextCategory(context: SessionContextSnapshot) {
     .slice(0, 4)
 }
 
+/** `Output tokens` 明细行 = 上一轮输出，**不计入上下文**（provider_usage 基准下才有）。 */
+function isOutputTokensCategory(name: string) {
+  return /^output tokens$/i.test(name.trim())
+}
+
 function firstNonEmpty(...values: Array<string | undefined | null>) {
   return values.find((value) => typeof value === 'string' && value.trim().length > 0)?.trim()
 }
@@ -250,6 +255,10 @@ export function ContextUsageIndicator({
       : 'var(--color-surface-container-high)',
   }
   const displayPercent = displayContext ? formatPercent(percentage) : '--'
+  // 基准二分：只有后端标注 provider_usage 才是实测；缺省（含 live context 路径）当估算。
+  const isProviderUsage = displayContext?.source === 'provider_usage'
+  const sourceBadgeLabel = isProviderUsage ? t('contextIndicator.sourceProvider') : t('contextIndicator.estimate')
+  const sourceBasisLabel = isProviderUsage ? t('contextIndicator.basisProvider') : t('contextIndicator.basisEstimate')
   const displayModel = firstNonEmpty(context?.model, inspectionModel, fallbackModelLabel)
   const ariaLabel = displayContext
     ? t('contextIndicator.ariaLabel', { percent: formatPercent(percentage) })
@@ -348,20 +357,40 @@ export function ContextUsageIndicator({
             </div>
             {details.length > 0 && (
               <div className="mt-[18px] flex flex-col gap-3">
+                {/* 基准说明：这份明细到底是「上一轮调用实测」还是「转写估算」，
+                    用户要能一眼判断，否则会把实测数当成估算数看。 */}
+                <div
+                  data-testid="context-source-basis"
+                  className="text-[11.5px] text-[var(--color-text-tertiary)]"
+                >
+                  {sourceBasisLabel}
+                </div>
                 {details.map((category) => {
+                  const isOutput = isOutputTokensCategory(category.name)
                   const percent = maxTokens > 0 ? Math.max(0.5, Math.min(100, (category.tokens / maxTokens) * 100)) : 0
                   return (
-                    <div key={category.name}>
+                    <div key={category.name} data-testid="context-detail-row">
                       <div className="flex items-baseline justify-between gap-3">
                         <span className="min-w-0 truncate text-[13.5px] text-[var(--color-text-primary)]">{category.name}</span>
                         <span className="shrink-0 font-mono text-[13px] text-[var(--color-text-secondary)]">{formatTokensAgainstWindow(category.tokens, maxTokens)}</span>
                       </div>
-                      {/* One terracotta scale for every row. The per-category
-                          colors that used to fill these bars came from the API
-                          payload and read as six unrelated statuses. */}
-                      <div className="mt-[7px] h-[3px] overflow-hidden rounded-full bg-[var(--color-surface-hover)]">
-                        <div className="h-full rounded-full bg-[var(--color-brand)]" style={{ width: `${percent}%` }} />
-                      </div>
+                      {isOutput ? (
+                        // Output tokens 是上一轮输出、不计入上下文：**不画占用条**，
+                        // 否则那条长度会让人以为它也是上下文里的占用。
+                        <div className="mt-[5px] text-[11px] text-[var(--color-text-tertiary)]">
+                          {t('contextIndicator.outputNotCounted')}
+                        </div>
+                      ) : (
+                        /* One terracotta scale for every row. The per-category
+                           colors that used to fill these bars came from the API
+                           payload and read as six unrelated statuses. */
+                        <div
+                          data-testid="context-detail-bar"
+                          className="mt-[7px] h-[3px] overflow-hidden rounded-full bg-[var(--color-surface-hover)]"
+                        >
+                          <div className="h-full rounded-full bg-[var(--color-brand)]" style={{ width: `${percent}%` }} />
+                        </div>
+                      )}
                     </div>
                   )
                 })}
@@ -369,12 +398,13 @@ export function ContextUsageIndicator({
             )}
             <div className="mt-4 text-xs text-[var(--color-text-tertiary)]">
               {formatUpdatedAt(updatedAt, t)}
-              {/* Both sources are estimates — the live channel is a
-                  get_context_usage request sent with estimateOnly, and the
-                  fallback is derived from the transcript — so label them alike
-                  instead of only tagging the fallback. */}
-              <span className="ml-2 inline-flex rounded-full border border-[var(--color-border)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]">
-                {t('contextIndicator.estimate')}
+              {/* 基准徽标按 source 二分：provider_usage = 上一轮 API 调用实测；
+                  estimate 或缺省 = 转写粗估（live context 路径的明细本就是粗估分解）。 */}
+              <span
+                data-testid="context-source-badge"
+                className="ml-2 inline-flex rounded-full border border-[var(--color-border)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]"
+              >
+                {sourceBadgeLabel}
               </span>
             </div>
           </>
@@ -410,10 +440,12 @@ export function ContextUsageIndicator({
             >
               {displayContext ? formatPercent(percentage) : '--'}
             </div>
-            {/* Same estimate label as the desktop popover: every context
-                snapshot this component renders is an estimate. */}
-            <span className="mb-1 rounded-full border border-[var(--color-border)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
-              {t('contextIndicator.estimate')}
+            {/* 与桌面弹层同款徽标：按 source 二分（实测 / 估算），不再无条件显示「估算」。 */}
+            <span
+              data-testid="context-source-badge"
+              className="mb-1 rounded-full border border-[var(--color-border)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]"
+            >
+              {sourceBadgeLabel}
             </span>
           </div>
 
@@ -438,17 +470,33 @@ export function ContextUsageIndicator({
               </div>
               {details.length > 0 && (
                 <div className="mt-5 space-y-3">
+                  <div
+                    data-testid="context-source-basis"
+                    className="text-[11px] text-[var(--color-text-tertiary)]"
+                  >
+                    {sourceBasisLabel}
+                  </div>
                   {details.map((category) => {
+                    const isOutput = isOutputTokensCategory(category.name)
                     const percent = maxTokens > 0 ? Math.max(0.5, Math.min(100, (category.tokens / maxTokens) * 100)) : 0
                     return (
-                      <div key={category.name}>
+                      <div key={category.name} data-testid="context-detail-row">
                         <div className="flex items-center justify-between gap-3 text-xs">
                           <span className="min-w-0 truncate text-[var(--color-text-secondary)]">{category.name}</span>
                           <span className="shrink-0 font-mono text-[var(--color-text-tertiary)]">{formatTokensAgainstWindow(category.tokens, maxTokens)}</span>
                         </div>
-                        <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-hover)]">
-                          <div className="h-full rounded-full bg-[var(--color-brand)]" style={{ width: `${percent}%` }} />
-                        </div>
+                        {isOutput ? (
+                          <div className="mt-1 text-[11px] text-[var(--color-text-tertiary)]">
+                            {t('contextIndicator.outputNotCounted')}
+                          </div>
+                        ) : (
+                          <div
+                            data-testid="context-detail-bar"
+                            className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-hover)]"
+                          >
+                            <div className="h-full rounded-full bg-[var(--color-brand)]" style={{ width: `${percent}%` }} />
+                          </div>
+                        )}
                       </div>
                     )
                   })}
