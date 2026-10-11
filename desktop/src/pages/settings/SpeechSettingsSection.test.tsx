@@ -42,6 +42,22 @@ const EN_ARIA = stubVoice({
   default: true,
 })
 
+const JA_KYOKO = stubVoice({
+  name: 'Microsoft Nanami Online (Natural) - Japanese (Japan)',
+  lang: 'ja-JP',
+  voiceURI: 'uri-ja-natural',
+  localService: false,
+  default: false,
+})
+
+const KO_YUNA = stubVoice({
+  name: 'Microsoft Yuna Online (Natural) - Korean (Korea)',
+  lang: 'ko-KR',
+  voiceURI: 'uri-ko-natural',
+  localService: false,
+  default: false,
+})
+
 let voices: SpeechSynthesisVoice[] = []
 let voicesChangedListener: (() => void) | null = null
 
@@ -246,6 +262,56 @@ describe('SpeechSettingsSection 音色选择器', () => {
     expect(screen.getByText('没有匹配的语音')).toBeInTheDocument()
     // 「自动」不受搜索影响（它不是系统 voice）。
     expect(screen.getByRole('option', { name: /自动/ })).toBeInTheDocument()
+  })
+
+  it('试听中切到别行：停旧放新（同一行重复点仍是停止）', () => {
+    installEngine([EN_ARIA, ZH_HUIHUI, ZH_NATURAL])
+    render(<SpeechSettingsSection />)
+    fireEvent.click(screen.getByTestId('speech-voice-trigger'))
+
+    // 行序：自动 + ZH 组（降序：[1]=Xiaoxiao(Natural) [2]=Huihui）+ EN 组首。
+    const previews = screen.getAllByTestId('speech-voice-preview')
+    expect(previews).toHaveLength(4)
+
+    fireEvent.click(previews[1]!)
+    expect(speechService.getSnapshot().previewing).toBe(true)
+    expect(speechService.getSnapshot().previewVoiceURI).toBe('uri-zh-natural')
+
+    fireEvent.click(previews[2]!) // 别行 ⇒ 停旧放新（不再被防重入一律拒绝）
+    expect(speechService.getSnapshot().previewing).toBe(true)
+    expect(speechService.getSnapshot().previewVoiceURI).toBe('uri-zh-huihui')
+
+    fireEvent.click(previews[2]!) // 同一行 ⇒ 停止
+    expect(speechService.getSnapshot().previewing).toBe(false)
+    expect(speechService.getSnapshot().previewVoiceURI).toBeNull()
+  })
+
+  it('jp / kr 界面下同语言组置顶（组码是 JA / KO，不是 JP / KR）', () => {
+    // EN 按字母序本在 JA/KO/ZH 之前 ⇒ 只有偏好码命中 JA/KO 才能压过 EN。
+    for (const [locale, preferred] of [['jp', 'JA · 1'], ['kr', 'KO · 1']] as const) {
+      cleanup()
+      installEngine([ZH_NATURAL, EN_ARIA, JA_KYOKO, KO_YUNA])
+      useSettingsStore.setState({ locale })
+      render(<SpeechSettingsSection />)
+      fireEvent.click(screen.getByTestId('speech-voice-trigger'))
+      const hit = screen.getByText(preferred)
+      const en = screen.getByText('EN · 1')
+      expect(hit.compareDocumentPosition(en) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    }
+  })
+
+  it('触发钮与 listbox 的 aria-labelledby 都指向真实存在的可见音色标签（L1）', () => {
+    installEngine([ZH_NATURAL, ZH_HUIHUI])
+    render(<SpeechSettingsSection />)
+    const trigger = screen.getByTestId('speech-voice-trigger')
+    const id = trigger.getAttribute('aria-labelledby')
+    expect(id).toBeTruthy()
+    const host = document.getElementById(id!)
+    expect(host).not.toBeNull()
+    expect(host).toHaveTextContent('音色')
+
+    fireEvent.click(trigger)
+    expect(screen.getByRole('listbox').getAttribute('aria-labelledby')).toBe(id)
   })
 
   it('新增 voice（voiceschanged）后补进列表', () => {

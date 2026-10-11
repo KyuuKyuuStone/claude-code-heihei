@@ -1,12 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import {
-  CANCEL_RESTART_DELAY_MS,
-  SpeechService,
-  detectSpeechScript,
-  watchdogMsFor,
-} from './speechService'
-import { resolveVoice } from './speechVoice'
+import { CANCEL_RESTART_DELAY_MS, SpeechService, watchdogMsFor } from './speechService'
+import { detectSpeechScript, resolveVoice } from './speechVoice'
 
 type FakeUtterance = {
   text: string
@@ -391,6 +386,54 @@ describe('speechService 试听', () => {
     expect(service.getSnapshot().previewing).toBe(false)
     // 空闲起手的试听结束后不产生「续播」——状态仍是 idle，消息没有被误启动。
     expect(service.getSnapshot().status).toBe('idle')
+  })
+
+  it('试听中切到另一 URI：停旧放新，恢复消息的意图跨切换保留', () => {
+    const a = { ...voice('zh-CN', 'A'), voiceURI: 'uri-a' } as SpeechSynthesisVoice
+    const b = { ...voice('zh-CN', 'B'), voiceURI: 'uri-b' } as SpeechSynthesisVoice
+    voices = [a, b]
+    const service = new SpeechService()
+    service.play('m1', ['第一句。', '第二句。'])
+    vi.advanceTimersByTime(CANCEL_RESTART_DELAY_MS)
+
+    service.preview('试听A。', 'uri-a')
+    vi.advanceTimersByTime(CANCEL_RESTART_DELAY_MS)
+    const first = spoken[spoken.length - 1]!
+    expect(first.text).toBe('试听A。')
+    expect(first.voice).toEqual(a)
+    expect(service.getSnapshot().status).toBe('paused')
+
+    // 点「别行」⇒ 新句立即派发（旧试听终止），且**不提前**恢复消息。
+    service.preview('试听B。', 'uri-b')
+    vi.advanceTimersByTime(CANCEL_RESTART_DELAY_MS)
+    const second = spoken[spoken.length - 1]!
+    expect(second.text).toBe('试听B。')
+    expect(second.voice).toEqual(b)
+    expect(service.getSnapshot().previewVoiceURI).toBe('uri-b')
+    expect(service.getSnapshot().status).toBe('paused')
+
+    // 旧试听的迟到回调因归属校验不通过而被丢弃（不误判为「试听结束」）。
+    first.onend?.()
+    expect(service.getSnapshot().previewing).toBe(true)
+
+    // 全部试听结束后**才**恢复消息，并从记忆的段索引续播。
+    second.onend?.()
+    expect(service.getSnapshot().status).toBe('speaking')
+    vi.advanceTimersByTime(CANCEL_RESTART_DELAY_MS)
+    expect(spoken[spoken.length - 1]!.text).toBe('第一句。')
+  })
+
+  it('试听中同 URI 重复 preview 仍被拒（UI 侧那一行是「停止」）', () => {
+    const a = { ...voice('zh-CN', 'A'), voiceURI: 'uri-a' } as SpeechSynthesisVoice
+    voices = [a]
+    const service = new SpeechService()
+    service.preview('试听A。', 'uri-a')
+    vi.advanceTimersByTime(CANCEL_RESTART_DELAY_MS)
+    const dispatched = spoken.length
+    service.preview('试听A。', 'uri-a')
+    vi.advanceTimersByTime(CANCEL_RESTART_DELAY_MS)
+    expect(spoken.length).toBe(dispatched)
+    expect(service.getSnapshot().previewing).toBe(true)
   })
 
   it('试听期间 stop() 一并收尾（previewing 不残留）', () => {

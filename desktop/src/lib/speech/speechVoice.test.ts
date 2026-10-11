@@ -94,6 +94,15 @@ describe('speechVoice 名称清洗', () => {
     expect(cleanVoiceName('Google 日本語 - Japanese')).toBe('Google 日本語 · Japanese')
   })
 
+  it('只有模板尾、没有主名 ⇒ 回落原名（person 为空的兜底）', () => {
+    // 清洗后主名为空 ⇒ 不能产出「 · Chinese (Mainland)」这种残缺标题，必须原样返回。
+    expect(cleanVoiceName('Online (Natural) - Chinese (Mainland)'))
+      .toBe('Online (Natural) - Chinese (Mainland)')
+    expect(cleanVoiceName('Microsoft Online (Natural) - Chinese (Mainland)'))
+      .toBe('Microsoft Online (Natural) - Chinese (Mainland)')
+    expect(cleanVoiceName('Neural - Japanese')).toBe('Neural - Japanese')
+  })
+
   it('识别失败（无模板尾）回落原名', () => {
     expect(cleanVoiceName('Google 普通话（中国大陆）')).toBe('Google 普通话（中国大陆）')
     expect(cleanVoiceName('Plain Voice')).toBe('Plain Voice')

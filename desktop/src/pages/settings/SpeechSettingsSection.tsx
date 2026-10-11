@@ -1,3 +1,4 @@
+import { useId } from 'react'
 import { Volume2 } from 'lucide-react'
 
 import { Card } from '../../components/ui/Card'
@@ -29,6 +30,9 @@ export function SpeechSettingsSection() {
   const speechVoiceURI = useSettingsStore((state) => state.speechVoiceURI)
   const setSpeechVoiceURI = useSettingsStore((state) => state.setSpeechVoiceURI)
   const { supported, loading, voices } = useSpeechVoices()
+  // 音色小标签的宿主 id：触发钮 / listbox 的 aria-labelledby 都指向它（审查 L1：
+  // 之前指向一个不存在的 id ⇒ 读屏退化为「无名按钮 / 无名列表」）。
+  const voiceLabelId = `speech-voice-label-${useId()}`
 
   if (!supported) return null
 
@@ -82,6 +86,7 @@ export function SpeechSettingsSection() {
         value={speechVoiceURI}
         onChange={setSpeechVoiceURI}
         locale={locale}
+        labelId={voiceLabelId}
       />
     )
   }
@@ -117,7 +122,7 @@ export function SpeechSettingsSection() {
         </div>
 
         <div className="mt-3 border-t border-[var(--color-border-separator)] pt-3">
-          <div id="speech-voice-label" className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">
+          <div id={voiceLabelId} className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">
             {t('speech.voiceLabel')}
           </div>
           <div className="mt-2">{renderVoiceArea()}</div>

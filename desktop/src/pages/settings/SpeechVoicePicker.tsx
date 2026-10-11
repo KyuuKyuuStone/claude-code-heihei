@@ -20,12 +20,17 @@ const SAMPLE_KEYS: Record<SpeechScript, 'speech.previewSampleZh' | 'speech.previ
   en: 'speech.previewSampleEn',
 }
 
-const LOCALE_SAMPLE_SCRIPT: Record<string, SpeechScript> = {
-  zh: 'zh',
-  'zh-TW': 'zh',
-  en: 'en',
-  jp: 'ja',
-  kr: 'ko',
+/**
+ * 界面语言 → 音色目标：`group` 必须与 groupVoices 的组头同源（**小组语言码**，不是界面码），
+ * 否则 jp/kr 界面的同语言组不会置顶（JP/KR 组头并不存在，实际是 JA/KO）。
+ * `sample` 是该语言试听示例句所用的语言。
+ */
+const UI_LOCALE_VOICE_TARGET: Record<string, { group: string; sample: SpeechScript }> = {
+  zh: { group: 'ZH', sample: 'zh' },
+  'zh-TW': { group: 'ZH', sample: 'zh' },
+  en: { group: 'EN', sample: 'en' },
+  jp: { group: 'JA', sample: 'ja' },
+  kr: { group: 'KO', sample: 'ko' },
 }
 
 /** voice.lang → 示例句语言；认不出按 en（与 speechVoice.sampleScriptForLang 同口径，此处不引它以免多一层导入）。 */
@@ -47,13 +52,18 @@ type Props = {
   value: string
   onChange: (voiceURI: string) => void
   locale: Locale
+  /**
+   * 可见音色小标签的 `id`：`aria-labelledby` 必须指向**真实存在**的元素，
+   * 否则读屏只会念「无名按钮 / 无名列表」（审查 L1）。
+   */
+  labelId: string
 }
 
 const TRIGGER_CLASS =
   'w-full rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-xs'
 
 /** 音色选择器：触发钮 + 弹层（搜索 + 分组列表 + 每行试听）。 */
-export function SpeechVoicePicker({ voices, value, onChange, locale }: Props) {
+export function SpeechVoicePicker({ voices, value, onChange, locale, labelId }: Props) {
   const t = useTranslation()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -61,7 +71,6 @@ export function SpeechVoicePicker({ voices, value, onChange, locale }: Props) {
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const searchRef = useRef<HTMLInputElement | null>(null)
   const optionRefs = useRef<Array<HTMLDivElement | null>>([])
-  const labelId = useRef(`speech-voice-label-${Math.random().toString(36).slice(2, 8)}`).current
   const snapshot = useSyncExternalStore(
     speechService.subscribe,
     speechService.getSnapshot,
@@ -79,7 +88,7 @@ export function SpeechVoicePicker({ voices, value, onChange, locale }: Props) {
   }, [query, voices])
 
   const groups = useMemo(
-    () => groupVoices(filtered, primaryLangCode(locale)),
+    () => groupVoices(filtered, UI_LOCALE_VOICE_TARGET[locale]?.group ?? primaryLangCode(locale)),
     [filtered, locale],
   )
 
@@ -196,7 +205,7 @@ export function SpeechVoicePicker({ voices, value, onChange, locale }: Props) {
       ? ''
       : voice!.voiceURI
     const sampleText = t(SAMPLE_KEYS[isAuto
-      ? LOCALE_SAMPLE_SCRIPT[locale] ?? 'en'
+      ? UI_LOCALE_VOICE_TARGET[locale]?.sample ?? 'en'
       : sampleScriptForLang(voice!.lang)])
     const previewingThis = snapshot.previewing && snapshot.previewVoiceURI === (previewURI || null)
     return (

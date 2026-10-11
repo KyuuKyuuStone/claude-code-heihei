@@ -77,11 +77,9 @@ function getUtteranceCtor(): UtteranceCtor | null {
 
 // 音色策略（书写系统识别 / 择优打分 / 持久化 / 名称清洗）全在 speechVoice.ts：
 // 本模块只管引擎与队列，策略保持纯函数可单测。storedURI 由调用方经 setVoiceURI 注入
-// （lib 层不 import stores 的纪律不破）。detectSpeechScript 从旧位置迁出，此处**原样
-// 再导出**，既有 import 点不受影响。
+// （lib 层不 import stores 的纪律不破）。detectSpeechScript 已整体迁到 speechVoice.ts，
+// 消费方直接从那 import（此处不再转口——避免留一条生产代码零引用的再导出）。
 import { readStoredSpeechVoiceURI, resolveVoice } from './speechVoice'
-
-export { detectSpeechScript, type SpeechScript } from './speechVoice'
 
 /** 单段看门狗时长：基础 + 每字增量，再按 rate 放大（慢速朗读耗时更长）。 */
 export function watchdogMsFor(segment: string, rate: number): number {
@@ -190,21 +188,30 @@ export class SpeechService {
   /**
    * 试听音色（设置页用；不进分段队列、不占 currentMessageId）。
    *
-   * 互斥：消息在播 ⇒ 先 pause（记住段索引）→ 试听完 resume 续播原消息；空闲 ⇒ 直接读。
-   * 已在试听 ⇒ **直接拒绝**（试听键的重复点击在 UI 侧是「停止」，这里只防重入）。
+   * 互斥（「停旧读新」）：
+   * · 消息在播 ⇒ 先 pause（记住段索引）→ **全部试听结束后**才 resume 续播原消息；
+   * · 已在试听且**换了 voiceURI** ⇒ 停掉当前试听、立即派发新的；恢复消息的意图**跨切换保留**
+   *   （切换不提前恢复，也不丢失）；
+   * · 已在试听且**同一 voiceURI** ⇒ 直接拒绝（试听键的重复点击在 UI 侧是「停止」，这里只防重入）。
    */
   preview(text: string, voiceURI: string): void {
     const body = text.trim()
     if (!body) return
     if (!this.canSpeak()) return
-    if (this.previewing) return
     if (!getSynth() || !getUtteranceCtor()) return
+    const nextVoiceURI = voiceURI || null
 
-    const wasSpeaking = this.status === 'speaking'
-    if (wasSpeaking) this.pause()
-    this.previewResumeStatus = wasSpeaking ? 'speaking' : null
+    if (this.previewing) {
+      if (this.previewVoiceURI === nextVoiceURI) return
+      // 停旧放新：不恢复消息（恢复意图由下面那句原样接回）。
+      this.previewResumeStatus = this.endPreview(false, true)
+    } else if (this.status === 'speaking') {
+      this.pause()
+      this.previewResumeStatus = 'speaking'
+    }
+
     this.previewing = true
-    this.previewVoiceURI = voiceURI || null
+    this.previewVoiceURI = nextVoiceURI
     this.notify()
 
     // 与消息朗读同规矩：cancel()（pause 里刚做过）之后必须隔 CANCEL_RESTART_DELAY_MS
@@ -447,8 +454,10 @@ export class SpeechService {
    *
    * @param resumeMessage 试听前消息在播 ⇒ 结束后 resume 续播原消息。
    * @param cancel 手动停止/被打断时取消引擎（自然结束的 onend 不必再 cancel）。
+   * @returns 被本次收束清掉的「消息恢复意图」（'speaking' = 试听后应恢复）；切换试听的
+   *   调用方据此把它接回去，保证「全部试听结束后才恢复」。
    */
-  private endPreview(resumeMessage: boolean, cancel: boolean): void {
+  private endPreview(resumeMessage: boolean, cancel: boolean): 'speaking' | null {
     // 待派发的试听句计时器与看门狗一起清；消息侧的计时器此刻本就没有在跑（已 pause）。
     this.clearTimers()
     this.clearPreviewTimer()
@@ -456,11 +465,13 @@ export class SpeechService {
     this.previewUtterance = null
     this.previewing = false
     this.previewVoiceURI = null
-    const shouldResume = resumeMessage && this.previewResumeStatus === 'speaking'
+    const pendingResume = this.previewResumeStatus
+    const shouldResume = resumeMessage && pendingResume === 'speaking'
     this.previewResumeStatus = null
     if (cancel) this.cancelEngine()
     if (wasPreviewing) this.notify()
     if (shouldResume) this.resume()
+    return pendingResume
   }
 
   private clearTimers(): void {
