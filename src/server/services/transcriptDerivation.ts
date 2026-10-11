@@ -23,7 +23,16 @@ import {
   MODEL_CONTEXT_WINDOWS_ENV_KEY,
   getModelContextWindowFromEnvValue,
 } from '../../utils/model/modelContextWindows.js'
-import { calculateContextBudget, getProviderUsageTrust, hasMediaInput } from '../../utils/contextBudget.js'
+import {
+  calculateContextBudget,
+  getProviderUsageTrust,
+  hasMediaInput,
+  type ContextBudgetSource,
+} from '../../utils/contextBudget.js'
+import {
+  buildContextCategoryBreakdown,
+  createCompactBoundaryAwareEstimator,
+} from './transcriptContextEstimate.js'
 import { getCanonicalName } from '../../utils/model/model.js'
 import { isFirstPartyAnthropicBaseUrl } from '../../utils/model/providers.js'
 import { calculateUSDCost, MODEL_COSTS } from '../../utils/modelCost.js'
@@ -111,7 +120,15 @@ export type TranscriptContextEstimate = {
     tokens: number
     color: string
     isDeferred?: boolean
+    /** 人类可读补充说明（Output tokens 用它标注「上一轮输出，不计入上下文」） */
+    note?: string
   }>
+  /**
+   * 主标与明细的**同基准来源**（v1.7.5 冻结契约）：
+   * `provider_usage` ⇒ 明细＝Input/Cache read/Cache write/Output 四类；
+   * `estimate` ⇒ 明细＝单条 `Estimated context`。
+   */
+  source: ContextBudgetSource
   totalTokens: number
   maxTokens: number
   rawMaxTokens: number
@@ -510,7 +527,11 @@ export class TranscriptDerivation {
       contextWindow: rawMaxTokens,
       currentUsage: {
         input_tokens: latest.inputTokens,
-        output_tokens: latest.outputTokens,
+        // v1.7.5 契约：`totalTokens` 语义＝**当前上下文占用**（input + cache_read +
+        // cache_creation），**不含 output**（`getUsageTokenTotal` 的 includeOutput:false 口径）。
+        // 因此送进预算判定的 usage 把 output 归零——否则上一轮输出会被算进"上下文占用"，
+        // 主标比实际占用大、且明细（三类上下文）与主标不同基准（这正是缺陷②的一部分）。
+        output_tokens: 0,
         cache_read_input_tokens: latest.cacheReadInputTokens,
         cache_creation_input_tokens: latest.cacheCreationInputTokens,
       },
@@ -521,20 +542,19 @@ export class TranscriptDerivation {
     })
     const totalTokens = contextBudget.usedTokens
     const percentage = rawMaxTokens > 0 ? Math.round((totalTokens / rawMaxTokens) * 100) : 0
-    const usageCategories: TranscriptContextEstimate['categories'] = [
-      { name: 'Input tokens', tokens: latest.inputTokens, color: '#8f3217' },
-      { name: 'Cache read', tokens: latest.cacheReadInputTokens, color: '#0f5c8f' },
-      { name: 'Cache write', tokens: latest.cacheCreationInputTokens, color: '#7c3aed' },
-      { name: 'Output tokens', tokens: latest.outputTokens, color: '#2f7d32' },
-    ]
-    const contextCategories: TranscriptContextEstimate['categories'] =
-      contextBudget.ignoredUsageReason === 'low_trust_media_usage'
-        ? [{ name: 'Estimated context', tokens: totalTokens, color: '#8f3217' }]
-        : usageCategories
-    const categories: TranscriptContextEstimate['categories'] = [
-      ...contextCategories,
-      { name: 'Free space', tokens: Math.max(0, rawMaxTokens - totalTokens), color: '#a1a1aa', isDeferred: true },
-    ].filter((category) => category.tokens > 0)
+    // 明细按 source 组装（四类 / 单条 Estimated context；Output tokens 标注不计入上下文）
+    // —— 口径全在 `transcriptContextEstimate.ts`，此处只传数。
+    const categories: TranscriptContextEstimate['categories'] = buildContextCategoryBreakdown({
+      source: contextBudget.source,
+      totalTokens,
+      rawMaxTokens,
+      usage: {
+        input_tokens: latest.inputTokens,
+        output_tokens: latest.outputTokens,
+        cache_read_input_tokens: latest.cacheReadInputTokens,
+        cache_creation_input_tokens: latest.cacheCreationInputTokens,
+      },
+    })
 
     const filledSquares = Math.max(0, Math.min(100, Math.round((totalTokens / Math.max(1, rawMaxTokens)) * 100)))
     const gridRows = Array.from({ length: 10 }, (_, row) =>
@@ -554,6 +574,7 @@ export class TranscriptDerivation {
 
     return {
       categories,
+      source: contextBudget.source,
       totalTokens,
       maxTokens: rawMaxTokens,
       rawMaxTokens,
@@ -584,19 +605,19 @@ export class TranscriptDerivation {
       cacheReadInputTokens: number
       cacheCreationInputTokens: number
     } | null = null
-    let estimatedTokensFromMessages = 0
     let transcriptHasMediaInput = false
+    // v1.7.5：boundary-aware 累计——只算**最后一个 compact_boundary 之后**的条目
+    // （compact 之前的历史已不在上下文里，计入就会像缺陷现场那样把主标顶到 100%）。
+    const estimator = createCompactBoundaryAwareEstimator(roughTokenCountEstimationForMessage)
 
     for (const entry of entries) {
+      estimator.observe(entry)
       if (
-        entry.type === 'user' ||
-        entry.type === 'assistant' ||
-        entry.type === 'attachment'
+        (entry.type === 'user' || entry.type === 'assistant' || entry.type === 'attachment') &&
+        !transcriptHasMediaInput &&
+        hasMediaInput([entry])
       ) {
-        estimatedTokensFromMessages += roughTokenCountEstimationForMessage(entry)
-        if (!transcriptHasMediaInput && hasMediaInput([entry])) {
-          transcriptHasMediaInput = true
-        }
+        transcriptHasMediaInput = true
       }
 
       const usage = entry.message?.usage
@@ -622,7 +643,7 @@ export class TranscriptDerivation {
     return await this.buildTranscriptContextEstimate(
       sessionId,
       latest,
-      estimatedTokensFromMessages,
+      estimator.value(),
       transcriptHasMediaInput,
       resolveRuntimeContextMetadataFromEntries(entries),
     )
@@ -783,10 +804,13 @@ export class TranscriptDerivation {
       cacheReadInputTokens: number
       cacheCreationInputTokens: number
     } | null = null
-    let estimatedTokensFromMessages = 0
     let transcriptHasMediaInput = false
+    // 与整读路径同一个累加器：流式回调拿不到下标，靠"见到 compact_boundary 即清零"
+    // 实现「只算最后一个边界之后」（口径见 transcriptContextEstimate.ts）。
+    const estimator = createCompactBoundaryAwareEstimator(roughTokenCountEstimationForMessage)
 
     await streamJsonlFile(found.filePath, (entry) => {
+      estimator.observe(entry)
       if (typeof entry.message?.model === 'string') {
         metadata.model = entry.message.model
       }
@@ -854,14 +878,11 @@ export class TranscriptDerivation {
       }
 
       if (
-        entry.type === 'user' ||
-        entry.type === 'assistant' ||
-        entry.type === 'attachment'
+        (entry.type === 'user' || entry.type === 'assistant' || entry.type === 'attachment') &&
+        !transcriptHasMediaInput &&
+        hasMediaInput([entry])
       ) {
-        estimatedTokensFromMessages += roughTokenCountEstimationForMessage(entry)
-        if (!transcriptHasMediaInput && hasMediaInput([entry])) {
-          transcriptHasMediaInput = true
-        }
+        transcriptHasMediaInput = true
       }
 
       const usage = entry.message?.usage
@@ -999,7 +1020,7 @@ export class TranscriptDerivation {
       ? await this.buildTranscriptContextEstimate(
           sessionId,
           latestContextUsage,
-          estimatedTokensFromMessages,
+          estimator.value(),
           transcriptHasMediaInput,
           launchInfo,
         )

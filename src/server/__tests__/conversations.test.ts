@@ -1180,9 +1180,20 @@ describe('ConversationService', () => {
       expect(usage?.models[0]?.model).toBe('claude-sonnet-4-6')
       expect(usage?.models[0]?.contextWindow).toBe(200_000)
       expect(contextEstimate?.model).toBe('claude-sonnet-4-6')
-      expect(contextEstimate?.totalTokens).toBe(120)
+      // v1.7.5 契约：`totalTokens` 语义＝**当前上下文占用**（input + cache_read +
+      // cache_creation），**不含 output** ⇒ 100（不是 120）。可见明细里仍有
+      // Output tokens=20，但它带 note 说明"不计入上下文"、不参与同基准不变量。
+      expect(contextEstimate?.totalTokens).toBe(100)
+      expect(contextEstimate?.source).toBe('provider_usage')
       expect(contextEstimate?.rawMaxTokens).toBe(200_000)
-      expect(contextEstimate?.categories.some((category) => category.name === 'Output tokens' && category.tokens === 20)).toBe(true)
+      const outputCategory = contextEstimate?.categories.find((category) => category.name === 'Output tokens')
+      expect(outputCategory?.tokens).toBe(20)
+      expect(outputCategory?.note).toBe('上一轮输出，不计入上下文')
+      // 同基准不变量：上下文类明细之和 == totalTokens
+      const contextSum = (contextEstimate?.categories ?? [])
+        .filter((category) => category.name !== 'Output tokens' && category.name !== 'Free space')
+        .reduce((sum, category) => sum + category.tokens, 0)
+      expect(contextSum).toBe(contextEstimate!.totalTokens)
     } finally {
       if (previousConfigDir === undefined) {
         delete process.env.CLAUDE_CONFIG_DIR
