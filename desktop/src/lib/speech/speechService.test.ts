@@ -4,9 +4,9 @@ import {
   CANCEL_RESTART_DELAY_MS,
   SpeechService,
   detectSpeechScript,
-  pickVoice,
   watchdogMsFor,
 } from './speechService'
+import { resolveVoice } from './speechVoice'
 
 type FakeUtterance = {
   text: string
@@ -86,14 +86,16 @@ describe('speechService 可用性与降级', () => {
     expect(service.canSpeak()).toBe(false)
   })
 
-  it('有引擎无中文 voice 仍可播（用默认 voice，不隐藏）', () => {
+  it('有引擎但无中文 voice 仍可播（不隐藏、不报错）', () => {
     voices = [voice('fr-FR')]
     const service = new SpeechService()
     expect(service.canSpeak()).toBe(true)
     service.play('m1', ['你好。'])
     vi.advanceTimersByTime(CANCEL_RESTART_DELAY_MS)
     expect(spoken).toHaveLength(1)
-    expect(spoken[0]!.voice).toBeNull()
+    // 新口径（架构师方案 5b8efdef）：目标语言池空时退回**全 voice 池择优**，而不是把
+    // voice 留空交给系统默认 —— 唯一可选的是 fr-FR，就用它读（仍旧不隐藏、不报错）。
+    expect(spoken[0]!.voice).toEqual(voices[0])
   })
 
   it('detectSpeechScript：单一书写系统各一例（日/韩/中/英）', () => {
@@ -122,25 +124,38 @@ describe('speechService 可用性与降级', () => {
     expect(detectSpeechScript('中ああ')).toBe('ja')
   })
 
-  it('pickVoice：按书写系统挑 voice（日文不再被当成中文读）', () => {
+  it('resolveVoice（无存储值）：按书写系统挑音色（日/韩文不再被当中文读）', () => {
     const all = [voice('en-US'), voice('zh-CN'), voice('ja-JP'), voice('ko-KR')]
-    expect(pickVoice('こんにちは', all)?.lang).toBe('ja-JP')
-    expect(pickVoice('안녕하세요', all)?.lang).toBe('ko-KR')
-    expect(pickVoice('你好世界', all)?.lang).toBe('zh-CN')
-    expect(pickVoice('hello world', all)?.lang).toBe('en-US')
+    expect(resolveVoice('こんにちは', all, '')?.lang).toBe('ja-JP')
+    expect(resolveVoice('안녕하세요', all, '')?.lang).toBe('ko-KR')
+    expect(resolveVoice('你好世界', all, '')?.lang).toBe('zh-CN')
+    expect(resolveVoice('hello world', all, '')?.lang).toBe('en-US')
     // 混排跟多数走：假名多 → ja，汉字多 → zh。
-    expect(pickVoice('你们好，こんにちは', all)?.lang).toBe('ja-JP')
-    expect(pickVoice('こんにちは、你好你好你好', all)?.lang).toBe('zh-CN')
-    expect(pickVoice('你好世界你好，안녕', all)?.lang).toBe('zh-CN')
+    expect(resolveVoice('你们好，こんにちは', all, '')?.lang).toBe('ja-JP')
+    expect(resolveVoice('こんにちは、你好你好你好', all, '')?.lang).toBe('zh-CN')
   })
 
-  it('pickVoice：中文优先 zh-CN，其次任意 zh；目标语言缺失回退 null（用默认 voice）', () => {
-    expect(pickVoice('你好', [voice('zh-TW'), voice('zh-CN')])?.lang).toBe('zh-CN')
-    expect(pickVoice('你好', [voice('en-US'), voice('zh-TW')])?.lang).toBe('zh-TW')
-    // 有引擎但缺该语种 voice ⇒ null（不隐藏、不报错，交给默认 voice）。
-    expect(pickVoice('こんにちは', [voice('en-US'), voice('zh-CN')])).toBeNull()
-    expect(pickVoice('안녕하세요', [voice('zh-CN')])).toBeNull()
-    expect(pickVoice('hello', [])).toBeNull()
+  it('resolveVoice：zh 池内 zh-CN 胜 zh-TW', () => {
+    expect(resolveVoice('你好', [voice('zh-TW'), voice('zh-CN')], '')?.lang).toBe('zh-CN')
+    expect(resolveVoice('你好', [voice('en-US'), voice('zh-TW')], '')?.lang).toBe('zh-TW')
+  })
+
+  it('resolveVoice：池空 ⇒ 退回全 voice 池择优；voices 全空 ⇒ null（系统默认）', () => {
+    // 新口径（架构师方案）：目标语言缺 voice 不再直接放弃，而是全池打分 —— 有引擎就
+    // 尽量读出来，而不是甩给系统默认（默认往往就是这条 en voice）。
+    expect(resolveVoice('こんにちは', [voice('en-US'), voice('zh-CN')], '')?.lang).toBe('en-US')
+    expect(resolveVoice('안녕하세요', [voice('zh-CN')], '')?.lang).toBe('zh-CN')
+    expect(resolveVoice('hello', [], '')).toBeNull()
+  })
+
+  it('resolveVoice：存储值命中优先于择优；未命中不报错、回落择优', () => {
+    const all = [
+      voice('en-US'),
+      voice('zh-CN'),
+      { ...voice('ja-JP'), voiceURI: 'voice-of-my-choice' } as SpeechSynthesisVoice,
+    ]
+    expect(resolveVoice('hello', all, 'voice-of-my-choice')?.lang).toBe('ja-JP')
+    expect(resolveVoice('hello', all, 'gone-uri')?.lang).toBe('en-US')
   })
 })
 
@@ -301,5 +316,88 @@ describe('speechService 状态机', () => {
     unsubscribe()
     service.resume()
     expect(seen).toEqual(['speaking', 'paused'])
+  })
+})
+
+describe('speechService 音色接线', () => {
+  it('消息朗读用 resolveVoice 解析出的音色：存储命中压过择优', () => {
+    const natural = {
+      ...voice('zh-CN', 'Microsoft Xiaoxiao Online (Natural) - Chinese (Mainland)'),
+      voiceURI: 'uri-natural',
+    } as SpeechSynthesisVoice
+    const huihui = { ...voice('zh-CN', 'Microsoft Huihui'), voiceURI: 'uri-huihui' } as SpeechSynthesisVoice
+    voices = [natural, huihui]
+
+    const picked = new SpeechService()
+    picked.play('m1', ['你好。'])
+    vi.advanceTimersByTime(CANCEL_RESTART_DELAY_MS)
+    expect(spoken[0]!.voice).toEqual(natural) // 未选：择优（Natural）
+
+    spoken = []
+    const chosen = new SpeechService()
+    chosen.setVoiceURI('uri-huihui')
+    chosen.play('m1', ['你好。'])
+    vi.advanceTimersByTime(CANCEL_RESTART_DELAY_MS)
+    expect(spoken[0]!.voice).toEqual(huihui) // 已选：命中即用
+  })
+})
+
+describe('speechService 试听', () => {
+  it('消息在播时试听：先暂停消息，试听完 resume 续播原消息', () => {
+    const service = new SpeechService()
+    service.play('m1', ['第一句。', '第二句。'])
+    vi.advanceTimersByTime(CANCEL_RESTART_DELAY_MS)
+    expect(spoken.map((u) => u.text)).toEqual(['第一句。'])
+
+    service.preview('试听句。', '')
+    expect(service.getSnapshot().status).toBe('paused')
+    expect(service.getSnapshot().previewing).toBe(true)
+    vi.advanceTimersByTime(CANCEL_RESTART_DELAY_MS)
+    const preview = spoken[spoken.length - 1]!
+    expect(preview.text).toBe('试听句。')
+
+    preview.onend?.()
+    expect(service.getSnapshot().previewing).toBe(false)
+    expect(service.getSnapshot().previewVoiceURI).toBeNull()
+    // 回到 speaking 并从**记住的段索引**续播（不是从头）。
+    expect(service.getSnapshot().status).toBe('speaking')
+    vi.advanceTimersByTime(CANCEL_RESTART_DELAY_MS)
+    expect(spoken.map((u) => u.text)).toEqual(['第一句。', '试听句。', '第一句。'])
+  })
+
+  it('previewing 期间重复 preview 被拒（防重入）', () => {
+    const service = new SpeechService()
+    service.preview('试听句。', '')
+    vi.advanceTimersByTime(CANCEL_RESTART_DELAY_MS)
+    const dispatched = spoken.length
+    service.preview('另一句。', '')
+    vi.advanceTimersByTime(CANCEL_RESTART_DELAY_MS)
+    expect(spoken.length).toBe(dispatched)
+  })
+
+  it('试听命中传入 voiceURI；空闲时试听不动消息状态', () => {
+    const a = { ...voice('zh-CN', 'A'), voiceURI: 'uri-a' } as SpeechSynthesisVoice
+    const b = { ...voice('zh-CN', 'B'), voiceURI: 'uri-b' } as SpeechSynthesisVoice
+    voices = [a, b]
+    const service = new SpeechService()
+    expect(service.getSnapshot().status).toBe('idle')
+
+    service.preview('试听句。', 'uri-b')
+    expect(service.getSnapshot().previewVoiceURI).toBe('uri-b')
+    vi.advanceTimersByTime(CANCEL_RESTART_DELAY_MS)
+    expect(spoken[0]!.voice).toEqual(b)
+
+    service.stopPreview()
+    expect(service.getSnapshot().previewing).toBe(false)
+    // 空闲起手的试听结束后不产生「续播」——状态仍是 idle，消息没有被误启动。
+    expect(service.getSnapshot().status).toBe('idle')
+  })
+
+  it('试听期间 stop() 一并收尾（previewing 不残留）', () => {
+    const service = new SpeechService()
+    service.preview('试听句。', '')
+    service.stop()
+    expect(service.getSnapshot().previewing).toBe(false)
+    expect(service.getSnapshot().previewVoiceURI).toBeNull()
   })
 })

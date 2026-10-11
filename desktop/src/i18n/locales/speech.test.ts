@@ -23,6 +23,23 @@ const KEYS = [
   'speech.liveStart',
   'speech.livePaused',
   'speech.liveResumed',
+  'speech.settingsDescription',
+  'speech.voiceLabel',
+  'speech.voiceAuto',
+  'speech.voiceRecommended',
+  'speech.voiceLocal',
+  'speech.voiceOnline',
+  'speech.voiceLoading',
+  'speech.voiceNone',
+  'speech.voiceOnlyOne',
+  'speech.voiceSearch',
+  'speech.voiceNoMatch',
+  'speech.voicePreview',
+  'speech.voicePreviewStop',
+  'speech.previewSampleZh',
+  'speech.previewSampleJa',
+  'speech.previewSampleKo',
+  'speech.previewSampleEn',
 ] as const
 
 describe('朗读文案表', () => {

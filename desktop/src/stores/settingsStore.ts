@@ -36,6 +36,11 @@ import {
   persistSpeechRate,
   readStoredSpeechRate,
 } from '../lib/speech/speechRate'
+import {
+  persistSpeechVoiceURI,
+  readStoredSpeechVoiceURI,
+} from '../lib/speech/speechVoice'
+import { speechService } from '../lib/speech/speechService'
 import { useUIStore } from './uiStore'
 import {
   applyDocumentLocale,
@@ -82,6 +87,8 @@ type SettingsStore = {
   uiZoom: number
   /** 消息朗读语速（0.5–2.0，纯 localStorage 偏好，不走服务端 updateUser）。 */
   speechRate: number
+  /** 消息朗读音色 voiceURI（'' = 自动择优；纯 localStorage 偏好，不走服务端 updateUser）。 */
+  speechVoiceURI: string
   isLoading: boolean
   error: string | null
 
@@ -112,6 +119,7 @@ type SettingsStore = {
   setAppMode: (mode: AppMode, portableDir?: string | null) => Promise<void>
   setUiZoom: (zoom: number) => void
   setSpeechRate: (rate: number) => void
+  setSpeechVoiceURI: (voiceURI: string) => void
 }
 
 type NetworkSettingsInput = Partial<Omit<NetworkSettings, 'proxy'>> & {
@@ -184,6 +192,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   responseLanguage: '',
   uiZoom: readStoredAppZoomLevel(),
   speechRate: readStoredSpeechRate(),
+  speechVoiceURI: readStoredSpeechVoiceURI(),
   isLoading: false,
   error: null,
 
@@ -203,6 +212,13 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     const level = normalizeSpeechRate(rate)
     set({ speechRate: level })
     persistSpeechRate(level)
+  },
+  setSpeechVoiceURI: (voiceURI: string) => {
+    const next = voiceURI ?? ''
+    set({ speechVoiceURI: next })
+    persistSpeechVoiceURI(next)
+    // 朗读服务在 lib 层、不 import stores ⇒ 由这里把选择推进去（未命中时它自行择优）。
+    speechService.setVoiceURI(next)
   },
 
   fetchAll: async () => {

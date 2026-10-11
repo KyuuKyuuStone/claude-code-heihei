@@ -5,7 +5,7 @@
 import { useState, useEffect, useMemo, useRef, type CSSProperties } from 'react'
 import { RotateCw } from 'lucide-react'
 import { useSettingsStore, UI_ZOOM_DEFAULT, UI_ZOOM_MIN, UI_ZOOM_MAX, UI_ZOOM_STEP } from '../../stores/settingsStore'
-import { SPEECH_RATE_OPTIONS, formatSpeechRateLabel } from '../../lib/speech/speechRate'
+import { SpeechSettingsSection } from './SpeechSettingsSection'
 import { useUIStore } from '../../stores/uiStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTranslation } from '../../i18n'
@@ -77,8 +77,6 @@ export function GeneralSettings() {
     setAppMode: setAppModeAction,
     uiZoom,
     setUiZoom,
-    speechRate,
-    setSpeechRate,
   } = useSettingsStore()
   // Read the theme from the store that owns it. settingsStore keeps a copy for
   // its own consumers, but that copy is only refreshed on an explicit setTheme
@@ -960,35 +958,9 @@ export function GeneralSettings() {
 
       {uiZoomSection}
 
-      {/* 朗读（TTS）语速：分段按钮组，档位用数字倍率（跨语言免翻译）。 */}
-      <SettingsSection
-        title={t('speech.settingsTitle')}
-        description={t('speech.rateLabel')}
-      >
-        <Card radius="xl" surface="low" padding="none" className="p-2">
-          <div
-            role="group"
-            aria-label={t('speech.rateLabel')}
-            className="grid grid-cols-5 gap-2"
-          >
-            {SPEECH_RATE_OPTIONS.map((rate) => (
-              <button
-                key={rate}
-                type="button"
-                onClick={() => setSpeechRate(rate)}
-                aria-pressed={speechRate === rate}
-                className={`rounded-[var(--radius-lg)] border px-3 py-2 text-center text-xs font-semibold transition-colors ${
-                  speechRate === rate
-                    ? 'border-[var(--color-brand)] bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]'
-                    : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]'
-                }`}
-              >
-                {formatSpeechRateLabel(rate)}
-              </button>
-            ))}
-          </div>
-        </Card>
-      </SettingsSection>
+      {/* 朗读（TTS）：语速 + 音色。整组在 SpeechSettingsSection 内（该组件自管降级：
+          无 speechSynthesis 时整组不渲染），这里只挂一行。 */}
+      <SpeechSettingsSection />
 
       <SettingsSection
         title={t('settings.general.networkTitle')}
