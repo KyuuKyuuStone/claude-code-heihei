@@ -16,14 +16,14 @@
  *      （扩档只需往 `COMPACT_BOUNDARY_SUBTYPES` 里加一个值）。
  *   2. **明细按 source 组装**（冻结契约，前端 taskId 772a06ba 只认这个形状）：
  *      · `provider_usage` ⇒ 四类：Input tokens / Cache read / Cache write / Output tokens，
- *        其中 **Output tokens 标注「上一轮输出，不计入上下文」**（`note` 字段）且
- *        **不参与同基准不变量**；
+ *        其中 Output tokens **不参与同基准不变量**（它只是"上一轮输出"的回显）；
  *      · `estimate` ⇒ **单条** `Estimated context`（= totalTokens）。
- *   3. **同基准不变量**：上下文类明细之和 **== main `totalTokens`**（± Free space）。
- *      正常路径天然成立（`totalTokens` 就是 input + cache_read + cache_creation）；
- *      唯一会破的是「主标被上下文窗口 clamp」那种（usage 超窗）：此时按比例缩到
- *      `totalTokens`——数字在 100% 顶格状态下本来就是"超窗"的近似表达，
- *      原始值仍在 `apiUsage` 里逐字给出，不丢信息。
+ *   3. **同基准不变量**：上下文类明细之和 —— **未 clamp 时 == `totalTokens`**
+ *      （天然成立：`totalTokens` 就是 input + cache_read + cache_creation）；
+ *      **被上下文窗口 clamp 时 >= `totalTokens`**（明细**保留原始值**）。
+ *      ⚠ 返工（R1）：**绝不按比例缩放明细** —— 会话饱和时主标被 clamp 到窗口，
+ *      若把四类等比缩进窗口，用户读到的就是**编造的数**（显示 Input 500k、真实 700k），
+ *      与本次要修的"数字不反映现实"是同类病。主标顶格 + 明细原始值，"≥"语义自洽。
  */
 
 import type { ContextBudgetSource } from '../../utils/contextBudget.js'
@@ -33,8 +33,6 @@ export type ContextEstimateCategory = {
   tokens: number
   color: string
   isDeferred?: boolean
-  /** 人类可读补充说明（当前只有 Output tokens 用：它不计入上下文占用） */
-  note?: string
 }
 
 /** 触发「先前历史不计入」的边界 subtype（一期只有 compact；microcompact 留二期） */
@@ -48,9 +46,6 @@ export const CONTEXT_CATEGORY_COLORS = {
   output: '#2f7d32',
   free: '#a1a1aa',
 } as const
-
-/** Output tokens 的固定说明文案（冻结契约的一部分，勿改字面） */
-export const OUTPUT_TOKENS_NOTE = '上一轮输出，不计入上下文'
 
 type BoundaryCandidate = { type?: unknown; subtype?: unknown }
 
@@ -109,35 +104,12 @@ export function getContextUsageTokens(usage: ContextUsageNumbers): number {
 }
 
 /**
- * 按比例把明细收到 `totalTokens`（只在「主标被窗口 clamp」时才会用到）。
- * 整数拆分，最后一项吸收舍入余量，保证**和恰好等于** totalTokens。
- */
-function reconcileCategories(
-  categories: ContextEstimateCategory[],
-  totalTokens: number,
-): ContextEstimateCategory[] {
-  const sum = categories.reduce((acc, category) => acc + category.tokens, 0)
-  if (sum <= totalTokens || sum <= 0) return categories
-
-  let remaining = totalTokens
-  return categories.map((category, index) => {
-    if (index === categories.length - 1) {
-      const tokens = Math.max(0, remaining)
-      remaining -= tokens
-      return { ...category, tokens }
-    }
-    const tokens = Math.max(0, Math.floor((category.tokens / sum) * totalTokens))
-    remaining -= tokens
-    return { ...category, tokens }
-  })
-}
-
-/**
  * 组装面板明细（含 Free space）。
  *
- * **不变量**：过滤掉 0 值后，`name !== 'Output tokens'` 的那些**上下文类**明细之和
- * == `totalTokens`（± Free space 不计）。`Output tokens` 只是"上一轮输出"的回显，
- * 不在上下文里，故不参与该不变量。
+ * **不变量**：过滤掉 0 值后，`name !== 'Output tokens'` 的那些**上下文类**明细之和：
+ *   · 未 clamp（`totalTokens < rawMaxTokens`）⇒ **== totalTokens**；
+ *   · 被窗口 clamp（`totalTokens == rawMaxTokens`）⇒ **>= totalTokens**（明细保留原始值，不缩放）。
+ * `Output tokens` 只是"上一轮输出"的回显，不在上下文里，故不参与该不变量。
  */
 export function buildContextCategoryBreakdown(args: {
   source: ContextBudgetSource
@@ -147,29 +119,20 @@ export function buildContextCategoryBreakdown(args: {
 }): ContextEstimateCategory[] {
   const { source, totalTokens, rawMaxTokens, usage } = args
 
+  // 明细一律**原始值**：clamp 只作用于主标（前端渲染 `≥ 窗口`），
+  // 分类数字不缩放、不编造（R1）。
   const contextCategories: ContextEstimateCategory[] =
     source === 'estimate'
       ? [{ name: 'Estimated context', tokens: totalTokens, color: CONTEXT_CATEGORY_COLORS.input }]
-      : reconcileCategories(
-          [
-            { name: 'Input tokens', tokens: usage.input_tokens, color: CONTEXT_CATEGORY_COLORS.input },
-            { name: 'Cache read', tokens: usage.cache_read_input_tokens, color: CONTEXT_CATEGORY_COLORS.cacheRead },
-            { name: 'Cache write', tokens: usage.cache_creation_input_tokens, color: CONTEXT_CATEGORY_COLORS.cacheWrite },
-          ],
-          totalTokens,
-        )
+      : [
+          { name: 'Input tokens', tokens: usage.input_tokens, color: CONTEXT_CATEGORY_COLORS.input },
+          { name: 'Cache read', tokens: usage.cache_read_input_tokens, color: CONTEXT_CATEGORY_COLORS.cacheRead },
+          { name: 'Cache write', tokens: usage.cache_creation_input_tokens, color: CONTEXT_CATEGORY_COLORS.cacheWrite },
+        ]
 
   const outputCategory: ContextEstimateCategory[] =
     source === 'provider_usage'
-      ? [
-          {
-            name: 'Output tokens',
-            tokens: usage.output_tokens,
-            color: CONTEXT_CATEGORY_COLORS.output,
-            isDeferred: true,
-            note: OUTPUT_TOKENS_NOTE,
-          },
-        ]
+      ? [{ name: 'Output tokens', tokens: usage.output_tokens, color: CONTEXT_CATEGORY_COLORS.output }]
       : []
 
   return [

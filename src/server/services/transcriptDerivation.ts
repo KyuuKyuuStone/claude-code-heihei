@@ -120,8 +120,6 @@ export type TranscriptContextEstimate = {
     tokens: number
     color: string
     isDeferred?: boolean
-    /** 人类可读补充说明（Output tokens 用它标注「上一轮输出，不计入上下文」） */
-    note?: string
   }>
   /**
    * 主标与明细的**同基准来源**（v1.7.5 冻结契约）：

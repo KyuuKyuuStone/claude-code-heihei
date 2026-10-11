@@ -9,7 +9,8 @@
  *   · 纯函数层：`transcriptContextEstimate.ts` 的 boundary-aware 累计与明细组装；
  *   · 集成层：真实 SessionService + 真实 jsonl（含 `compact_boundary` + 大段
  *     compact 前历史 + 上一轮 usage cache_read=169,472，即用户截图场景）。
- * 改坏必判红：把 boundary 处理去掉 ⇒ ①② 必红；把明细改回"恒取 usage 四类" ⇒ ③ 必红。
+ * 改坏必判红：把 boundary 处理去掉 ⇒ ①② 必红；把明细改回"恒取 usage 四类" ⇒ ③ 必红；
+ * clamp 时把明细**按比例缩放**回去 ⇒ R1 的"保留原始值"用例必红。
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import * as crypto from 'node:crypto'
@@ -23,7 +24,6 @@ import {
   createCompactBoundaryAwareEstimator,
   getContextUsageTokens,
   isCompactBoundaryEntry,
-  OUTPUT_TOKENS_NOTE,
 } from '../services/transcriptContextEstimate.js'
 
 /* ── 纯函数层 ───────────────────────────────────────────────────────────── */
@@ -107,8 +107,8 @@ describe('③④ 明细组装（按 source）', () => {
     ])
     const output = categories.find((c) => c.name === 'Output tokens')!
     expect(output.tokens).toBe(200)
-    expect(output.note).toBe(OUTPUT_TOKENS_NOTE)
-    expect(OUTPUT_TOKENS_NOTE).toBe('上一轮输出，不计入上下文')
+    // R2：服务端**不携带**用户可见文案（无 note 字段）——标注由前端按名字 + i18n 键渲染
+    expect('note' in output).toBe(false)
   })
 
   test('④ 不变量：上下文类明细之和 == totalTokens（Output 不计入）', () => {
@@ -125,21 +125,47 @@ describe('③④ 明细组装（按 source）', () => {
     expect(sum).toBe(totalTokens)
   })
 
-  test('④ 不变量在「主标被窗口 clamp」时也成立（按比例收口，不是放着不管）', () => {
-    const huge = { ...usage, cache_read_input_tokens: 900_000 }
+  test('④ clamp 时**保留原始明细值**（不缩放、不编造），且 sum >= totalTokens', () => {
+    // 会话饱和：真实占用 250k input + 300k cache_read = 550k，窗口 200k ⇒ 主标 clamp 到 200k
+    const saturated = {
+      input_tokens: 250_000,
+      output_tokens: 500,
+      cache_read_input_tokens: 300_000,
+      cache_creation_input_tokens: 0,
+    }
     const totalTokens = 200_000 // 已被窗口 clamp
     const categories = buildContextCategoryBreakdown({
       source: 'provider_usage',
       totalTokens,
       rawMaxTokens: 200_000,
-      usage: huge,
+      usage: saturated,
+    })
+    // 明细是**原始值**——不是被缩到 200k 内的伪造数
+    expect(categories.find((c) => c.name === 'Input tokens')!.tokens).toBe(250_000)
+    expect(categories.find((c) => c.name === 'Cache read')!.tokens).toBe(300_000)
+    const sum = categories
+      .filter((c) => c.name !== 'Output tokens' && c.name !== 'Free space')
+      .reduce((acc, c) => acc + c.tokens, 0)
+    // clamp 语义：sum >= totalTokens（未 clamp 时才是 ==）
+    expect(sum).toBeGreaterThanOrEqual(totalTokens)
+    expect(sum).toBe(550_000)
+    // clamp 顶格 ⇒ 无 Free space
+    expect(categories.some((c) => c.name === 'Free space')).toBe(false)
+  })
+
+  test('④ 未 clamp 时 sum **恰好等于** totalTokens（== 语义仍在）', () => {
+    const totalTokens = getContextUsageTokens(usage)
+    const categories = buildContextCategoryBreakdown({
+      source: 'provider_usage',
+      totalTokens,
+      rawMaxTokens: 200_000,
+      usage,
     })
     const sum = categories
       .filter((c) => c.name !== 'Output tokens' && c.name !== 'Free space')
       .reduce((acc, c) => acc + c.tokens, 0)
     expect(sum).toBe(totalTokens)
-    // clamp 顶格 ⇒ 无 Free space
-    expect(categories.some((c) => c.name === 'Free space')).toBe(false)
+    expect(sum).toBeLessThan(200_000)
   })
 
   test('③ estimate ⇒ 单条 Estimated context（不再拼 usage 四类）', () => {
@@ -270,10 +296,12 @@ describe('①② 截图场景：cache_read 169,472 + compact 前历史 ⇒ 主�
     expect(estimate!.rawMaxTokens).toBe(200_000)
     expect(estimate!.totalTokens).toBe(200_000) // 真实超窗 ⇒ clamp
     expect(estimate!.percentage).toBe(100)
+    // clamp 时明细保留原始值（250,000 input），不缩进窗口 ⇒ sum >= totalTokens
+    expect(estimate!.categories.find((c) => c.name === 'Input tokens')!.tokens).toBe(250_000)
     const sum = estimate!.categories
       .filter((c) => c.name !== 'Output tokens' && c.name !== 'Free space')
       .reduce((acc, c) => acc + c.tokens, 0)
-    expect(sum).toBe(estimate!.totalTokens)
+    expect(sum).toBeGreaterThanOrEqual(estimate!.totalTokens)
   })
 
   test('③ 集成：estimate 占优时主标与明细同基准（单条 Estimated context）', async () => {
